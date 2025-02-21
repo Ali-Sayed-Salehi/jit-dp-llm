@@ -1,0 +1,10 @@
+# python venv
+venv/
+__pychache__/
+*.pyc
+*.pyo
+.DS_store
+
+# IDE files
+.vscode/
+.idea/
