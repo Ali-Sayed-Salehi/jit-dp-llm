@@ -5,7 +5,7 @@ from pprint import pprint
 # Define repository and date range
 repo = "autoland"
 start_date = "2024-06-01"
-end_date = "2024-06-10"
+end_date = "2024-06-5"
 
 # API URL
 url = f"https://hg.mozilla.org/integration/{repo}/json-pushes?startdate={start_date}&enddate={end_date}"
