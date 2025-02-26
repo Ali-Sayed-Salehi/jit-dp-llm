@@ -5,7 +5,7 @@ from thclient import TreeherderClient
 import pandas as pd
 from datetime import datetime
 import numpy as np
-import mercurial
+import mercurial.mercurial as mercurial
 
 def get_perf_test_times():
     client = TreeherderClient()
