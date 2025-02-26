@@ -3,7 +3,7 @@ import heapq
 import random
 from datetime import datetime, timedelta
 import numpy as np
-import treeherder
+import treeherder.treeherder as treeherder
 
 def simulate_test_queue(submit_timestamps, num_machines, test_duration=22):
     """
