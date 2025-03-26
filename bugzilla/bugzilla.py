@@ -1,7 +1,7 @@
 import requests
 import datetime
 
-# Your Bugzilla API key
+# Bugzilla API key
 API_KEY = "sicSwVcOxOwvLCn12804YSB0nhlCuSBw4FkhKoKK"
 
 # Bugzilla API endpoint
