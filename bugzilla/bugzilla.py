@@ -1,7 +1,7 @@
 import requests
 import datetime
 
-# Your Bugzilla API key
+# Bugzilla API key
 API_KEY = "***REMOVED***"
 
 # Bugzilla API endpoint
