@@ -1,0 +1,1001 @@
+id,summary,regressed_by
+1953288,Cannot reply from local or unified folder when message pane is hidden -  TypeError: currentHeaderData is undefined,11076
+1793766,Perma build bustage /builds/worker/checkouts/gecko/dom/xul/XULPersist.cpp:261:32: error: use of undeclared identifier 'uri'  when Gecko 107 switches to Late Beta on 2022-10-28,15232
+1909225,"sys_tray::linux logs translation issue about PLATFORM on startup - [ERROR sys_tray::linux] translation issues: [ResolverError(Reference(Function { id: ""PLATFORM"" }))",18732
+1909879,Nightly/Beta Flatpak crashes on startup if missing access to `org.kde.*` own-name,18732
+1634946,"""Initially Show Attachment Pane"" option not working after Enigmail integration (also not working in TB 68 with Enigmail).",22687
+1906107,long headers over flow in message window. Causing layout issues.,29041
+1715709,Restore q shortcut for “Inspect” in context menu on macOS,34572
+1644611,::before pseudo content overwrites select option label text,40545
+1760393,Cannot create news account after clicking a news url,41133
+1862193,The search results in the 'Find in Settings' search bar are not updated promptly after changing language,62174
+1730834,Image doesn't animate if loaded after location.replace() call.,70030
+1948734,"After Bug 71895, it is not possible to use --disable-backgroundtasks on macOS",71895
+1935817,all history window shows dates instead of content on second invocation,82301
+1954244,Frequent content process hangs with nsIContent::CanStartSelectionAsWebCompatHack(),85686
+1954735,"Perma Assertion failure: StaticPrefs::dom_selection_mimic_chrome_tostring_enabled(), at /builds/worker/checkouts/gecko/layout/base/PresShell.cpp when Gecko 138 merges to beta on 2025-03-31",85686
+1719922,"Impossible to send email with only address lists in ""To""!",104973
+1602615,Sometimes drag and drop of URLs causes flicker,110894
+1652408,Print menu opens after a long time if opened from PDF preview,117233
+1652764,window.print() takes a very long time as of FF 78 on Macos Sierra,117233
+1654982,Silent printing doesn't work on Mac - Firefox 78.x,117233
+1889840,will never use an entry in the image cache when loading an image top level that has a redirect,121084
+1595435,bankhapoalim.co.il login  - can't enter username or password,125282
+1828591,subject always initially showing the unencrypted symbol,135636
+1801668,Send Message Error - The server responded: Error: timeout exceeded,136871
+1816540,Canceling SMTP send before progress reaches 100% doesn't stop the transfer. Mail is still sent.,136871
+1854567,SMTP Error 452 - Too many emails sent on this session - Comcast,136871
+77221,Options menu for Format doesn't work like stated in spec,137884
+1669995,Intermittent [TV] toolkit/components/printing/tests/browser_print_selection.js | Uncaught exception - undefined - threw exception: AbortError: Actor 'SpecialPowers' destroyed before query 'Spawn' was resolved,140718
+1672864,"Printing selected text can cause ""Print preview failed"" error and crashes",140718
+1570974,History mouse shorcut issue,143038
+1633887,Mouse shortcuts for back and forward are broken,143038
+1857513,Bookmark sidebar tooltips no longer appear on hover when sidebar is not focused,148624
+1861427,tooltips no longer appear on hover when the other application is focused,148624
+1556045,Revealing a password then selecting a different login should change the reveal icon back to the 'hidden' state,150099
+1564035,Fixed content of fixed parent is not rendered when position changes,157681
+1616832,gBrowserInit._delayedStartup shouldn't run code after announcing that delayed startup has finished,"158968,1587492"
+1948868,"Receive mail with ""X-Unsent: 1"" in the header cause wrong sender displayed",166541
+1793313,test_bug170727.js writes single message as two messages,170727
+1671741,Displaying the wrong subject when multiple subjects are in the message header,172104
+1735152,nsSocketTransport::Open{Input/Output}Stream can set output pointer without AddRef-ing it.,176919
+1643153,"After click on compose body, need to press Shift+Tab twice to move focus to subject",178324
+1930447,Embedded image can no longer be dragged to new compose window,188598
+1799520,"setting mail.compose.other.header to ""from"" breaks header display in message reader UI",195716
+1800759,In-Reply-To and References header missing in reply to mail since upgrading to 102.4.2 if they were set in mail.compose.other.header,195716
+1802793,"mail.compose.other.header affects not only composition of new message, but also message header view, which is wrong",195716
+1910810,File handling/Application preference for text/* is ignored if Content-disposition:inline,196078
+1579148,Update support articles to warn that default behavior of new profiles removes accessibility customisations; might contain migraine triggers,198964
+1719561,Prefers reduced motion should keep sites from animating on scrolling,198964
+1603636,"Find toolbar's ""Match Diacritics"" Alt+D hotkey conflicts with the address bar",202251
+1539656,"Assertion failure: list && !list->IsDirty(), at src/layout/generic/nsBulletFrame.cpp:822",205202
+1543328,"1.17 - 1.22% Heap Unclassified (windows10-64, windows10-64-pgo-qr) regression on push 9bad25ccc8d0414e21d3c8d4dcf2178a97bb07c3 (Mon Mar 25 2019)","205202,288704,1518201"
+1574398,wrong numbering of nested lists,205202
+1648365,Number in list item is incorrect when counter-reset is applied to <ol>,205202
+1827604,The letter after an apostrophe should not be affected by text-transform:capitalize,208789
+1911550,First character is clipped in units dropdown-menu in Accuweather Settings (text-transform: capitalize not affecting <select> intrinsic size),"208789,1582545"
+1697882,"Huge notification bigger than the screen from feed folders observed in TB 78.8.1 notifying of ""0 new messages""",210148
+1819840,Subject in message list row is not vertically centered with Density > Relaxed (touch),213945
+1671806,Logging suspended/resumed events on each call to CreateNewLineFromSocket() when no suspend happened,217434
+1876354,Border between messages shown incorrectly and messed up the height perception of the card view,221154
+1876745,The Testrail Graph is not properly displayed,221154
+1877591,Hit MOZ_CRASH(unexpected frame type) at /builds/worker/checkouts/gecko/layout/base/nsCSSFrameConstructor.cpp:8014,221154
+1877719,Sliders (binary sliders? Switches?) on youtube in-video settings are cut-off,221154
+1880550,Table cells in workday.com are cut-off,221154
+1883872,CSS: Intrinsic sizing of table elements crops elements,221154
+1544428,Setting window.location.hash to an empty string on a site without a hash causes a popstate event,225910
+1884450,An output element nested within a label element receives two click events,229925
+1886388,Can not create a new profile using the latest Nightly,232598
+1912053,Console error when toolbar overflows,"232598,1800417"
+1893746,"""From"" and ""Correspondents"" Fields Show E-mail Addresses of Sender",243258
+1894048,"Collected Addresses all have ""prefer display name"" per-contact preference set to false/unchecked",243258
+1682196,After bug 244347 landed the scrollbar in account settings appears draggable and a border appears around the settings list,244347
+1721574,Local Folders are always moved to the end of the account list after a restart,244347
+1646955,Ubuntu/Lockwise - Hide additional separator if no import/export options are available,249801
+1626291,"Assertion failure: uint32_t(startOffset) <= startContainer->Length() && uint32_t(endOffset) <= endContainer->Length(), at /builds/worker/checkouts/gecko/dom/base/ContentIterator.cpp:721",253870
+1676785,Japanese input into input fields semi-broken - IME composition string does not display in Address Book Dialog,253870
+1832275,selection.addRange() fails to highlight text or make it copyable when triggered by a return to page focus after previously being in a textbox,"253870,1623837"
+1537609,Games on pogo.com are slow because they use an obfuscator that deliberately triggers stack overflow exceptions,256180
+1679476,Unwanted border appearing while hovering table,258377
+1570566,Taobao.com isn't displayed properly in landscape mode on Android,258917
+1709410,Too many match highlights make it impossible to see the scrollbar slider,259640
+1591032,WebNavigationFlagsToFixupFlags discards LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP / FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP if string can be parsed as a URI,263213
+1696218,Thunderbird displays the dialog for default application after each startup,264270
+1937642,"""Search Online"" checkbox in saved search properties dialog may be erroneously disabled",265014
+1617527,Crash in [@ JS::SetPendingExceptionAndStack],267645
+1906990,"Quick Filter: option to search ""entire message"" has disappeared",271222
+1706204,"Public bulk mail notification won't count beyond 15 when adding more recipients, and silently discards all To/Cc recipients added after notification.",271405
+1710245,"Sticky pill selection and erratic focus after ""Use Bcc instead"" from public bulk mail notification",271405
+1716823,"Inconvenient focus in contacts sidebar after ""Keep recipients public"" from public bulk mail notification",271405
+1717085,Fix many no-op calls of checkPublicRecipientsLimit() for public bulk mail notification and follow Fluent best practice,271405
+1663363,Thunderbird restarts after successfully importing an address book,272292
+1939698,Repairing an IMAP folder doubles up message counts of virtual/saved search folder in the folder tree,276716
+1762393,"""PresShell.cpp(3322,9): error: use of undeclared identifier 'nsAccessibilityService'"" bustage with --disable-accessibility",277178
+1544951,ECMAScript spec website takes several seconds to load,288704
+1545746,Using counter-reset can break in-built list-item counters,288704
+1548753,list numbering recovery with wrong markup has changed behavior.,"288704,1518201"
+1552719,nsBulletFrame::Ordinal is slow,288704
+1567773,Lists in contenteditable,"288704,1518201"
+1637083,lib/ckfw: No such file or directory.  Stop.,290526
+1638289,"multiple definitions of SHA{256,384,512}_* symbols when linking libfreeblpriv3.so in Firefox on ppc64le",290526
+1642153,Infinite recursion building NSS,290526
+1668698,Seldom build failures in highly parallel NSS builds,290526
+1638086,"local directory listing bug, multiple spaces are collapsed in local filenames",294800
+1577987,"Messages can't be moved from ""Search Messages"" windows via drag and drop (TB 68)","297251,1446609"
+1870811,Perma  /svg/pservers/reftests/gradient-color-interpolation.svg | Testing http://web-platform.test:8000/svg/pservers/reftests/gradient-color-interpolation.svg  when Gecko 123 merges to Beta on 2024-01-22,298281
+1547684,"Floating, recalculating ist not working properly on resize if two fixed width elements move into each other",300030
+1647508,::first-letter adds a margin/padding to the left & right of a inline-block element,300030
+1890565,Intermittent js/xpconnect/crashtests/601284-1.html | single tracking bug,306344
+1663399,ICS calendars can't be set up anymore,306495
+1663951,Disabled test on windows: calendar/test/browser/browser_basicFunctionality.js,306495
+1667324,Subscribing to Google calendars does not save the password,306495
+1670420,can only choose iCalendar (ics) - should offer CalDAV under the “Multiple calendar types”,306495
+1670724,Cannot create CALDAV calendar (regression) if ics version is available,306495
+1683583,ICS calendars on FTP cannot be added,306495
+1720862,CalDAV setup prompts for password but doesn't send it,306495
+1791642,Users should not be able to enable force disabled calendars.,306495
+1632284,"Update progress bar does not appear - macOS, Nightly",307181
+1759280,It's no longer possible to open account settings on macOS (MsgAccountManager is not defined),308555
+231965,LDAP Download User Interface and function broken,311632
+539194,"High CPU (100% for many seconds) caused by having news downloaded without bounds, i.e. no purging, resulting in large msf file. (pre-Gloda)",311774
+1757996,Bug 312891 broke RTL context menus on Wayland,312891
+1641382,"Runalyze ""Save"" button has the wrong background.",312971
+1650293,Background-color in dir:first-of-type is not working on Firefox 78 and 79,312971
+497383,"""Always keep starred messages"" disappears from all accounts after visiting deferred POP Disk Space settings",324147
+1550524,Crash in [@ nsHTMLDocument::Open],325352
+1550811,Back out bug 325352 for now,325352
+1540995,calling click() on a label with disabled checkbox must not toggle its checked state,329509
+1550873,CascadingDropDown causing infinite refresh,329509
+1693454,admis.hp.nic.in refreshes infinitely because of UA sniffing + synthetic change event after bug 329509,329509
+1561036,xmlDoc.onload doesn't get fired causing a difference in site appearance between Chrome and Firefox Nightly,"332175,1328138"
+1565418,latest firefox build version 68 upgrade broke my company's menu,332175
+1746129,Regression - navigation pane not displayed correctly,332175
+1621570,browser.urlbar.clickSelectsAll=false has no effect since 75b1,333714
+1621600,doubleClickSelectsAll preference no longer honored on Linux,333714
+1621747,Single clicks selects all text in URLBar,333714
+1633203,Triple-clicking or selecting all on Linux should always copy to the primary selection,333714
+1482540,Assert fail in NS_OpenAnonymousTemporaryNsiFile(),335545
+1556462,"Cannot MsgGetMessage() if only have newsgroup and feed account, ie no defaultAccount, regressed by Bug 342632",342632
+1747531,Dedicated search bar - cant go back in history,350079
+1678587,osx intermittent comm/calendar/test/browser/invitations/browser_icsAttachment.js | setDefaultClient works -,352566
+1589497,[TSF] Crash in [@ mozilla::widget::NativeKey::InitWithKeyOrChar] because of `TSFTextStore` trying to dispatch keyboard event with unexpected message,"354358,1259692"
+1904845,"Intermittent comm/mail/test/browser/composition/browser_identityColors.js | The ::before pseudo element of the selected POP account should use the correct color - ""#0000ff"" == ""#ff0000""",355520
+1658103,"Tab context menu opened from ""Show All Tabs"" popup menu, is shown almost blank! in certain cases. (+ code to fix!)",356980
+1683901,Intermittent comm/calendar/test/browser/invitations/browser_icsAttachment.js | Daily is the default calendar app -,357480
+583677,"Sometimes can't see tags set by another user.   SELECT to server doesn't tell TB it supports \* flags, and TB won't store the keywords in .msf file",370440
+1599173,heap-buffer-overflow in [@ IsCSSWordSpacingSpace],371787
+1642223,Double click to highlight word doesn't highlight first word when cursor is moved left then right,371839
+1749182,Cannot delete Bookmark/History with Delete key in Sidebar and Library,371900
+1749667,Keyboard commands broken by bug 371900,371900
+1755922,Hide app on mac via Command H does not work,371900
+1628749,Disable workspaceID fetching and moving of window on i3 and BSPWM Window Managers.,372650
+1630085,misuse _NET_WM_DESKTOP  for session restore to virtual desktop,372650
+1644345,"C-C TB JavaScript error: .../MsgComposeCommands.js, line 1068: TypeError: can't access property ""compFields"", gMsgCompose is null - Fix command updating for cmd_toggleReturnReceipt",378224
+1540875,"JavaScript warning: resource://gre/modules/UrlClassifierLib.jsm, line 34: Array.slice is deprecated; use Array.prototype.slice instead",383217
+1899840,"Assertion failure: IsInBounds(mStart, mLength, aRange) (Range out of bounds), at /layout/generic/nsTextFrame.cpp:3901",385615
+1900169,"100% cpu use on boulanger.com site, thousands of errors logged, page stops painting",385615
+1907238,"Assertion failure: IsInBounds(mStart, mLength, aRange) (Range out of bounds), at /builds/worker/checkouts/gecko/layout/generic/nsTextFrame.cpp:3906",385615
+1661556,Non-staged complete update does not recover backup files,386760
+1760851,Intermittent TV-fis browser/components/places/tests/browser/browser_controller_onDrop_sidebar.js | Should not have a bookmark at the old location. - false == true - JS frame :: chrome://mochitests/content/browser/browser/components/places/tests/browser/,390752
+1899695,svg line not rendering properly on the new update,"390936,1855763"
+1578055,"[XdndDirectSave] nsDragService still uses ""host"" from nsSystemInfo",396370
+1618455,Thunderbird times-out waiting for final IMAP APPEND response for large messages.,396874
+1945062,Status bar doesn't update when moving 1000 messages from IMAP folder to local folder,"399475,1828372"
+1953568,crash [@ mozilla::detail::nsTStringRepr<T>::Last | nsImapProtocol::ProcessSelectedStateURL],399475
+434327,"opening ""main"" preferences pane creates ~/Desktop even when not set to download directory",399500
+1581340,"Perma Wptlint /builds/worker/checkouts/gecko/testing/web-platform/tests/css/cssom-view/offsetTopLeft-border-box.html:0 | Don't use Ahem as a system font, use /fonts/ahem.css (AHEM SYSTEM FONT)| builds/worker/checkouts/gecko/tools/lint/wpt.yml:0 | Lint pro","400258,1579194"
+772760,crash in nsMsgLocalMailFolder::EndMessage,402392
+1898706,Message vanishes when redoing moving from an IMAP folder,402392
+1902008,Intermittent [TV] browser/components/sidebar/tests/browser/browser_sidebar_max_width.js | Uncaught exception in test bound test_customize_sidebar_actions - at chrome://mochitests/content/browser/browser/components/sidebar/tests/browser/browser_sidebar,406629
+1577061,GetCurrentWorkingDir in nsUpdateDriver may blow the stack,411505
+1143644,"Downloading a file which name has U+3000, it will replace U+3000 to %U3000.",415491
+1680139,"Filename containig ""。"" when downloaded could turn into ""%u3002""",415491
+1634569,window.open() windows created from a mousedown handler immediately lose focus,416771
+1285711,Firefox does not use default file manager,417952
+1726319,"tb continuously downloading messages, stuck indexing large gmail account, cannot read offline",418551
+1730319,Startup Crash in [@ convertTable],418551
+1773822,Massive loss of MSF files when upgrading from 91 to 102,418551
+1776265,Design problem with folderCache.json: Should not contain platform specific absolute folder paths,418551
+1776280,Folder cache fails to cache values retrieved from the database,418551
+1777731,"After Tbird 102 Update, Mail filters are screwed up. ""folder xxxx not found...so the filter(s) associated with this folder will be disabled""",418551
+1672269,[Bug] Attempting to select text in Thai script fails on Android and makes Fenix unable to load new pages,425915
+1075398,Warning unresponsive script adressingWidgetOverlay.js:606 when more than 4000 bcc adresses and answering to all,431217
+1683460,"dragging ics file to today pane does not populate ""New Event"" window",437711
+1603166,"With at least one recipient pill in TO-field, after adding pill in CC, focus jumps back to TO",440377
+1603526,"Focus on reply should be in message body, is in To field instead",440377
+1603572,"fix accessibility (for the screen reader, visually impaired) of the address pill implementation",440377
+1603781,"after clicking mailto: link, can't send message (new compose window addressee code)",440377
+1603863,Takes eight tabs instead of two now to get from To field to message body,440377
+1607526,Don't show the To: field if the Newsgroup or Follow-up fields are in use,440377
+1609894,"Typing comma (,) in new recipient display name creates invalid pill prematurely (cannot enter: Surname, First Name <foo@bar.com>)",440377
+1609895,Slightly longer recipient address pushes recipients area UI elements out of screen,440377
+1609901,Space in recipient's originalInput hard to remove with Backspace as it's falsy - polish trimming,440377
+1609928,Pills created from an address retrieved via LDAP appear in orange,440377
+1610771,Subject line is now white and the letters are white,440377
+1612369,Compfields2Recipients leaves old entries intact,440377
+1623285,"Changing sender identity removes all CC and BCC recipients if auto-CC or auto-BCC changes, loses auto-* display names; awRemoveRecipients() disfunctional and wrongly documented",440377
+1627166,Addressing widget not disabled for user input during send,440377
+1627435,Omission of trailing angled bracket clips last character of recipient pill's email address,440377
+1629144,Ctrl+Enter / Ctrl+Shift+Enter keyboard shortcuts for sending message no longer work from recipient input,440377
+1640722,"DEL or BACKSPACE no longer removes empty address rows, and focus jumps sometimes using [x] label",440377
+1642279,Email addresses with comma in display name cannot be entered via keyboard,440377
+1647050,"Recipients2CompFields() not working as expected after bug 440377, losing Cc/Bcc recipients, onRecipientsChanged() fires too early.",440377
+1656278,"From Address Book, cannot 'write'/compose to email address with comma in display name",440377
+1658157,Email addresses with comma in display name cannot be entered via keyboard if they match an auto-complete result,440377
+1658361,"""Edit as new message"" not working of addressing header contains raw UTF-8, was: Non-ASCII characters in e-mail address don't survive round trip of ""save draft"" and ""edit draft""",440377
+1658890,Adding custom headers to an email or a newsgroup article through mail.compose.other.header is broken,440377
+1659332,Hitting tab quickly before address auto-completion completes leads to invalid address pill,440377
+1665025,After editing input-pill: Empty string passed to getElementById(). MsgComposeCommands.js:194:29,440377
+1666105,No visual indication for recipient pills of whether a typed address is in the Address Book,440377
+1668848,"Cleanup, rectify and improve readibility and performance of recipientAddPills()",440377
+1696773,Restore easy vertical navigation with cursor up/down keys in addressing area.,440377
+1630732,Window gets restored outside of view and can't be reached,440895
+1675724,nsCocoaWindow::GetWorkspaceID() hangs in SLSCopySpacesForWindows from SkyLight,440895
+1665375,"Perma Beta TEST-UNEXPECTED-FAIL | /html/browsers/browsing-the-web/history-traversal/unset_context_name-1.html | window.name after navigating to a different origin - assert_equals: expected """" but got ""<...>"" when Gecko 82 merges to Beta on 2020-09-21",444222
+1562827,[Wayland] Firefox on Wayland segmentation fault when developer tools are detached to separate window,449734
+1608139,Firefox doesn't correctly render complicated svg images made in Inkscape,450340
+1542353,Confirming a Download while moving tabs freezes the tabs in a wrong position and makes the URL bar unreachable,450915
+1042801,"""ldap_2.servers.*.autoComplete.nameFormat|addressFormat|commentFormat"" settings no longer work",452232
+1050672,LDAP display customized comment columns (mail.autoComplete.commentColumn) does not work any more (TB 31.0),452232
+739071,Text selection with mouse in input type text impossible if parent node has attribute draggable=true,452787
+1700575,Cannot attach files of size 0 bytes,453196
+1711064,Generated pdf are corrupted,454059
+1721424,Print preview error when printing,454059
+1748077,"""Print Preview Error: An error occurred while printing."" - When printing the glossary of math symbols",454059
+1387292,Attachments appear on my desktop when I open them and stay there even though I reboot. [Mac],454242
+1631089,Perma TEST-UNEXPECTED-FAIL Firefox Browser Page ElementHandle.screenshot should take into account padding and border,455077
+1631615,windy.com - colors missing from map layers,455077
+1632539,Edit bookmark panel color changed in dark theme,455077
+1635670,"Force sRGB tag for screenshots as generated with ""WebDriver:TakeScreenshot""",455077
+1637861,Location names on JetLag site are cut off,"455077,1250461"
+1639574,getImageData returns incorrect pixel information,455077
+1783725,Strange behaviour of *bold* text in plaintext reply,456053
+1847658,calendar invitation not send to attendees (but is sent to organizer),459683
+1861355,"cancellation is sent to the invites AND the organizer (should not, if it's the organizer cancelling)",459683
+1652384,rich editor add some new table column，but new cell's border-bottom is none,460637
+1573276,Certificate and network errors in sandboxed iframes completely broken (show XML Parsing Error),467035
+1773177,Fix address book search for vCard properties,469209
+1540821,`firefox --profile /tmp/padding --no-remote` no longer starts a new Firefox instance with the different profile,469990
+1542316,Firefox does not create a separate dedicated profile when launched from another install location on macOS,"469990,1539839"
+1543627,Using the `-createProfile` argument opens a new window in a running instance and doesn't create a profile,469990
+1553767,"Command line doesn't respect ""--profile"" flag",469990
+1565331,launching Firefox with -P fails to bring up ProfileManager if an instance is already running,469990
+1565597,Cannot Start multiple Profiles,469990
+1600207,use-after-poison in [@ mozilla::ReflowInput::ReflowInput],471015
+1600367,crash at null in [@ nsFieldSetFrame::GetNaturalBaselineBOffset],471015
+1690166,crash near null in [@ nsIFrame::UpdateStyleOfChildAnonBox],471015
+1688229,Folder Properties dialog always updates the database,473458
+1684469,Basic Auth prompter open in one tab prevents other Basic Auth tabs from loading,"475053,613785"
+1645008,Dark line between toolbar and page content on non-100% DPI for either normal or maximized windows,477157
+1663794,Contents of Tab will disappear and buttons and controls of Firefox will soon lose its function,482921
+573537,"printing and get dialog ""The document cannot change while Printing or in Print Preview.""",487667
+1562033,"title.innerHTML = ""</title><foo>"" parses <foo> as a tag",487949
+1730021,Firefox does not restore session on restart,490136
+1634835,URL problem when access pages by files:// protocol,491801
+1689936,Some tab documents completely missing from a11y tree on startup,493683
+1700708,Tabs discarded status always false for restored tabs,493683
+1703600,Crash [@ AttrArray::GetAttr],493683
+1682758,Intermittent toolkit/content/tests/widgets/test_videocontrols_focus.html | Controls shown after focus,494175
+563677,HTML Mail View very slow (45++ sec) for pop and local folders - speed up FolderUriForPath first lookup when switching folders,497680
+1743363,"""reply-to"" confusingly isn't displayed when it's identical to ""to""",499180
+1681226,"Intermittent TV toolkit/components/printing/tests/browser_print_margins.js | This test exceeded the timeout threshold. It should be rewritten or split up. If that's not possible, use requestLongerTimeout(N), but only as a last resort. -",499640
+1685823,Preview updates twice when sheet count changes after changing printers,499640
+1581909,Illegal value 'Illegal value' when calling method: [calIRecurrenceInfo::modifyException],501689
+1582058,"Can not modify immutable data container' when calling method: [calIItemBase::setProperty]""  nsresult: ""0x80460002 (NS_ERROR_OBJECT_IS_IMMUTABLE)"" ...... ccalStorageCalendar.js#1736",501689
+1583330,Can not modify immutable data container'Can not modify immutable data container' when calling method: [calIRecurrenceInfo::appendRecurrenceItem],501689
+1664731,After release 78 some event descriptions and categories are lost when editing a single recurring event,501689
+1743048,"Intermittent  dom/html/test/forms/test_input_password_show_password_button.html | after appending a character, string should have changed",502258
+1636747,Whitespace unexpectedly disappears when typing in contenteditable,503838
+1638726,teams.microsoft.com - Space are removed by a previous backspace,503838
+1582323,File input browse button no longer gets accessibility focus,505355
+1718839,Archive message action does not work,"507601,1694760"
+1667774,HTTP Refresh no longer work in content tabs,511240
+1182229,Help menu > Search doesn't find history items unless the History menu has been opened at least once,515700
+1730287,Fix startup.first_run_is_from_dmg telemetry to report first-run-not-from-dmg stats again,516362
+1695703,Removing one imap account password sets all imap servers' userAuthenticated property to false,516464
+1894214,Quick Filter and Mark All Read (Shift + C) marks all emails as read in a folder (not just the filtered one),519687
+1546882,9.24 - 60.5% build times (linux64) regression on push 17040bb20e256476df548a6be770e7d8f78387ef,524410
+752608,Find in Page: highlighted result does not scroll it into view correctly,526394
+1738826,"Perma OS X Cross Compiled Update Verify TypeError: tuple indices must be integers or slices, not str",527670
+1542490,Creating movemail account from Account central broken,529131
+1729459,Floating-Point Normalization breaks build on 32bit Linux,531915
+546925,custom header search is non-functional ('Run search on server' of Edit/Find/Search Messages doesn't work any more),537820
+821687,Status panel should be attached to the content area without overlapping surrounding chrome,541656
+1675935,mouse hover selection highlight of Places contextmenu disappears (flickers),541656
+1854601,Re-enable toolkit/components/extensions/test/mochitest/test_ext_webrequest_filter.html after bug 543435,543435
+1865028,Re-enable test_nuke_webextension_wrappers.js,543435
+1881196,Some CJK Unified Ideographs change to Kangxi Radicals after printing to PDF.,548311
+1913224,"After repairing an IMAP folder, total/unread message counts are displayed incorrectly",550286
+1677320,layout.forms.input-type-search.enabled breaks text selection in search bar in toolbar,558594
+1835509,this GIF animation stops and does not loop (is not repeated) in Firefox despite being cyclic in other browsers,573583
+1855650,WWW-Authenticate: Negotiate not working cross-site since FF118,580353
+1824644,Crash in [@ nsClipboard::SaveIStorage],580928
+1851041,Drag and drop url to FF creates shortcut in temp,580928
+1784720,Intermittent dom/tests/mochitest/general/test_resizeby.html | single tracking bug,581863
+1945668,Perma [Tier 2] testing/marionette/harness/marionette_harness/tests/unit/test_window_rect.py | single tracking bug,581863
+1945818,Firefox menu and extension menu open on the left side instead of from the hamburger menu,581863
+1945834,[Wayland] The hamburger menu opens in the top left of the window instead of where it's supposed to,581863
+1946016,The window of a detached tab is larger than the original,581863
+1946088,libxul.so: undefined symbol: gdk_wayland_display_get_type,581863
+1946154,<select> options no longer attached to menu,581863
+1946184,"Toplevel window leftovers on X11, and wrong sizing on Wayland, after moving to tiled state",581863
+1946193,[regression] Incorrect window size and subwindows positions,581863
+1946298,Child bookmarks menus sometimes appeared to the left of their normal position when they had many bookmarks or folders,581863
+1946676,Toggling the titlebar checkbox on and off causes the window to grow.,581863
+1947009,Firefox windows leave space around them when sized to fit next to other windows.,581863
+1947124,66.06 - 2.17% tumblr loadtime / microsoft ContentfulSpeedIndex + 41 more (Linux) regression on Mon February 3 2025,581863
+1947181,[Wayland] Tab preview position doesn't update all the time,581863
+1947453,Frequent WD macosx1470-64 debug /webdriver/tests/classic/set_window_rect/set.py | single tracking bug,581863
+1947689,6.06% facebook-nav.groups SpeedIndex (Linux) regression on Mon February 3 2025,581863
+1947690,7.2% perf_reftest_singletons bidi-resolution-1.html (Linux) regression on Mon February 3 2025,581863
+1950911,Test warning when running test browser/base/content/test/popups/browser_popup_resize.js after bug 581863,581863
+1951296,Nightly moves windows up after restart and reduces the height of maximum height windows,581863
+1682707,Intermittent TEST-UNEXPECTED-TIMEOUT | /webdriver/tests/set_window_rect/set.py | expected OK,582459
+1683801,"Intermittent /focus/iframe-activeelement-after-focusing-out-iframes.html | Check iframe activeElement after focusing out different site iframe - assert_equals: expected ""outerlog:willfocusinput,windowfocus,didfocusinput,innerlog:willfocusinput,window",582459
+1596371,Lost old tags and new tags disappear after upgrading to 68.2.1,583677
+1610623,DisplayMenuBar isn't working via GPO with Firefox 72,587492
+1556953,Tabbing from a username field autofills a matching password from a different subdomain,"589628,1166113"
+1557960,"Saved login autocomplete shows ""null"" for the username due to invalid `timePasswordChanged`",589628
+1558857,Password autofill suggestions have become unusable on sites where the user has a lot of passwords saved on eTLD+N domains where N>1,589628
+1567196,Do a migration of logins with bogus creation/modification dates and add validation in _checkLogin to avoid this happening in future,589628
+1601375,Firefox asks for master password when it shouldn't (credentials stored for unrelated subdomain),589628
+1653547,Username fields get empty login autocomplete rather than form history if another subdomain has a saved login,589628
+1308069,Bing maps is incompletely updated.,599975
+1567544,"Canvas SVG issue when using the Context2D ""globalCompositeOperation"" set to ""destination-in""",603488
+1368270,Crash in mozilla::a11y::IDSet::GetID (MSAA id exhaustion),606080
+1638851,Intermittent T-Prof talos | application crashed [unknown top frame],"610031,1586939"
+1830732,Pressing Cmd+C in the address bar sometimes copies about:blank when the page hasn't fully loaded even though the full URL is selected,610357
+724457,Shortcut key in menus looks like disabled,610902
+634526,shutdown hang with imap threads blocked. timing out a blocking read?,613184
+1543105,Rendering issue on inline element with background-image and background-attachment:fixed,613659
+1665156,Different input style for username and password in http authentication dialog,613785
+1665339,Canceling http auth prompt via the escape key aborts navigation,613785
+1680066,HTTP Auth tab-modal prompt is not shown for extension sidebar,613785
+1890593,"breakage after ""button to allow WPAD while using system proxy settings"" (#621429)",621429
+1577480,browser.tabs.hide API doesn't work on tabs that are using geolocation or were previously sharing any media using webRTC,630614
+1580189,"""Allow Location Access"" permission is kept even if previously removed from Permissions Panel",630614
+1586581,permission panel shows 'Allowed Temporarily' for geolocation request from iframe when permission is permanent,630614
+1627264,Allowing location in Outlook Calendar put two location icon in URL bar,630614
+1680793,Geolocation sharing state overwrites WebRTC sharing state,630614
+1680827,Duplicate geolocation last access timelabel in siteIdentity permission list,630614
+1648407,resizeable stacked modals: resize icon of modal below is shown on modal on top,631337
+1656961,Intermittent TV security/manager/ssl/tests/mochitest/browser/browser_clientAuthRememberService.js | chooseCertificate should have been called if visiting 'requireclientcert.example.com' for the first time - false == true - JS frame,634697
+1515402,[wayland][sway] selecting text in browser makes it crash,635134
+1539773,Firefox with Wayland crash on wl_abort() when selecting more than 4000 characters in a <textarea>,635134
+1541003,[Wayland][Webrender] Crash at start (debug build) GL_INVALID_FRAMEBUFFER_OPERATION,635134
+1543035,[Wayland] Popups are wrongly located when partial scaling is enabled,635134
+1543687,[Wayland] posix_fallocate() causes massive hangs on wayland on popup creation,635134
+1255318,"Drag&Drop image/file to input type=""file"" is not registered as a browser interaction; onbeforeunload event is not fired, when user leaves the page",636905
+1814889,[win] Opening a New Private window will no longer display a private browsing icon on the taskbar,639707
+1655213,Intermittent TCw1 TEST-UNEXPECTED-TIMEOUT | /css/css-backgrounds/border-radius-clipping-002.html | TestRunner hit external timeout (this may indicate a hang),642061
+1753910,"Firefox is unusable on Windows 11 install, opens small white box, no pages or menus can load",642469
+1860479,Click and Drag Selection Scrolling Slow When Windows Taskbar Hidden,642851
+1878469,Crash in [@ nsCOMArray_base::Count ],646168
+1889990,Crash in [@ nsMsgGroupThread::GetChildHdrAt ],646168
+1814526,Perma [TIer 2] /builds/worker/workspace/obj-build/dist/include/mozilla/Casting.h:125:21: error: comparison of unsigned expression in '< 0' is always false [-Werror=type-limits],646323
+1659070,"2D canvas shape closing issue showing tapped corner (repros with d2d-canvas, fixed by gpu-canvas)",651858
+1348876,Escaped backslashes replaced with backslashes (leading to forward slashes when hitting enter again),652186
+1658227,"Mark Message or thread as read (shortcuts: M/R) fails from facet search results ""show results as list"" or Open message in conversation (Uncaught TypeError: can't access property ""getNumUnread"", this.displayedFolder is null)",654362
+1626155,nsLayoutUtils::TransformAncestorPointToFrame passes null for ancestor frame,655877
+1740987,"All tabs gone, about:newtab blank, about:support without values (Browser Console: ""TypeError: PlacesUtils.obfuscateUrlForXulStore is not a function BrowserGlue.jsm:3342:36"")",657263
+1370064,Grayscale antialiasing instead of subpixel antialiasing is used in long tab titles after landing patches from bug #658467,658467
+1562905,selection is lost when focusing contenteditable iframe with table cells selected,662591
+1681487,IMAP folder size keeps growing because single message is downloaded and appended repeatedly downloading,663761
+1368464,MJPEG (multipart/x-mixed-replace): Cannot paste to other application after copying image. The other application hangs up.  Browser crashes after quit browser,664717
+1771823,Firefox clears the system clipboard when the application exits,666254
+690707,"TB7 sorts messages by From too slowly, if ""show only display names"" is enabled and many contacts are defined in addressbook",672022
+1865468,Fix TrackPoint::IsDriverInstalled,672175
+1700338,Intermittent [TV] TEST-UNEXPECTED-CRASH | /html/syntax/xmldecl/xmldecl.html | expected OK,673087
+1700363,High frequency TEST-UNEXPECTED-TIMEOUT | /html/syntax/xmldecl/xmldecl.html | expected OK,673087
+1700508,"Perma Assertion failure: !(aSource == kCharsetFromChannel && !aChannelHadCharset) (If charset is from channel, channel must have had charset.), at /builds/worker/checkouts/gecko/parser/html/nsHtml5StreamParser.h:245",673087
+1781027,Various tests in test_addsub.js can be removed as they are unused,673470
+723888,"crash SyncRunnable5<nsIImapMailFolderSink, nsIImapProtocol* ... typically working with folder subscribe",675407
+1554124,tabs keeps reloading when I return to them,675539
+1554547,Do not unload WebRTC tabs in low memory situations,675539
+1558554,Tabs are suspending above the low memory threshold,675539
+1524137,Fx65 regression: multiple tabs (beyond the first) opened by js bookmarklets are blocked as popups,675574
+1720433,Bug in HTML <A> with ONCLICK implementation,675574
+1566774,Content of about:downloads/Downloads in Library flickers/blinks/flashes on scrolling,675902
+1539827,Copy/ Paste after Select All is broken,676268
+1569006,Lightning 6.2.7.1 (Thunderbird 67.0.1) causes event to be always selected in calendar pane after one switched between days/weeks,680620
+1845241,[contenteditable] `RightClick` move caret at the start of the `contenteditable` element,"682338,1083629"
+1943495,Intermittent TV accessible/tests/browser/events/browser_menu_and_alerts.js | single tracking bug,682811
+1782562,"Assertion failure: newElts <= (2147483647) && newElts * EltSize <= (2147483647) (invalid Vector size (see bug 510319)), at dist/include/mozilla/Vector.h:137",685783
+1571616,Broken accessibility tree when expanding a Gmail conversation,686400
+1572317,Relocated elements not pruned when container is hidden,686400
+1572490,Crash in [@ mozilla::a11y::TextUpdater::Run],686400
+1572811,crash near null in [@ GetPrevInFlow],686400
+1572829,"Assertion failure: !GetAccService() || !GetAccService()->HasAccessible(this) (An accessible for this element still exists!), src/dom/base/Element.cpp:1871",686400
+1572851,"Assertion failure: !textAcc (Text node was removed but accessible is kept alive!), at src/accessible/base/NotificationController.cpp:657",686400
+1592518,"Missing events when some pages, like Mobile Twitter, initially load, causing missing content in NVDA's virtual buffer",686400
+1601998,AddressSanitizer: SEGV /builds/worker/workspace/build/src/layout/generic/nsIFrame.h:2073:46 in GetStateBits,686400
+1663796,Fields not removed from NVDA virtual buffer when cancelling editing of a GitHub comment,686400
+1682692,subtree order in slack's keyboard shortcuts pane is wrong,686400
+1693411,Elements with visibility hidden remain in accessibility tree,686400
+740304,"""Tell Mozilla about the crash"" checkbox is unchecked by default on Linux",688083
+1764312,Long startup time until main window appears,1688998
+1651090,Permafailing tier 2 TEST-UNEXPECTED-TIMEOUT | toolkit/mozapps/update/tests/unit_service_updater/marAppApplyUpdateAppBinInUseStageSuccessSvc_win.js | Test timed out,689178
+1692933,Don't expose focusable state on ARIA grids which aren't actually focusable,690199
+1836490,Intermittent TV dom/canvas/test/test_canvas.html | single tracking bug,691187
+1837729,Codepen demo (https://codepen.io/MittenedWatchmaker/pen/NLgxvz) doesnt render anything,691187
+1845290,Cytoscape.js library cannot draw arrowheads in Firefox 115,691187
+1846079,Canvas issue when drawing arc lines,691187
+1848729,"Perma ESR115 /html/canvas/offscreen/path-objects/2d.path.stroke.prune.closed.html | Zero-length line segments from closed paths are removed before stroking - assert_equals: Red channel of the pixel at (50, 25) expected 0 but got 255",691187
+1616164,Anchor jumping doesn't work when going back/forward,691734
+1779848,mFd being nullptr in nsNSSSocketInfo::ClientAuthCertificateSelected means the connection has closed and isn't an error,696976
+1784021,NSS shouldn't prompt for a password for a token that is blocked,696976
+1906444,"21.21 - 8.1% espn fcp / espn SpeedIndex + 2 more (OSX, Windows) regression on Mon June 24 2024",697151
+1563959,Crash in [@ nsMsgFilterList::ApplyFiltersToHdr],697522
+1593273,"Unchecking ""use system colors"" no longer works when high contrast is enabled.",697836
+1773865,Ctrl+0 no longer resets pinch-zoom,698873
+1774676,"""100%"" text on the Zoom toolbarbutton is hard to read",698873
+1777338,Ctrl+0 no longer resets page zoom when current zoom is 100% and default zoom is not 100%,698873
+1833494,Keyboard zoom shortcut switches tabs when zoom level maxed out with certain keyboard layouts,698873
+1834944,"Resetting zoom to ""Actual Size"" is broken in reader mode and pdf mode",698873
+1753487,"Assertion failure: IsElement(), at /builds/worker/workspace/obj-build/dist/include/mozilla/dom/Element.h:2078",700538
+1952481,Message header view toolbar buttons retain focus after being clicked.,"702484,1816784"
+1700498,"nsTHashSet.h(166,11): error: no matching member function for call to 'Insert'",708901
+1557531,Layers readback tests likely not running as readback (Once pref should be Live),709490
+733731,hang when switching folders on IMAP server,711787
+1825239,Importing bookmarks from another browsers is slower on low end computers,711995
+1546369,Perma tier2 devtools/client/webreplay/mochitest/browser_rr_inspector-02.js | Test timed out | A promise chain failed to handle a rejection: Protocol error (unknownError),713106
+1581582,Perma [tier 2] m-fis devtools/client/inspector/rules/test/browser_rules_pseudo-visited.js | Test timed out -,713106
+1850828,"When link is clicked in an external app, firefox 117 does not open the link if it needs to start",713713
+1880452,"fx_new_window_ms has regressed by 175% since July 7th, 2023",713713
+1699431,TB new mail notification too low on screen and partly hidden,715799
+1701429,Thunderbird icon is no longer displayed in the tray,715799
+1702741,New mail notification does not open email on click,715799
+1721063,"Windows systray item informs of not-so-useful number of unread messages, should display number of new unread messages",715799
+1726900,Starting Thunderbird minimized in Windows10 the tray-icon vanishes,715799
+1735458,New mail alert should not be displayed when running a full-screen application,715799
+1757522,Incoming read emails trigger notifications of last unread email,715799
+1849716,"Console error at start: While creating services from category 'app-startup', service for entry 'OS Integration', contract ID '@mozilla.org/messenger/osintegration;1' does not implement nsIObserver.",715799
+1516622,Cannot drag data uri image to new tab,718203
+1805281,Intermittent TV browser/components/places/tests/browser/browser_import_button.js | uncaught exception - Error: No DOM node set for aPlacesNode.,718280
+1634993,"Tooltip for Print button shows ""Print this message""",718517
+1200075,Fix malloc_usable_size situation for SQLite on Windows,719579
+1953757,Perma linux pfu Unsuccessful task run with exit code: 43 completed in xx seconds | after HSTS preload list generation failed,721336
+1520283,[Regression] Detection of SSL/TLS mail server connections in account creation is broken,721369
+1567164,Export Changes - Copy Rule does not copy CSS Rule text,724505
+1736307,"Assertion failure: ins->compareType() == MCompare::Compare_String, at js/src/jit/MIR.cpp:3847",725966
+1736783,"[MIPS64] Implement MacroAssembler::test{Number,Boolean,String,Symbol,BigInt}Set()",725966
+1046479,Uninstalling Firefox ESR doesn't remove new ESR Registry Keys,726781
+1673341,Permanent menubar visibility toggling doesn't work (menu bar is hidden again),727668
+1673357,Very Frequent browser/base/content/test/performance/browser_windowopen.js | Test timed out - | Found a browser window after previous test timed out -,727668
+1674053,"13.02 - 132.42% tabswitch / tp5n main_startup_fileio (linux64-shippable, windows10-64-shippable) regression on push 45bbeabb0c89cf73d644b59898cb207e4462f147 (Mon October 26 2020)",727668
+1677733,Bookmarks toolbar for new tabs changes screen resolution for new window when privacy.resistFingerprinting is turned on,727668
+1679728,`browser.showPersonalToolbar` in distribution.ini no longer works,727668
+1705215,"With ""Bookmarks toolbar: only show on new tab"", tab-switches to/from a new-tab cause the viewport-height to change (and cause layout/paint jank) **in all background tabs**",727668
+1869982,"With bookmarks toolbar set to show on new tab, it doesn't disappear after loading data URIs longer than 64KiB characters from the new tab page",727668
+1915384,2.29% speedometer3 TodoMVC-Backbone/CompletingAllItems/Async (OSX) regression on Thu August 22 2024,727831
+1901652,The hypothetical box of fixed positioned elements accounted the root scrollbar-gutter on the left twice,728807
+1843241,"after request fullscreen on an element after already being in fullscreen (F11), zooming in then exiting will break page layout",729011
+1650720,Copying \r\n inside <pre> converts to \r\r\n,731896
+1644381,nsSliderFrame doesn't remove listener,732052
+1352915,background-attachment:fixed is disabled by transform-style:preserve-3d,735857
+1701929,macOS: New fullscreen menu slide-in animation not smooth when there is a pinned tab,738335
+1710586,[macOS] Blank bar briefly displayed on top when exiting full screen after browser was stretched to maximum size while Automatically hide and show the menu bar is active,738335
+1709441,UndefinedBehaviorSanitizer: /gecko/gfx/cairo/cairo/src/cairo-image-surface.c:1255:50: runtime error: applying zero offset to null pointer,739096
+1715953,Rendering is broken with sw-wr and disabling GPU process on Win10,739096
+1719215,"Crashes [@ _cairo_surface_to_cgimage ], mostly on macOS 11, while printing",739096
+1721127,Low res / fuzzy print on Zebra label printer after cairo update in version 90 (when printing a particular PDF label),739096
+1722660,[mac] The printed output of a Pdf containing graphs is not rendered correctly,739096
+1722842,Print quality is severely degraded printing PDF on thermal label printer,739096
+1723787,Emoji not showing after printing to PDF,739096
+1725070,"Assertion failure: result, at src/layout/printing/PrintTranslator.h:61",739096
+1772225,PDF from Google Docs prints out with little artifacts (rasterized text?),739096
+1818088,Firefox clips some text when printing PDF of sheet music (whether printing to PDF or to real printer),739096
+1835978,Version of cairo in gfx/cairo/README is outdated,739096
+1625534,"Extra newline inserted when copying text that includes an element with ""-moz-user-select:none""",739396
+1730180,Text selection by double-click + drag selects too much after mouse moves between lines,739396
+1861565,window.getElement has incorrect anchorNode if there is a unselectable element inside selection,739396
+1917449,Triple-clicking to select a line adds a white space just before it,739537
+1907775,update asks for administrator (UAC),740842
+1657278,"In popup windows, show the page's favicon somewhere",742419
+1721246,Search finds text in <semantics> elements but doesn't mark it,745131
+1687002,The incremental marking validator doesn't work,747066
+1863761,13.86 - 8.17% perf_reftest_singletons bloom-basic-2.html / perf_reftest_singletons bloom-basic-2.html + 1 more (OSX) regression on Tue October 31 2023,747301
+1358633,window.find does not work in Firefox for Android and throws NS_ERROR_NOT_AVAILABLE,750051
+848477,Extensions are not allowed to use custom folders for mail storage,750781
+921371,"Can't edit account settings after update to version 24, folder location error (if  mail.root.pop3-rel , or .none-rel != [ProfD]Mail, wrong warning on proper .directory-rel==[ProfD]Mail/hostname is shown)",750781
+946876,"Can't edit account settings after update to version 24, folder location error",750781
+1826444,crash near null in [@ gfxPattern::GetMatrix],752638
+1881943,SVG context paints incorrectly inherited by <marker> element,"752638,1807479"
+1736822,widget/gtk/nsAppShell.cpp:113:3: error: 'StopDBusListening' was not declared in this scope,758848
+1274279,Crash in nsStreamListenerWrapper::OnStopRequest,759819
+1742101,"Opening a calendar invitation no longer shows time, date, location etc.",760412
+1931553,Assert (MOZ_CRASH) trigger SIGSEGV instead of SIGABRT on Linux,761857
+1559088,Use of unknown property Ci.nsIRequest.LOAD_ONLY_FROM_CACHE in test_redirect-caching_failure.js,761932
+1604202,"Intermittent devtools/client/netmonitor/test/browser_net_websocket_stacks.js | The attached url is correct. - Got http://example.com/browser/devtools/client/netmonitor/test/js_websocket-worker-test.js, expected ws://localhost:8080/","765651,1437626"
+1635360,:screenshot --help does not work anymore,766661
+1645284,Fullpage screenshots do not respect chosen DPR value,766661
+1580480,IMAP fetch chunk size is always 65536 bytes,773782
+1638683,"Tabs opened with ""open with Firefox"" don't appear next to the opener tab",773942
+1640589,Open with Nightly option is not responding  once a pdf was opened before with a third party,773942
+1659008,Setting binary/octet-stream PDF files to open in Firefox causes a blank entry in application handlers,773942
+1798218,Non-print styles incorrectly applied when printing when transition is set,774398
+1800897,Embedded Google Calendar vanishes on printing,774398
+1814400,The text on the first page of www.recapafteruse.co.uk is not properly printed,774398
+1830163,iframe content NOT printing,774398
+1830307,Portrait printing edition.cnn.com creates blank pages pdf,774398
+1702462,remove some useless double tap to zoom code in CalculateRectToZoomTo,"775463,804985"
+1601682,Allow more than 16 samples with the Mesa driver,777028
+1603843,Viewing a CloudApp screen recording does not work in Firefox,777028
+1589164,HTML container scrolls to top when its size is smaller than a SVG and one element is focused using mouse or tab navigation,778654
+1621007,Text render broken in DX11 render mode,779598
+1698988,"Intermittently-disappearing elements, with transform-style: preserve-3d when animated",779598
+1789053,"Elements vanishing in a Codepen demo after transitions in Firefox, but not in Chrome",779598
+787822,crash in nsIFrame::GetFirstChild,779684
+1872000,Crash in [@ nsFrameIterator::nsFrameIterator],779684
+1872301,"Assertion failure: startFrame, at /builds/worker/checkouts/gecko/dom/base/nsFocusManager.cpp:3226",779684
+1616225,Apparent copy-paste error in table selection code,781409
+1944534,api.docs.cpanel.net - Text inside the code blocks is not formatted correctly,"783409,1505786"
+1860932,"Assertion failure: mCurrent != mListLink (running past end), at /builds/worker/checkouts/gecko/layout/generic/nsLineBox.h:655",784648
+1861216,heap-buffer-overflow in [@ nsLineLayout::BeginLineReflow],784648
+1861716,"Assertion failure: lineLayout->GetCurrentICoord() == 0 (border/padding of rtc should have been suppressed), at /layout/generic/nsRubyBaseContainerFrame.cpp:823",784648
+1562308,Reftest 'centering-1.xul' doesn't load font file,785821
+1691909,[gap.com][Login] Autocomplete dropdown is displayed although there is only one credential saved,786276
+1224848,Intermittent e10s browser_pdfjs_zoom.js | Test timed out,786674
+1595064,Displayed inconsistent zoom level between zoom level from pdf page and reader mode vs. browser zoom controls,786674
+1589873,Open Message in Search window does not work in SeaMonkey,787612
+1866453,Thunderbird could not decode raw ISO-2022-JP encoded headers,"790855,858337"
+1815617,Ctrl+Q warning dialog backdrop color is missing,791594
+1847859,Entering web authentication text and clicking Sign In flashes to previously-loaded content,791594
+1542581,Race condition in google_breakpad::CrashGenerationServer::AddClient leading to UAF write in broker (Sandbox escape / LPE),791775
+1703999,use-after-poison in [@ nsFloatManager::GetFlowArea],"793686,1663222,1680406"
+1802782,use after poison in nsFloatManager::GetFlowArea,793686
+1809764,Webpage causes tab to consume ever-growing amounts of memory and does not render,793686
+1831829,Print Preview freezing tab when loading a column layout based document,793686
+1867784,DoorDash site fails to load. Last working in version 104,793686
+1927270,Fuzz testcase from bug 1473612 loads indefinitely spending time around layout stuff (testcase loaded instantly prior to regression),793686
+1327432,"Doubleclicking closing bracket to add attribute often move element from under the mouse pointer, so click fails",796069
+1543711,Incorrect function call to getDisplayNameForFile should be getFileDisplayName,796994
+1593331,"Cannot open local file from shortcut, only white screen. If i reload it show normal",803143
+1641439,"Creating a new profile by name trailing a white space will fail, but directory was created",808263
+1663904,"Using Global Search bar logs error: TypeError: can't access property ""hasAttribute"", window.gBrowser.selectedBrowser is null",810815
+1690467,Date/time picker broken,810815
+1084327,mozilla print blank PDF files,811002
+1718945,Arrow keys are inverted when used on Permission panels,812687
+924915,Significant lag/unresponsive with high cpu changing selection when arrowing over mail folders with many messages because of AT-SPI2 [linux] and full tree traversal,814836
+1756587,fix a couple of innerwindow parameters to be uint64_t in imagelib,815471
+1543196,"using disabled=""true"" enables document.oncontextmenu behavior",816340
+1704683,ScopedClose has a double-close bug,818106
+1559403,Firefox may drop a bookmark backup even if it is not identical to the previous one,818584
+1459905,Left and right arrow navigation doesn't work if the SVG is rendered with browser native svg,821955
+1661509,Left and right arrow navigation still doesn't work on photo grid demo at codinginparadise.org,821955
+1659612,--enable-alsa fails -Werror=implicit-function-declaration on FreeBSD,822978
+1666108,GCC9 cc1plus: warning: ‘-Werror=’ argument ‘-Werror=implicit-function-declaration’ is not valid for C++,822978
+1679675,nsILocalFile::MoveTo() (and therefore IOUtils.move) fails when run in the root of a RamDisk mountpoint (was: Download -> Open with failed when using RamDisk as temp folder),827010
+1731049,Downloading files onto mapped network drives fails,827010
+1533405,"""PrivateBrowsingUtils is not defined"" in nonbrowser-mac.js",827976
+1523343,SVG: Null/any transform causes translation in X axis,828240
+1542767,The Dante's Inferno's page will flicker if interacting with elements from it,828240
+1881287,SVG Codepen demo (https://codepen.io/frontsideup/pen/VwLeyWJ) is blurry on Firefox,"828240,1681921"
+1756957,Incorrect AliasSet for MLoadTypedArrayElementHole,829896
+1747978,TestingFunctions.cpp:6939:7: error: indirection requires pointer operand ('std::tm' invalid),830304
+1840567,Intermittent layout/painting/crashtests/1425271-1.html | single tracking bug,831008
+1490982,"The green padlock disappears (or ""Not Secure"" is shown) after opening and closing a notification about a reported profile on Twitter",832834
+1491543,SSL lock / indicator spoof is possible,832834
+1493427,EV indicator of the previous page persists on error page of an inexistent about: page (about:cofnig / about:lol),832834
+1495321,Some http:// website pages (on sites using http/2) are shown as secure ones after visiting/opening https:// versions after landing patch from bug #832834,832834
+1535851,Incorrect SSL lock icon on page with mixed content,832834
+919946,xpcshell test dom/tests/unit/test_geolocation_timeout.js hangs on Android,832883
+1327037,Autocomplete suggestions of numeric selectors replace typed text,835896
+1636087,accordion not working only on firefox,838521
+1613234,tspan with x and y attributes is rendering a character glyph twice,839955
+1751025,Opacity CSS property does not affect <tspan> elements,839955
+1636665,"Status bar is displaying incorrect quota indication (infinity, full) for TeraByte quotas",841906
+1803108,Perma Wr TEST-UNEXPECTED-FAIL | /html/semantics/forms/the-input-element/range-tick-marks-02.html | Testing http://web-platform.test:8000/html/semantics/forms/the-input-element/range  when Gecko 109 merges to Beta on 2022-12-12,841942
+1626380,Update Libevent license in |about:license|,842887
+1342800,SVG invalid scaling inside IFrame due to ignored width/height,843480
+1610085,No longer possible to override link color,844349
+1575774,"`./mach build` fails with ""Config object not found by mach."" / ""ImportError: cannot import name encode""",844509
+1575959,Cannot clobber as required when objdir has config.status from before 844509,844509
+1666229,"1.21 - 7.8% tp5o responsiveness / tp5o_webext responsiveness (linux64-shippable, linux64-shippable-qr) regression on push 85cff42af3a321f95791fb66cde1aff70107693c (Wed September 16 2020)",844755
+1845194,Intermittent TV devtools/server/tests/browser/browser_accessibility_text_label_audit.js | single tracking bug,854796
+1845221,"Frequent The mochitest suite: mochitest-a11y ran with return status: FAILURE (use this bug if you see ""exit status 2"" for a mochitest-a11y log)",854796
+1905065,IA2_TEXT_OFFSET_CARET should return nothing for IA2_TEXT_BOUNDARY_CHAR when caret at end of line,855184
+1548822,AddressSanitizer: heap-use-after-free [@ HashStringKnownLength<const unsigned char *>] with READ of size 1,855185
+1765558,"94.51 - 32.69% pdfpaint / pdfpaint + 5 more (Linux, OSX, Windows) regression on Wed April 13 2022",857031
+1540368,Firefox 66 shows Legacy extensions as enabled,857456
+1713239,Intermittent [TV] dom/media/webrtc/tests/mochitests/test_peerConnection_basicAudioNATRelayWithStun300.html | Error executing test: SyntaxError: JSON.parse: unexpected character at line 1 column 1 of the JSON data,857668
+1713300,"Permafailing tier 2 dom/media/webrtc/tests/mochitests/test_peerConnection_gatherWithStun300.html | Gathering did not complete within 2000 ms with redirect rule: => iceServers: [{""urls"":[""turn:10.7.204.44:3479?transport=tcp""],""username"":""foo"",""credential""",857668
+1640901,Video playback stops when the tab is detached from window,858914
+1641685,Range outside of child elements in contenteditable,859088
+1760609,Arrow keys don't jump line when there is selected text,859088
+1611949,Scroll not working after transform and rotate an element with CSS - macOS Catalina,860493
+1691625,Improve MediaManager::mPendingGUMRequest logic,861716
+1912471,"Assertion failure: data == JS::SCTAG_TMO_ALLOC_DATA || data == JS::SCTAG_TMO_MAPPED_DATA, at js/src/vm/StructuredClone.cpp:3457",861925
+1567206,Protocol Handling: Don't allow Firefox to automatically open the Windows Store app upon clicking a Windows Store URL,866065
+1913147,Don't allow Firefox to automatically open the Windows Store app upon clicking a Windows Store URL,866065
+1916193,Stop exempting the Windows Store protocol handler from permissions checks in Firefox (was: Don't allow Firefox to automatically open the Windows Store app upon clicking a Windows Store URL),866065
+1551065,Quora freezes on the latest nightly (2019-05-11),866102
+1551182,"Page not load, 100% cpu (IsSelfEmpty, IsMarginZero, IsEmpty, FindLineClampTarget)",866102
+1555142,"Assertion failure: false (MOZ_ASSERT_UNREACHABLE: expected to find a line with HasLineClampEllipsis), at src/layout/generic/nsBlockFrame.cpp:1179",866102
+1858792,"Assertion failure: !mCloningForSVGUse, at /builds/worker/checkouts/gecko/dom/base/Document.cpp:13644",866411
+878406,"PDF.js,  character fails to render",871530
+880140,crash in nsDeviceContextSpecX::EndPage @ decode_data when printing,871530
+901288,pdf.js Character does not display,871530
+921409,PDF viewer in Firefox 24 is broken (displaying just garbage) - version 23 and below were ok,871530
+922948,PDF text gets scrambled,871530
+955851,"pdf.js, font rendering is jaggy when HWA off",871530
+1670358,Calling Compact on a nsTArray will lead to use-after-free error in JS_GC because of the reallocation,877762
+1914554,Regression on SP3-Charts-observable-plot around 21Aug2024,878346
+1919040,"162.8 - 42.85% perf_reftest_singletons svg-text-textLength-1.html / perf_reftest_singletons svg-text-textLength-1.html + 2 more (Linux, OSX, Windows) regression on Wed August 21 2024",878346
+1921662,"The SVG text along a path becomes misaligned in Firefox Developer Edition when the path has a non-1 scale transform, unlike in other browsers where it displays correctly.",878346
+1930125,textPath causes text to be translated incorrectly if the referenced path has a translation applied,878346
+1758968,HTML Canvas clipping region is broken if shadows are present,883004
+1268550,Sidebars are not properly displayed in New Private Window,885054
+1758877,Permanent smoosh gmake[4]: *** [/builds/worker/checkouts/gecko/config/makefiles/rust.mk:424: force-cargo-library-build] Error 101,885514
+1762769,"Assertion failure: graph().osrBlock(), at js/src/jit/WarpBuilder.cpp:298 or Assertion failure: osrEntryOffset_.isSome(), at jit/shared/CodeGenerator-shared.h:126 or Crash [@ js::jit::CodeGenerator::link]",885514
+1762770,"Crash [@ js::NativeObject::setFixedSlot] or Assertion failure: frame.isGeneratorFrame(), at vm/GeneratorObject.cpp:227",885514
+1767181,"Crash [@ js::PrimitiveToObject] or Assertion failure: !val.isMagic(), at vm/JSObject.cpp:2625",885514
+1768660,"Crash [@ js::jit::DoToBoolFallback] or Assertion failure: v.isObject(), at builtin/Boolean.cpp:172",885514
+1791968,"Assertion failure: !JS_IsExceptionPending(cx_), at js/src/vm/JSContext.cpp:1326",885514
+1642084,"Intermittent browser_undo_close_tabs.js | SessionStore should know how many tabs were just closed - Got 2, expected 3 | Uncaught exception - waiting for tab 2 to load",887515
+1642111,Intermittent browser/base/content/test/tabs/browser_undo_close_tabs.js | Uncaught exception - waiting for tab 2 to load - timed out after 50 tries.,887515
+1650635,Too deep menu level entry to 'Close other tabs' and 'Close all right/left of this tab',887515
+1652641,tab context menu when multiple tabs are selected has menu items with conflicting accelerator keys,887515
+1334981,"If focusmanager.testmode is true, RecentWindow.getMostRecentBrowserWindow() always returns the last opened window",887718
+1612725,download manager backend not initilaized if SeaMonkey is not started as normal browser (non private navigator) first,888915
+1622830,Download in progress Window never finishes,888915
+1640852,Window.getWorkspaceID blocks the main thread on Windows,890125
+1645473,Retrieving virtual desktop info during session store performs synchronous IPC on the parent process main thread,890125
+1661127,Taskbar menu item 'Close all windows' only closes one window (from firefox 77.0+),890125
+1672508,50ms of jank per window when accessing window workspace IDs,890125
+1580320,Possible use of uninitialized memory in PeerConnectionImpl::GetFingerprint,892148
+1819266,Table borders rendered incorrectly when table contains empty rows,895096
+1825384,"Table testcase paints with cells too large (with white space around cell background) when restoring the default zoom level, from >200% zoom level",895096
+1615502,crash near null in [@ mozilla::a11y::HTMLLIAccessible::HTMLLIAccessible],895323
+1703332,Crash in [@ nsNavHistoryResult::HandlePlacesEvent],897954
+1596916,AltGr + key which shouldn't cause any character causes inputting character which is inputted without AltGr,900750
+1685441,Event retargeting causes click event to target wrong element,"901117,1618532"
+1570881,"Perma (tier2) /builds/worker/workspace/build/tests/jit-test/jit-test/tests/debug/Script-startColumn.js:11:13 Error: Assertion failed: got 9, expected 11",901138
+1736508,Make TCPSocket work with ipv6 address again,902346
+1874317,Data race in RevocableStore.count_ when Runnables from task factories are run on a different thread,"903386,1343639"
+1349745,install dictionaries... option now missing from context menu,908570
+1624251,Crash in [@ objc_retain | -[NSProgress cancel]],909760
+1846688,use-after-free in ColorPickerShownCallback,910384
+1846689,use-after-free in FilePickerShownCallback,910384
+1723124,Promise reaction job is not called when it is bound with Function.prototype.bind from iframe with discarded browsing context,911216
+1468220,Session cookie is not removed after closing the tab and exiting the browser,912717
+1540154,"The email is not being saved by the Password Manager on Netflix login, only the password",917325
+1651271,Intermittent comm/mailnews/imap/test/unit/test_converterImap.js | xpcshell return code: 0,921157
+1135548,Performance regression of MSIE chalkboard benchmark,923193
+1818674,fix a multiply in gfx/2d/DataSurfaceHelpers.cpp that can overflow signed int32,924102
+1620508,"After bug 925209, sender headings in Facebook Messenger are exposed as invisible",925209
+1409047,My old Maze test is now an order of magnitude slower than Chrome and Edge,929484
+1365348,mochitest --jsdebugger does not  imply --no-autorun contrary to the --help text,929535
+1677353,Absolutely positioned with width auto parent div won't follow child image width,930218
+1380031,Math.E not equal to Math.exp(1),933257
+965673,Text cursor disappears in body after pressing certain toolbar buttons,933483
+1685621,Fix serialization of complex :not to have commas in selector lists,933562
+1887825,Intermittent /IndexedDB/get-databases.any.worker.html | single tracking bug,934640
+1893635,"Assertion failure: aGlobal, at /builds/worker/checkouts/gecko/dom/promise/Promise.cpp:107",934640
+944807,fix memory reporting in nsMsgDatabase.cpp after removal of NS_RegisterMemoryReporter in bug 936964,936964
+1684190,"""Most browsers no longer trust certificates issued by GeoTrust, RapidSSL, Symantec, Thawte, and VeriSign"" message has non-replaced variable {$hostname}",941354
+1684415,about:neterror/certerror fallback is broken (it breaks if the error code does not match an existing element),941354
+1729571,Intermittent unknown test url | uncaught exception - NS_ERROR_ILLEGAL_VALUE: Component returned failure code: 0x80070057 (NS_ERROR_ILLEGAL_VALUE) [nsIObserverService.removeObserver] at unregister@chrome://messenger/content/msgHdrView.js:394:20,942615
+1729577,Reset app.use_without_mail_account after an email account is created,942615
+1386418,Removing an element in a callback for said element crashes the tab,945584
+1915255,"Using Shift+Delete when focus is on the message body pane results in the ""Confirm Deletion"" message twice",958088
+1642086,Intermittent SUMMARY: ThreadSanitizer: data race /builds/worker/checkouts/gecko/parser/html/nsHtml5StreamParserPtr.h:42:13 in assign_assuming_AddRef,960519
+1896960,"When setting custom color in edit, they disappear after closing pane",960984
+1857395,Firefox is stripping some in-line color codes,964529
+1784591,Perma Windows shippable <random test> | application crashed [None] | After application terminated with exit code 1 | After application timed out after 370 seconds with no output,965392
+1784625,Intermittent testing/marionette/harness/marionette_harness/tests/unit/<test-name> | OSError: Process has been unexpectedly closed (Exit code: 572) Process killed because the connection to Marionette server is lost. Connection timed out after 360.0s,965392
+1784870,Intermittent Windows Shippable TEST-UNEXPECTED-TIMEOUT | /webdriver/tests/<test-name> | expected OK (Waiting for initial application window),965392
+1786242,Intermittent loss of connectivity and UI failures on current nightly.,965392
+1791678,Intermittent /hr-time/cross-origin-isolated-timing-attack.https.html | single tracking bug,965392
+1793417,8.46 - 7.54% glterrain / glterrain (Windows) regression on Tue September 20 2022,965392
+1796080,Timer initialization in BackgroundHangThread::NotifyActivity adds very high overhead to task handling,965392
+1817498,Deadlock from BackgroundHangThread::NotifyActivity() creating a timer while holding mGraphMutex,965392
+1461642,"Intermittent connect-src-beacon-blocked.sub.html | Expecting logs: [""Pass"", ""violated-directive=connect-src""] - assert_unreached: Logging timeout, expected logs Pass,violated-directive=connect-src not sent. Reached unreachable code",965637
+1553440,Perma [Tier 2] TEST-UNEXPECTED-NOTRUN | /content-security-policy/object-src/object-src-url-redirect-blocked.sub.html | Should block the object and fire a spv - expected PASS,965637
+1553652,"Permanent Tier 2 connect-src/connect-src-beacon-redirect-to-blocked.sub.html | Expecting logs: [""violated-directive=connect-src""] - assert_unreached: Logging timeout, expected logs violated-directive=connect-src not sent. Reached unreachable code",965637
+1553742,Crash in [@ mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | mozilla::ipc::IPDLParamTraits<T>::Write],965637
+1555043,Sort out interaction of CSP and javascript: URLs,965637
+1555050,CSP-valued members of loadinfo are really confusing; various uses of GetCsp() are likely wrong,965637
+1582115,Unable to display PDF due CSP,965637
+1587976,CSP script-src 'none'; allows <object> to execute javascript code in firefox (but firefox developer edition works fines),965637
+1597645,Content-Security-Policy inline script execution is bypassed on XSL pages,965637
+1639628,PDF file not rendered correctly in Firefox,965861
+1713619,PDF thumbnails not working when privacy.resistFingerprinting enabled,967895
+1779042,Perma [tier2] editor/libeditor/tests/test_paste_no_formatting.html | single tracking bug,968104
+1625698,Text rotation not working properly,968555
+1623927,network.proxy.backup.socks breaks proxy dialog,969282
+1625773,Preferences UI manual socks proxy port cannot be modified,969282
+1801165,"Chrome and Firefox place text differently in a given test-case reduced from an nsa.gov webcompat issue (with negative margin-bottom, overflow:hidden, and implicit baseline alignment)",969874
+1659276,"Window.find() with scroll(0,0) doesn't jump to top of page?",970802
+1528957,The sticky position works wrongly for table-row elements,975644
+1712202,about:webrtc accumulates large amount of orphan-nodes,976669
+836325,seam between images when using a scale transform,976877
+1645013,"Fix typo, wrong localization entity referenced.",977244
+1543077,Japanese auto-detect no longer work on some generic (i.e. language neutral) TLDs,977540
+1585935,Japanese UTF-8 site auto-detect fails,977540
+1789437,"an event not displayed, but listed when searching for it (""Same occurrence found twice, protecting you from death by recursion"")",978570
+1789999,"Thunderbird pauses for 10-15 seconds at a time, even for minutes.  Stuck in icaltimezone_compare_change_fn of icaltime_compare of ical.js",978570
+1790339,caldav event corruption after Thunderbird upgrade from 91 to 102,978570
+1374945,stack exhaustion loading pdf,979909
+1609394,"Buttons exposed as children of <input type=""number""> break text reporting for screen readers",981248
+1609589,"New <input type=""number""> implementation does not report changes with JAWS screen reader",981248
+1611118,Fix invalid selectors in forms.css,981248
+1611661,Number inputs in Google calendar don't work right with arrow keys,981248
+1611701,Dropping text into an <input type=number> broke with bug 981248.,981248
+1616620,input type='number' with maxlength attribute is enforced on firefox and not chrome and safari,981248
+1617342,tabbing inputs of type number require 2 tab presses with certain input heights/max-height,981248
+1621927,Comma seperated decimals (Czech lenguage) in number inputs stopped working in firefox 74,981248
+1621981,"<input type=number> with step 0.1: decimal separator local de is ""."" instead of "",""",981248
+1622221,Wrong decimal separator in number-fields,981248
+1842027,"Firefox is 45x slower than Chrome at setAttribute on <input type=""number"">",981248
+1273012,Bookmarks popup would not scroll with mouse wheel when mouse pointer on a folder,"982121,1707430"
+1719071,[Win] Can't scroll when right-click menu is open,982121
+1853730,NVDA reads the page title when navigating through the sub-menus of hamburger menu,984589
+1659113,Bad call to __init__ of Build object in mach test-info after bug 985141,985141
+1659154,Bad call to __init__ of Build object in mach ide after bug 985141,985141
+1659411,Pema perftest TypeError: __init__() missing 1 required positional argument: 'virtualenv_name',985141
+1605609,The translator info bar doesn't adjust to dark mode,988481
+1636248,Incorrect caret placement with contenteditable and pseudo elements,989012
+1741201,Out-of-bounds write due to integer overflow [@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork],994190
+1581530,File with missing source map led to blank debugger on restart,997119
+1533989,"When ""dom.event.clipboardevents.enabled"" is false, should we stop setting InputEvent.data and InputEvent.dataTransfer when InputEvent.inputType is ""insertFromPaste*""?",998941
+1869851,Perma TEST-UNEXPECTED-TIMEOUT | tools/profiler/tests/xpcshell/test_pause.js | Test timed out,1000540
+1614182,Image corrupt or truncated at random on certain site,1003450
+1785911,CSS-scaling an image with transparency sometimes breaks that transparency,1007702
+1708372,Close Tabs to the Left position conflicts with user muscle memory,1009728
+1824044,Intermittent devtools/client/debugger/test/mochitest/browser_dbg-pretty-print-inline-scripts.js | single tracking bug,1010150
+1587014,PDF Viewer page number moves when a scroll is performed over it,1012752
+1517022,Intermittent dom/media/test/test_mediarecorder_record_gum_video_timeslice_mixed.html | Test timed out.,1014393
+1570958,Perma toolchain build on   /builds/worker/workspace/build/src/dom/media/webm/WebMWriter.cpp  when Gecko 70 merges to Beta on 2019-08-26,1014393
+1838897,Template documents shouldn't probably have script global objects,1017896
+1916137,`scroll-behavior: smooth` should not be able to trigger an overscroll animation,1022825
+1547266,Intermittent AddressSanitizer: heap-use-after-free /builds/worker/workspace/build/src/obj-firefox/dist/include/mozilla/TypedEnumBits.h:79:1 in operator&<mozilla::detail::StringDataFlags>,1024730
+1546612,caretPositionFromPoint does not take iframe transformation into account,1025815
+1132860,Error printing when trying to print a pdf file after exiting 'Presentation Mode',1025878
+1157288,"Printing PDF Causes ""Unexpected Error"" (Affected By Zoom Level)",1025878
+1609195,outline-style:auto ignores -moz-outline-radius,1031664
+1624436,"Firefox 74.0: input[type=""radio""] receives a glitchy focus ring on mouse click",1031664
+1064293,Can't click photos in thislife.com library,1031948
+1633291,Clicking on the edge of the overflow/menu button when its menu is opened reopens it immediately,1033395
+1551671,Bookmarks Toolbar disappeared after update to 66.0.5. (x64) and cannot be restored with use of any recomended solutions.,1034036
+1615623,Problems with flow around initial large character on newyorker article,1035091
+1574515,Perma gtest | timed out after 300 seconds without output,1035892
+1896302,"Perma OSX 10.15 debug TEST-UNEXPECTED-FAIL | dom/tests/mochitest/chrome/test_focus.xhtml | assertion count 1 | in log ASSERTION: Flat tree and active / hover chain got out of sync: 'nsContentUtils::ContentIsFlattenedTreeDescendantOf(leaf, aContentRemoved)",1036966
+1621458,Global getUserMedia sharing indicator breaks tab dragging in the tab bar,1037408
+1638857,"Assertion failure: mMainMaxSize >= aNewMinSize (Should only use this function for resolving min-size:auto, and main max-size should be an upper-bound for resolved val), at /builds/worker/checkouts/gecko/layout/generic/nsFlexContainerFrame.cpp:654",1038294
+1680858,Wrong parts of a PDF document are highlighted when searching,1042307
+1069776,Crash on shutdown when installing extension via -silent,1042876
+1547776,Canvas drawImage does not correctly scale images using an SVG source,1043560
+1600275,"""Share this story"" on BBC with integrated e-mail has strange behavior",1043690
+1726364,Scroll events stop working after synchronous XHR request while scrolling an iframe,1044074
+1835587,Intermittent Element state change during style refresh (140737488355328) [@ mozilla::RestyleManager::ElementStateChanged] | toolkit/components/satchel/test/test_form_autocomplete_with_list.html,1044407
+1721345,"""Save Page As"" usually fails first time, always succeeds when I ""Retry""",1046430
+1596215,"A tabbox (for instance, Certificate Manager) should stop ""tab navigation"" keyboard shortcuts from being consumed by the tabbrowser",1049001
+1191862,[GTK][Mac] Firefox does not respect native key bindings which are conflict with reserved shortcut keys,"1052569,1154183"
+1546881,"Assertion failure: !mArena || arena == mArena, at memory/build/mozjemalloc.cpp:3960",1052579
+1547052,Crash in [@ BaseAllocator::realloc],1052579
+1626699,It should be easier to set/return !Maybe than `Nothing()`,1052940
+1747194,Unknown content type dialog totally breaks when downloading files from Google Material Icons (due to sandboxed blob URLs),1053327
+1365541,Fix FX_SESSION_RESTORE_RESTORE_WINDOW_MS regression,1054740
+1944953,Update mozilla.it redirect,1056359
+1346350,Firefox UI font has the wrong size in Fedora 24,1056479
+1679572,Image stretches across entire page on glassdoor.com,1056959
+1711823,text wrapping in flex container,1056959
+1557153,UITour default permissions overridden by UNKNOWN_ACTION [Skyline],"1058433,1058442"
+1601378,Firefox will not prompt to save credentials for a subdomain when the base domain is in the exceptions list.,1058438
+1586057,"MediaManager walks descendant docshells of a docshell that it got from a non-current inner, tearing down mediacapture for unrelated documents","1062876,1364038"
+1783149,"Assertion failure: IsResumableMIRType(op->type()) (Resume point cannot encode its operands), at jit/IonAnalysis.cpp:3383",1062893
+1783507,Assertion failure: IsResumableMIRType(op->type()),1062893
+1911534,Unstyled spans are not layout-neutral in justified text / justification algorithm is span-dependent,1063857
+1642883,build failure with conflicting swap64 symbol since #1065894,1065894
+1848715,"Editing and copying URL loses ""https://"" URL scheme when browser.urlbar.trimHttps = true","1067293,1853418"
+1863110,"If trimHttps is enabled, domain highlighting is not applied when loading suggested bookmark",1067293
+1868605,Adding/changing the hash causes a page load when browser.urlbar.trimHttps = true,"1067293,1853418"
+1708179,"Assertion failure: false (This should not happen, setting the value should always work), at /builds/worker/workspace/obj-build/dist/include/mozilla/dom/AudioParam.h:69",1069825
+1951895,discard element doesn't work in html documents,1069931
+1524237,Crash in mozilla::ipc::ProcessLink::SendMessage | IPC_Message_Name=PContent::Msg_SetClipboard on attempt to copy much text into the clipboard,1071562
+1792241,ThreadSanitizer: data race [@ IncrementGeneration] vs. [@ gfxUserFontSet::IncrementGeneration],1072107
+1819503,ThreadSanitizer: lock-order-inversion (potential deadlock) [@ mozilla::RecursiveMutex::LockInternal],1072107
+1883868,Crash in [@ nsObserverService::EnsureValidCall | nsObserverService::NotifyObservers | mozilla::net::nsHttpHandler::NotifyObservers] on Google Maps,1072107
+1622384,assert_equals: 42 transceivers on side B expected 42 but got 41,1072388
+1630029,Transceiver disappears if SRD done twice,1072388
+1911607,Intermittent toolkit/components/extensions/test/mochitest/test_ext_web_accessible_incognito.html | single tracking bug,1076583
+1912115,img with alt uses alt text client rect instead of width/height attributes in first event loop tick after insertion (131 regression),1076583
+1912867,"10.1 - 2.08% reddit-billgates-post-1.comments LastVisualChange / speedometer3 NewsSite-Nuxt/NavigateToUS/total + 8 more (Linux, OSX, Windows) regression on Mon August 5 2024",1076583
+1922416,my.peachjar.com school-flyer website fails to load (due to hidden lazy-loaded image),1076583
+1711593,"Textfield padding is partly outside of the textfield, with native-themed widgets in Firefox 88",1077365
+1125077,Images distorted or cut off when using Javascript animations,1079627
+1573135,fontconfig font replacement with size condition doesn't work anymore,"1079662,1489001"
+1632582,Nightly Regression: Reader Mode URLs are changing when selected,1080682
+1635033,"Visited local non-HTTPS addresses (e.g., web-platform.test:8000) end up as searches when manipulated",1080682
+1693833,URL fixup incorrectly changes `ent` TLD to `net`,1080682
+1885050,Middle-clicking a Jira epic's child issue opens two new tabs instead of one,1081542
+1175145,Bad text rendering in PDF,1083245
+1564298,warning: conflicting parameter types in implementation of 'application:continueUserActivity:restorationHandler:' with OS X 10.14 SDK,1085391
+1926435,"Pressing ""Escape"" to revert to loaded address in address bar doesn't work",1086524
+1539695,FF 66 Linux: HTML based context menus immediately disappear after right click,1089326
+1544065,reader mode's voice select widget doesn't open if clicking the name of the selected voice,1089326
+1552814,"When drag-dropping notes in Google Keep Notes, they open instead of just dropping",1089326
+1556976,Zooming with ctrl-wheel_scroll works on text but not other areas inside a button,1089326
+1641350,Dragging middle mouse button over history items opens an invalid tab,1089326
+1736515,Click moved out of bounds of an element still triggers click event,1089326
+1912812,setPointerCapture() causes an onclick event for the wrong element,"1089326,1792110"
+1464675,smart bookmark(places query url) is not updated when item is deleted,1089691
+1553214,Console from about:debugging not working with Firefox for Android,1093953
+1560292,"Advanced options, Config Editor broken on trunk",1096006
+1560344,Accounts should be listed on the left,1096006
+1560402,A specific pane is not selected in the Account manager in a tab,1096006
+1543461,Add the missing newline on our refcounted-class static assert in bindings,1096328
+1542989,Page is blank due to early HTTP negotiation,1097320
+1628770,Empty div in contenteditable=true blocks are visible,1098151
+992384,[SVG] Missing horizontal scroll bar when RTL direction is set on top level element,1102175
+1593752,Scrolling down is buggy using Nightly channel,1102175
+1630819,"Some JS-created dropdowns disappear, only with body { display: table }, since bug 1102175",1102175
+1610432,Perma [TCw] TEST-UNEXPECTED-TIMEOUT | /2dcontext/drawing-text-to-the-canvas/2d.text.measure.actualBoundingBox.html | Executor hit external timeout (this may indicate a hang),1102584
+1728187,Form controls indistinguishable from background with HCM enabled,1105364
+1740924,Transparent borders used to indicate widget shape in High Contrast mode no longer visible,1105364
+1574123,Crash in [@ nsContainerFrame::GetSpokenMarkerText],1105868
+1871527,"Permanent startup crash of Firefox 121 when using ""--screenshot"" argument [@ nsAutoRefCnt::operator-- | nsCocoaWindow::SetMenuBar(RefPtr<nsMenuBarX>&&)]",1107433
+1685470,Intermittent devtools/client/aboutdebugging/test/browser/browser_aboutdebugging_addons_debug_popup.js | Test timed out -,1109362
+1685985,Toolbox error count hides the Toolbox Toolbar Chevron,1109362
+1686036,DAMP Perf regression in panelsInBackground.reload (100%) (+ others),"1109362,1685985"
+1581995,Intermittent TV devtools/client/debugger/test/mochitest/browser_dbg-log-events.js | Uncaught exception - waitFor - timed out after 500 tries.,1110276
+1581999,Perma [tier2] devtools/client/webreplay/mochitest/browser_dbg_rr_logpoint-03.js | Test timed out -,1110276
+1218162,Caret no longer displays after drag & drop text to textbox (locationbar/searchbar),1111947
+1859532,Cache interface is undefined in content scripts,1112134
+1937272,"""Enable service workers of HTTP"" setting does not affect exposure of DOM Cache API",1112134
+1928191,"Assertion failure: CloneScope() == StructuredCloneHolder::StructuredCloneScope::DifferentProcess, at /dom/serviceworkers/ServiceWorkerCloneData.cpp:44",1113522
+1767365,crash in [@ mozilla::gfx::Premultiply_SSE2],1114333
+1554530,Text selection is failing on fx for Android,1116478
+1657333,"windows bustage: mozbuild.preprocessor.Error: ('$SRCDIR/comm/third_party/rnp/module.ver', 3, 'UNDEFINED_VAR', 'MOZ_RNP_DIST_INFO')",1116553
+1657341,FileNotFoundError: [Errno 2] No such file or directory: '\\',1116553
+1657420,FileNotFoundError on config/version_win.py,1116553
+1559683,Addon install cancellation is silently ignored when invoked while AddonInstall's loadManifest is being run,1116629
+1625583,Intermittent devtools/client/debugger/test/mochitest/browser_dbg-blackbox-all.js | Test timed out -,1118152
+1591863,The Tahoma arabic font will fallback to Segoe UI when the platform font list is reinitialized,1119619
+1827689,Perma [Tier 2] Hit MOZ_CRASH(attempt to subtract with overflow) at /builds/worker/checkouts/gecko/servo/components/to_shmem/lib.rs:509,1121792
+1848491,CSS :lang selectors never match against languages with private use tags,1121792
+1857742,:lang() fails to understand some valid BCP 47 language tags since FF 114,1121792
+1924631,Perma Win MinGW /builds/worker/checkouts/gecko/netwerk/system/win32/nsNotifyAddrListener.cpp:513:16: error: use of undeclared identifier 'IN6_IS_ADDR_LINKLOCAL',1122907
+1924682,Solaris - Undefined symbol _ZN21nsINetworkLinkService22HasNonLocalIPv6AddressEv,1122907
+1828771,Cleanup after installing msvs from bootstrap fails - OSError: [WinError 145] The directory is not empty,1123821
+1828850,"dist/include\mozilla/Vector.h(543,33): error: no matching constructor for initialization of 'js::TempAllocPolicy'",1123821
+1828877,Windows SDK fails to bootstrap with exit code 1603,1123821
+1832693,ERROR: WINSYSROOT and --with-visual-studio-version cannot be used together,1123821
+1680683,background-image fails to render,1124084
+1608746,Fission crash in [@ NS_GetSanitizedURIStringFromURI],1124122
+1866984,List presentation height of HTMLSelectElement is wrong calculated in case options have differnt font-sizes,1128156
+1593971,"Assertion failure: input->type() == MIRType::Double, at js/src/jit/Lowering.cpp:2893",1129202
+1584411,Intermittent TV dom/html/test/test_fullscreen-api.html | [async] Failed to enter fullscreen,1129227
+1609180,Fullscreen when called from parent iframe not working,1129227
+1631251,Website can re-enter fullscreen on ESC key and trap user in fullscreen,1129227
+1691887,The google slides fullscreen is not correctly launched by keyboard,1129227
+1790576,Cannot switch to presentation mode in using the keyboard because of transient activation,1129227
+1758354,70.95 - 61.23% glterrain / glterrain + 1 more (Linux) regression on Tue March 1 2022,1129492
+1803754,"Kubuntu 14.04 with self-built libraries: Log/console spam ""failed to open /dev/dri/renderD1xx: Permission denied""",1129492
+1566465,Crash [@ get] through [@ mozilla::net::Http2Session::RecvAltSvc],1130874
+1700905,Intermittent /media-source/mediasource-config-change-mp4-a-bitrate.html | Tests mp4 audio-only bitrate changes. - assert_unreached: Unexpected event 'error' Reached unreachable code,1130973
+1941852,"Assertion failure: sInServoTraversal || NS_IsMainThread(), at /builds/worker/workspace/obj-build/dist/include/mozilla/ServoUtils.h:33",1131324
+1942924,[@ get] | [@ mozilla::dom::WorkerPrivate::DispatchToMainThread],1131324
+1789244,filterlog.html cannot be found,1133009
+1951744,Error handling race with video.src,1133483
+1953680,"Align with other browsers' asynchronous ""error"" events with synchronous state changes, on HTMLMediaElement",1133483
+1577630,no help -> release notes menu entry,1134760
+1749570,login is not automatically filled on fortuneo.fr website,1134852
+1527027,"""warn before closing tabs"" not honored for ""close tabs to right"" action",1135303
+1554668,browser.tabs.warnOnClose = true doesn't warn about closing multiple tabs,1135303
+1575592,"""Confirm before closing multiple tabs"" does not confirm when selecting all tabs in a window, then closing them - and closing the window as a result",1135303
+1557256,accel + Mouse scroll still uses full page zoom (instead of font size changes) in Reader mode,1135593
+1756551,"[profiler markers] ""Image Load"" markers for data URLs seem to have incorrect innerWindowID values","1139225,1580820"
+1149278,[EME] Crash in demuxer at end of EME playback,1139271
+1485555,"""Remove from History"" results in data loss on ""failed"" Save As (Ctrl+S)",1139913
+1501277,downloaded file gets deleted if name is same,1139913
+1873016,ContentEditable div scrolls when pressing Home instead of moving the selection,1140625
+1569107,box-decoration-break: clone affects bidi continuations,1141931
+1623362,30.21 - 39.8% build times (windows2012-64) regression on push 4db022e14a60bf56c20c28913ea0b4b0810ecdde (Tue March 17 2020),1143478
+1624544,CSS filter causes sticky element to move during scroll,1143856
+1941024,"fixed-position content is incorrectly clipped, when placed in a sticky-position container with `overflow` set on ancestor",1143856
+1735408,RetryEnableVsync 100ms timers fire continuously while screens are off (session locked),1144638
+1545400,DevTools blocks all IndexedDB/Dexie transactions,1145201
+1650951,Regression: Credit card logos no longer displayed,1145314
+1650976,Dialog icons and Folder/File icons are lost,1145314
+1665175,Theme icons not displayed in multistage welcome,1145314
+1755457,"Permanent build bustage mozbuild.preprocessor.Error: ('$SRCDIR/modules/libpref/init/StaticPrefList.yaml', 12689, 'UNDEFINED_VAR', 'EARLY_BETA_OR_EARLIER') when Gecko 98 merges to Beta on 2022-03-08",1147847
+1823418,Scrollbars show through to GMail Context menus,"1147847,1757647"
+1850075,"With software WR, overlay scrollbar with 'scrollbar-width:thin"" sometimes has different-color top half vs. bottom-half (darker vs. lighter, or graphical corruption with randomly differing pixels)",1147847
+1399574,[e10s] Page become blank when drag and drop a zip file on the page,"1147911,1321430"
+1722880,Find in Page broken after opening a PDF,"1147911,1614773"
+1574046,"A div containing floats and clear, fragmented into multiple columns, has unconstrained block-size",1148104
+1669588,Scrolling to input in desktop viewport is broken in some cases,1149300
+1704204,Some pictures not appearing at correct size at WordPress,1149357
+1850732,Importing .ics file (locally or remotely by CalDAV) ultimately freezes Thunderbird (Lightning),1149470
+1538460,Tab detached unexpectedly after click on Master Password Dialog  button,1149500
+1539091,"""Master Password Dialog"" interrupts while reordering tabs. The drag operation is interrupted unintentionally",1149500
+1844380,Overlapping panels occur when opening the 'Location' field panel through both clicking and using the 'Down Arrow' key.,1149745
+1895956,Unable to select `Use custom settings for history` with keyboard,1149745
+1465814,"When switching between softwares with a file browser opened, Nightly's icon is broken",1151753
+1754940,Content process alternate winstation should depend on non-native theming,1151941
+1570991,Crash in arm_aes_encrypt_cbc_128 on Android 8.0 Pixel2 pgo,"1152625,1564499"
+1661810,Crash @ arm_aes_encrypt_ecb_128 when building with clang 11,1152625
+1421435,"""Refcounted variable 'this' of type cannot be captured by a lambda"" is overly strict",1153304
+1212409,[OMTC] Text in location bar causes black square appear in background after resizing the window if lightweight theme (lwtheme) is in use,1153609
+1645607,Toggling reader mode on and off whilst viewing a plain text file changes the font to proportional,1154295
+1671837,Too many option tags break Firefox,1154677
+1767344,"Intermittent Assertion failure: !mRawPtr, at /builds/worker/workspace/obj-build/dist/include/mozilla/AlreadyAddRefed.h:133",1155059
+1872327,Don't leak runnables on shutdown in nsThreadPool,1155059
+1613380,"Assertion failure: mNumAutoMarginsInMainAxis == 0 (miscounted the number of auto margins), at /builds/worker/workspace/build/src/layout/generic/nsFlexContainerFrame.cpp:2242",1155772
+1903622,Intermittent TV chrome://mochitests/content/chrome/dom/tests/mochitest/localstorage/test_localStorageBasePrivateBrowsing_perwindowpb.html | single tracking bug,1156725
+1763279,SessionStore keeps copying all data into a huge array,1157220
+1887960,'Preview' for entered comment shown as empty/not rendered,1157227
+1887999,Approval request dropdowns sometimes not visible with modal Details dialog,1157227
+1888462,Since bug 1157227 landed Profile link is missing in the user drop down and also drop down is broken for cc list members,1157227
+1888481,checkbox for NI is no longer automatically checked when picking myself or any other choice,1157227
+1888524,"javascript error when creating and viewing some bugs: can't access property ""querySelector"", $overlay is null",1157227
+1888550,"Ctrl+click on attachments no longer opens in new tab, with new attachment UI",1157227
+1888810,Hide editing option of user profiles for users without corresponding authorization,1157227
+1726177,TYPE_REPEATING_PRECISE_CAN_SKIP timers are actually TYPE_REPEATING_PRECISE timers,1157323
+1674408,updater fails to build on OpenBSD (no stat64 struct),1157850
+1546139,Bottom fixed margin layers don't stick to bottom with dynamic toolbar in fennec,1158392
+1760805,Thunderbird UI unusable after timezone detection failed on systems that use short timezone names - missing mail folder tree and message list at startup,1158733
+1547305,"Assertion failure: mGridItems.Length() == len + 1 (can't find GridItemInfo), at /builds/worker/workspace/build/src/layout/generic/nsGridContainerFrame.cpp:1817",1159042
+1593233,[Win] The Search bar dropdown doesn’t properly adjust its dimension when entering the fullscreen,1160014
+1781732,CTRL + T from a fullscreen YouTube video does not focus the search bar,1160014
+1483680,image/apng in content-type response header causes HTML content to be incorrectly displayed as APNG Image,1160200
+1874033,Inline-Box Direction of Inline `div` does not match that of `span` with `direction: rtl`,1160847
+1550771,Deadlock in SharedMemoryBasic_mach → AV1 playback doesn't work in Firefox Nightly on macOS 10.14.4,1161166
+1651419,"nsDOMWindowUtils::CompareCanvases() checks img1, img2 for NULL after dereferencing them",1162357
+1617548,Width of inline-block behaves strangely when inside flex container and containing <svg>,1162418
+1785051,<dialog> element containing SVG expands in size when setting textContent within,1162418
+1686352,Fix JS errors when interacting with Folder Mode Headers,1163555
+1686562,Wrong text color for Mode Headers when using a Light theme with dark toolbar,1163555
+1689553,Compact mode folder view fails in Thunderbird 86,1163555
+1690630,Missing Folder Pane mode dropdown toolbar after upgrading to 86,1163555
+1691395,Thunderbird 86 beta 1 fails to load,1163555
+1692764,Right clicking on a folder mode header makes the tree unresponsive,1163555
+1696965,"When creating (renaming) an IMAP folder, Thunderbird shows it duplicated x3 time in the view",1163555
+1716962,prevent conflicts between accesskeys for Folder Pane Toolbar context menu and toolbar menu and keyboard shortcuts,1163555
+1734192,Sub-Folders with New Email Not Highlighted Until Clicked,1163555
+1769221,"The unread folder view is not updated when a new message is received -> you have to change to dfifferent view, and put unread view back to see the new folders with unread mails appear",1163555
+1753316,"Intermittent Assertion failure: !sHasShutdown, at /builds/worker/checkouts/gecko/dom/media/MediaManager.cpp:3106","1164463,1753131"
+1537924,ZDI-CAN-8368 IonMonkey MArraySlice has incorrect alias information,1165052
+1676410,Fix a regression caused by a change done in bug 1165214,1165214
+1687960,Intermittent toolkit/components/reader/test/browser_localfile_readerMode.js | Reader mode button is present on about:reader -,1166829
+1514421,"Intermittent GECKO(1075) | Assertion failure: WeakMapBase::checkMarkingForZone(zone), at /builds/worker/workspace/build/src/js/src/gc/GC.cpp:5250",1167452
+1556193,Crash in [@ js::GCMarker::severWeakDelegate],1167452
+1556209,"Intermittent browser/components/extensions/test/browser/test-oop-extensions/browser_ext_sidebarAction.js | application terminated with exit code 1 | browser_ext_sidebarAction.js | application crashed [@ js::GCMarker::severWeakDelegate(JSObject *,JSObject",1167452
+1556321,"Assertion failure: state == MarkingState::WeakMarking || state == MarkingState::IterativeMarking, at js/src/gc/Marking.cpp:2623",1167452
+1556329,"Assertion failure: CurrentThreadCanAccessZone(zone), at js/src/gc/Cell.h:354 with WeakMap and GC",1167452
+1556430,Intermittent SUMMARY: AddressSanitizer: heap-use-after-free dist/include/mozilla/Vector.h:501:12 in end,1167452
+1556706,"0.49 - 0.79% Base Content JS (linux64-shippable, linux64-shippable-qr, macosx1010-64-shippable, windows10-64-shippable, windows10-64-shippable-qr, windows7-32-shippable) regression on push d5c768b50d69599582f6bff5376fa5acc300fa3e (Fri May 31 2019)",1167452
+1556933,ASAN: heap-use-after-free at Vector.h:501:12 in end,1167452
+1557283,Crash in [@ js::UncheckedUnwrapWithoutExpose],1167452
+1557701,"2.16 - 6.69% tp5o responsiveness / tp5o_webext responsiveness (linux64-shippable, linux64-shippable-qr) regression on push 72fc109fe0f203a360003b1f4f7a775ab161cfe4 (Sat Jun 1 2019)",1167452
+1572065,"Assertion failure: !isMarkStackEmpty(), at js/src/gc/Marking.cpp:1551",1167452
+1818324,Intermittent /webdriver/tests/perform_actions/wheel.py | test_wheel_scroll_iframe - assert 0 == 1,1168182
+1823660,"Perma gfx/layers/apz/test/mochitest/test_wheel_scroll.html | We should have scrolled to the bottom of the scrollframe - got 190, expected 1485 when Gecko 113 merges to Beta on 2023-04-10",1168182
+1830194,"Scroll snapping doesn't work (""bounces back"") when flicking with momentum, breaks YouTube Shorts",1168182
+1830758,"Scroll snapping doesn't work (""bounces back"") when flicking with momentum, breaks YouTube Shorts",1168182
+1851378,macOS Back Swipe Behaviour Broken By Certain Extensions,1168182
+1918328,www.google.com - Left/Right swipe gestures do not work correctly when used right after swiping up/down,1168182
+1552606,DevTools rules-view arbitrarily expands my hand-typed `font:` rules to say `font-size:` instead - it unexpectedly interprets ':' as a signal to accept the autocomplete suggestion,1168246
+1597038,Crash in [@ mozilla::dom::indexedDB::`anonymous namespace'::Cursor::SendResponseInternal],1168606
+1597191,Avoid errors in processing preloaded cursor entries to cause an overall error,1168606
+1601707,segfault in DoDatabaseWork (this makes Firefox 71 to crash at startup),1168606
+1773870,IPC message size is too large crash from PBackgroundIDBCursorParent::SendResponse() due to Port Authority WebExtension,1168606
+1673680,Fix comment on URL(Search)Params,1169044
+1801061,"No previous Windows and Tabs displayed under ""Restore only the ones you want"" on Success page",1169529
+1826234,Crash in [@ mozilla::Preferences::InitializeUserPrefs] after creating /etc/firefox/defaults/pref to attempt to set default prefs,1170092
+1792671,"bodyvisualizer.com fails with ""Number of attributes exceeds Mesa's reported max attribute count.""",1170455
+1851071,"Intermittent  OSX Cross Compiled gfx/thebes/gfxMacPlatformFontList.mm:427:15: error: unused variable 'kTextDisplayCrossover' [-Werror,-Wunused-const-variable]",1170986
+1851573,7.15 - 3.69% google-docs ContentfulSpeedIndex / google-docs ContentfulSpeedIndex (OSX) regression on Thu August 31 2023,1170986
+1851576,3.36% google-docs PerceptualSpeedIndex (OSX) regression on Thu August 31 2023,1170986
+1807909,make PresShell::MarkFramesInSubtreeApproximatelyVisible correctly pass down aRemoveOnly parameter on recursive calls,1171371
+1908851,Can't show PDF attachments in tab,1171799
+1585570,"Intermittent GECKO(5811) | Assertion failure: !mPromise, at /builds/worker/workspace/build/src/obj-firefox/dist/include/mozilla/MozPromise.h:1147",1172394
+1596554,"Intermittent dom/media/test/test_mediatrack_replay_from_end.html | Calls of onremovetrack on audioTracks should be 1 times. - got +0, expected 1",1172394
+1596777,Crash in [@ mozilla::detail::ProxyFunctionRunnable<T>::Run],1172394
+1600063,"Recently, equalizer extensions cause html5 audio to lag when playing/pausing",1172394
+1645668,Sound indicator doesn't work sometimes,1172394
+1651678,AddressSanitizer: heap-use-after-free [@ mozilla::MediaTrack::SetEnabled(mozilla::DisabledTrackMode)::Message::Run] with READ of size 8,1172394
+1663674,"Assertion failure: false (MOZ_ASSERT_UNREACHABLE: A consumer was not explicitly removed), at /builds/worker/checkouts/gecko/dom/media/MediaStreamTrack.cpp:525",1172394
+1571619,"0.27 - 0.34% Base Content JS (linux64-shippable, linux64-shippable-qr, macosx1014-64-shippable, windows7-32-shippable) regression on push 9973154c79e50bcb7fa5cce165230d8ebce42452 (Fri August 2 2019)",1172572
+1572837,Perma devtools/client/webreplay/mochitest/browser_dbg_rr_stepping-04.js | Paused at line 21 expected 12 -,1172572
+1599696,Fix ImageBitmapRenderingContext::IsContextCleanForFrameCapture(),1172796
+1568313,Textarea wrap=hard does not actually insert newlines when posting,1174452
+1579304,Deleting messages no longer working with Gmail IMAP,1175446
+1235592,Entering/exiting DOM fullscreen always scrolls tab list in tabs toolbar as close as possible to the start to keep selected tab visible,1176233
+1601706,Bookmarks toolbar button menu scroll location resets when entering and exiting DOM fullscreen mode,"1176233,1580538"
+1584465,Crash in [@ mozilla::a11y::HyperTextAccessible::TransformOffset],1177014
+1887815,Buffer overflow when extracting TLD for IDNA display policy,1178095
+1758164,Some Google properties not working with the changes from bug 1178639,1178639
+1641182,Needs some files move in the doc,1179358
+1645384,"""More Information"" link of ""Install dependencies (non-Windows)"" in Firefox source docs Contributors’ Quick Reference is broken",1179358
+1528775,Disable automatic scroll handoff from subframes to enclosing scrollframes on desktop touch devices,1180706
+1685648,pinch zoom on non-pinch zoomable page often leads to unintended fast fling,1180799
+1434197,Box-shadow disappears when page is zoomed to 90%,1181554
+1643169,"media/mtransport/third_party/nICEr/src/stun/addrs-bsd.c:43:18: error: subscripted value is not an array, pointer, or vector",1183145
+1649678,FTBFS in nICEr/src/stun/addrs-bsd.c on OpenBSD,1183145
+1556156,White background during image loading,"1183378,1231622"
+1199594,Local Music Player add-on no longer plays music,1184387
+1484471,Clicking PDF Viewer 'Current View' button does not work for PDFs accessed from local file (cannot link to file: protocol from the unprivileged `resource` PDF viewer page),1184387
+1699923,Newly-templated nsTArrayBackInserter::operator=() -> error: no matching constructor for initialization of ...,1184468
