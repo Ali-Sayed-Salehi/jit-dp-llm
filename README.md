@@ -3,7 +3,7 @@
 ```bash
 git clone git@github.com:Ali-Sayed-Salehi/perf-pilot.git
 
-python -m venv my-venv
+python -m venv venv
 
 source my-venv/Scripts/activate
 
