@@ -9,4 +9,5 @@ __pychache__/
 .vscode/
 .idea/
 /datasets
-/secrets
+/secrets/*
+!secrets/.env.example
