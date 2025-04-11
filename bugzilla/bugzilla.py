@@ -1,8 +1,12 @@
 import requests
 import datetime
+from dotenv import load_dotenv
+import os
 
 # Bugzilla API key
-API_KEY = "***REMOVED***"
+load_dotenv(dotenv_path="../secrets/.env")
+
+API_KEY = os.getenv("BUGZILLA_API_KEY")
 
 # Bugzilla API endpoint
 BUGZILLA_API_URL = "https://bugzilla.mozilla.org/rest/bug"
