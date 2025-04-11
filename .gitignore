@@ -8,3 +8,4 @@ __pychache__/
 # IDE files
 .vscode/
 .idea/
+/datasets
