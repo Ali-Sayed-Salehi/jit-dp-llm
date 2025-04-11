@@ -43,3 +43,7 @@ Simulating various changes to software engineering flows on historical data
 
 ### treeherder
 Mozilla treeherder API for info related to their CI pipeline, i.e. Taskcluster. This API has info on tests and regressions
+
+
+### scripts
+various helper scripts
