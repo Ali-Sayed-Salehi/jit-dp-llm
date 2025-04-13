@@ -1,6 +1,6 @@
 # run interactive job with GPU
 # THIS SHOULD BE RUN FIRST AND SEPARATE FROM OTHER COMMANDS
-salloc --mem=10G --gpus=1 -p pg -A pcr
+salloc --nodelist=speed-17 --partition=pg --constraint=el9 --mem=10G --gpus=1 -A pcr
 
 #prepare environment
 cd /speed-scratch/$USER/vscode
