@@ -11,3 +11,4 @@ __pychache__/
 /datasets
 /secrets/*
 !secrets/.env.example
+/LLMs
