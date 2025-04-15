@@ -28,3 +28,6 @@ cd /speed-scratch/$USER/vscode ; setenv XDG_RUNTIME_DIR /speed-scratch/$USER/run
 
 # submit a batch job
 sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.slurm
+
+# get the status for a job
+sacct -j <job_id> --format=JobID,State,ExitCode,Elapsed
