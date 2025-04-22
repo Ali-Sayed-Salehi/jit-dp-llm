@@ -11,7 +11,7 @@ module load python/3.12.0/default
 module load cuda/11.8/default
 
 # set environment variables
-source /nfs/home/a/a_s87063/set_env.csh
+source /speed-scratch/$USER/repos/perf-pilot/scripts/set_env.csh
 
 # run vscode
 /speed-scratch/nag-public/code-server-4.22.1/bin/code-server --user-data-dir=$PWD\/projects --config=$PWD\/home/.config/code-server/config.yaml --bind-addr="0.0.0.0:8890" /speed-scratch/$USER/repos/perf-pilot
@@ -28,6 +28,9 @@ cd /speed-scratch/$USER/vscode ; setenv XDG_RUNTIME_DIR /speed-scratch/$USER/run
 
 # submit a batch job
 sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.slurm
+
+# see slurm job logs
+cd /speed-scratch/$USER/repos/perf-pilot/slurm_jobs
 
 # get the status for a job
 sacct -j <job_id> --format=JobID,State,ExitCode,Elapsed
