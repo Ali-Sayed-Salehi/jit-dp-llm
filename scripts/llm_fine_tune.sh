@@ -3,9 +3,9 @@
 #SBATCH --job-name=llm-finetune
 #SBATCH --mail-type=ALL
 #SBATCH --partition=pt
-#SBATCH --gpus=2
+#SBATCH --gpus=1
 #SBATCH --mem=64G
-#SBATCH --time=8:00:00
+#SBATCH --time=10:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
 
