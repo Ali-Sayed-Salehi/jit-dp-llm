@@ -27,7 +27,7 @@ cd /speed-scratch/$USER/vscode ; setenv XDG_RUNTIME_DIR /speed-scratch/$USER/run
 
 
 # submit a batch job
-sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.slurm
+sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.sh
 
 # see slurm job logs
 cd /speed-scratch/$USER/repos/perf-pilot/slurm_jobs

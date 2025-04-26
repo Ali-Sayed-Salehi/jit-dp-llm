@@ -2,12 +2,12 @@
 
 #SBATCH --job-name=llm-finetune
 #SBATCH --mail-type=ALL
-#SBATCH --partition=pt
+#SBATCH --partition=pg
 #SBATCH --gpus=1
-#SBATCH --mem=64G
+#SBATCH --mem=100G
 #SBATCH --time=10:00:00
 #SBATCH --account=pcr
-#SBATCH --constraint=el9
+#SBATCH --constraint=gpu32
 
 echo "loading modules"
 module load python/3.12.0/default
