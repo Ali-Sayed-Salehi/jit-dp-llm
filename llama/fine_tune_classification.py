@@ -7,12 +7,12 @@ import torch
 import numpy as np
 from collections import Counter
 from huggingface_hub import login as huggingface_hub_login
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets, DatasetDict
 from transformers import (
     AutoTokenizer, AutoModelForSequenceClassification, AutoConfig,
-    TrainingArguments, Trainer, BitsAndBytesConfig
+    TrainingArguments, Trainer, BitsAndBytesConfig, DataCollatorWithPadding
 )
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from dotenv import load_dotenv
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from scipy.special import softmax
@@ -52,19 +52,24 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_quant_type="nf4"
 )
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, use_fast=True)
-config = AutoConfig.from_pretrained(MODEL_PATH, num_labels=2)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, use_fast=True, add_prefix_space=True)
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+
+# config = AutoConfig.from_pretrained(MODEL_PATH, num_labels=2)
 model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_PATH,
-    config=config,
+    num_labels=2,
     device_map="auto",
-    quantization_config=bnb_config,
-    trust_remote_code=True,
-    ignore_mismatched_sizes=True
+    quantization_config=bnb_config
+    # trust_remote_code=True,
+    # ignore_mismatched_sizes=True
 )
-
-tokenizer.pad_token = tokenizer.eos_token
 model.config.pad_token_id = tokenizer.pad_token_id
+model.config.use_cache = False
+model.config.pretraining_tp = 1
+
+collate_fn = DataCollatorWithPadding(tokenizer=tokenizer)
 
 # ---------------------------- Load Dataset ----------------------------
 
@@ -75,7 +80,7 @@ split_index = int(len(dataset) * split_ratio)
 train_dataset = dataset.select(range(0, split_index))
 eval_dataset = dataset.select(range(split_index, len(dataset)))
 
-# Debug: reduce to 20 samples each
+# Debug: reduce to 200 samples each
 if DEBUG:
     train_dataset = train_dataset.select(range(200))
     eval_dataset = eval_dataset.select(range(200))
@@ -120,20 +125,26 @@ def tokenize_class(example):
     encoding["labels"] = example["label"]
     return encoding
 
-train_tokenized_dataset = train_balanced_formatted_dataset.map(tokenize_class, batched=True)
-eval_tokenized_dataset = eval_formatted_dataset.map(tokenize_class, batched=True)
+dataset = DatasetDict({
+    'train': train_balanced_formatted_dataset,
+    'eval': eval_formatted_dataset
+})
+
+tokenized_dataset = dataset.map(tokenize_class, batched=True, remove_columns=['text'])
+tokenized_dataset.set_format("torch")
 
 # ---------------------------- Apply LoRA ----------------------------
 
 lora_config = LoraConfig(
     r=16,
-    lora_alpha=32,
+    lora_alpha=8,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     lora_dropout=0.05,
     bias="none",
-    task_type=TaskType.SEQ_CLS
+    task_type='SEQ_CLS'
 )
 
+model = prepare_model_for_kbit_training(model)
 model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()
 
@@ -146,18 +157,18 @@ def compute_metrics(eval_pred):
     probs = softmax(logits, axis=1)
     probs_class1 = probs[:, 1]
 
-    # if np.isnan(probs_class1).any():
-    #     raise ValueError("NaNs found in predicted probabilities")
+    if np.isnan(probs_class1).any():
+        raise ValueError("NaNs found in predicted probabilities")
 
-    THRESHOLD = 0.4
+    THRESHOLD = 0.5
     preds = (probs_class1 >= THRESHOLD).astype(int)
 
     return {
         "accuracy": accuracy_score(labels, preds),
         "precision": precision_score(labels, preds, average="binary"),
         "recall": recall_score(labels, preds, average="binary"),
-        "f1": f1_score(labels, preds, average="binary")
-        # "auc": roc_auc_score(labels, probs_class1),
+        "f1": f1_score(labels, preds, average="binary"),
+        "auc": roc_auc_score(labels, probs_class1),
     }
 
 # ---------------------------- Training Arguments ----------------------------
@@ -167,6 +178,7 @@ logging_dir = f"{REPO_PATH}/llama/debug_logs" if DEBUG else f"{REPO_PATH}/llama/
 
 training_args = TrainingArguments(
     output_dir=output_dir,
+    logging_dir=logging_dir,
     per_device_train_batch_size=1 if DEBUG else 2,
     per_device_eval_batch_size=1 if DEBUG else 2,
     learning_rate=1e-6,
@@ -176,6 +188,7 @@ training_args = TrainingArguments(
     num_train_epochs=1 if DEBUG else 3,
     max_steps=10 if DEBUG else -1,
     logging_steps=1,
+    weight_decay = 0.01,
     save_strategy="no" if DEBUG else "epoch",
     eval_strategy="steps" if DEBUG else "epoch",
     eval_steps=2 if DEBUG else None,
@@ -189,9 +202,10 @@ training_args = TrainingArguments(
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=train_tokenized_dataset,
-    eval_dataset=eval_tokenized_dataset,
+    train_dataset=tokenized_dataset['train'],
+    eval_dataset=tokenized_dataset['eval'],
     tokenizer=tokenizer,
+    data_collator = collate_fn,
     compute_metrics=compute_metrics
 )
 
@@ -202,10 +216,6 @@ if args.eval:
 else:
     print("🚀 Starting training...")
     trainer.train()
-
-    for name, param in model.named_parameters():
-        if param.requires_grad and torch.isnan(param).any():
-            print(f"NaN detected in model parameter after training: {name}")
 
 # ---------------------------- Save Final Model ----------------------------
 
