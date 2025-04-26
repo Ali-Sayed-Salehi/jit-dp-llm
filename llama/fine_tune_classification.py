@@ -4,6 +4,7 @@ import argparse
 import os
 import random
 import torch
+import torch.distributed as dist
 import numpy as np
 from collections import Counter
 from huggingface_hub import login as huggingface_hub_login
@@ -30,10 +31,23 @@ parser.add_argument("--eval", action="store_true", help="Run evaluation only")
 args = parser.parse_args()
 DEBUG = args.debug
 
-# ---------------------------- GPU Setup ----------------------------
+# ---------------------------- GPU and CPU Setup ----------------------------
 
-torch.cuda.empty_cache()
+# torch.cuda.empty_cache()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# if dist.is_available() and dist.is_initialized():
+#     print(f"Running distributed training ✅")
+#     print(f"World size (total processes): {dist.get_world_size()}")
+#     print(f"My rank: {dist.get_rank()}")
+#     print(f"My local rank: {int(os.environ.get('LOCAL_RANK', -1))}")
+#     print(f"Number of GPUs available: {torch.cuda.device_count()}")
+# else:
+#     print(f"Not running distributed training ❌")
+
+cpu_count = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+print(f"Detected {cpu_count} CPU cores from SLURM allocation.")
+
 
 # ---------------------------- Hugging Face Login ----------------------------
 
@@ -55,6 +69,7 @@ bnb_config = BitsAndBytesConfig(
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, use_fast=True, add_prefix_space=True)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 # config = AutoConfig.from_pretrained(MODEL_PATH, num_labels=2)
 model = AutoModelForSequenceClassification.from_pretrained(
@@ -179,14 +194,13 @@ logging_dir = f"{REPO_PATH}/llama/debug_logs" if DEBUG else f"{REPO_PATH}/llama/
 training_args = TrainingArguments(
     output_dir=output_dir,
     logging_dir=logging_dir,
-    per_device_train_batch_size=1 if DEBUG else 2,
-    per_device_eval_batch_size=1 if DEBUG else 2,
-    learning_rate=1e-6,
-    max_grad_norm=1.0, # gradient clipping
+    per_device_train_batch_size=1 if DEBUG else 16,
+    per_device_eval_batch_size=1 if DEBUG else 16,
+    learning_rate=1e-4,
     bf16=True,
-    dataloader_num_workers=0,
-    num_train_epochs=1 if DEBUG else 3,
-    max_steps=10 if DEBUG else -1,
+    dataloader_num_workers=cpu_count,
+    num_train_epochs=1 if DEBUG else 1,
+    max_steps=2 if DEBUG else -1,
     logging_steps=1,
     weight_decay = 0.01,
     save_strategy="no" if DEBUG else "epoch",

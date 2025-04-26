@@ -26,8 +26,11 @@ cat /speed-scratch/$USER/vscode/home/.config/code-server/config.yaml
 cd /speed-scratch/$USER/vscode ; setenv XDG_RUNTIME_DIR /speed-scratch/$USER/run-user ; module load python/3.12.0/default ; module load cuda/11.8/default ; source /nfs/home/a/a_s87063/set_env.csh; /speed-scratch/nag-public/code-server-4.22.1/bin/code-server --user-data-dir=$PWD\/projects --config=$PWD\/home/.config/code-server/config.yaml --bind-addr="0.0.0.0:8890" /speed-scratch/$USER/repos/perf-pilot
 
 
-# submit a batch job
+# submit a batch job for single GPU
 sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.sh
+
+# submit a batch job for multiple GPUs using multiple nodes
+sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/dist_llm_fine_tune.sh
 
 # see slurm job logs
 cd /speed-scratch/$USER/repos/perf-pilot/slurm_jobs
