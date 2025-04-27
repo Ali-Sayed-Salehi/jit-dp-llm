@@ -7,7 +7,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=10:00:00
+#SBATCH --time=15:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=gpu32
 
