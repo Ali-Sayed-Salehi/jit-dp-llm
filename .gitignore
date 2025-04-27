@@ -13,3 +13,4 @@ __pychache__/
 !secrets/.env.example
 /LLMs
 /slurm_jobs
+/llama/training

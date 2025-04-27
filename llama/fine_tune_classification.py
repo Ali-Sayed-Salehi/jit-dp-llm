@@ -15,12 +15,28 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from dotenv import load_dotenv
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve, auc
 from scipy.special import softmax
+import matplotlib.pyplot as plt
+from datetime import datetime
+import json
 
 # ---------------------------- constants  ----------------------------
 
-REPO_PATH = "/speed-scratch/a_s87063/repos/perf-pilot"
+REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+print(f"✅ Detected REPO_PATH: {REPO_PATH}")
+run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+output_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/output"
+tensorboard_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tensorboard"
+metrics_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/metrics"
+finetuned_model_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/model"
+finetuned_tokenizer_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tokenizer"
+
+training_dirs = [output_dir, tensorboard_dir, metrics_dir, finetuned_model_dir, finetuned_tokenizer_dir]
+
+for directory in training_dirs:
+    os.makedirs(directory, exist_ok=True)
 
 # ---------------------------- Parse Arguments ----------------------------
 
@@ -33,17 +49,26 @@ DEBUG = args.debug
 
 # ---------------------------- GPU and CPU Setup ----------------------------
 
-# torch.cuda.empty_cache()
+torch.cuda.empty_cache()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-# if dist.is_available() and dist.is_initialized():
-#     print(f"Running distributed training ✅")
-#     print(f"World size (total processes): {dist.get_world_size()}")
-#     print(f"My rank: {dist.get_rank()}")
-#     print(f"My local rank: {int(os.environ.get('LOCAL_RANK', -1))}")
-#     print(f"Number of GPUs available: {torch.cuda.device_count()}")
-# else:
-#     print(f"Not running distributed training ❌")
+print("✅ Checking available GPUs...")
+
+if torch.cuda.is_available():
+    print(f"Number of GPUs available: {torch.cuda.device_count()}")
+    for i in range(torch.cuda.device_count()):
+        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+else:
+    print("🚨 No GPU available! Running on CPU.")
+
+if dist.is_available() and dist.is_initialized():
+    print(f"Running distributed training ✅")
+    print(f"World size (total processes): {dist.get_world_size()}")
+    print(f"My rank: {dist.get_rank()}")
+    print(f"My local rank: {int(os.environ.get('LOCAL_RANK', -1))}")
+    print(f"Number of GPUs available: {torch.cuda.device_count()}")
+else:
+    print(f"Not running distributed training ❌")
 
 cpu_count = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
 print(f"Detected {cpu_count} CPU cores from SLURM allocation.")
@@ -178,30 +203,33 @@ def compute_metrics(eval_pred):
     THRESHOLD = 0.5
     preds = (probs_class1 >= THRESHOLD).astype(int)
 
+    fpr, tpr, _ = roc_curve(labels, probs_class1)
+    auc_score = auc(fpr, tpr)
+
     return {
         "accuracy": accuracy_score(labels, preds),
         "precision": precision_score(labels, preds, average="binary"),
         "recall": recall_score(labels, preds, average="binary"),
         "f1": f1_score(labels, preds, average="binary"),
-        "auc": roc_auc_score(labels, probs_class1),
+        "auc": auc_score
+        # "fpr": fpr.tolist(),
+        # "tpr": tpr.tolist()
     }
 
 # ---------------------------- Training Arguments ----------------------------
 
-output_dir = f"{REPO_PATH}/llama/debug_output" if DEBUG else f"{REPO_PATH}/llama/training/output/llama-classifier"
-logging_dir = f"{REPO_PATH}/llama/debug_logs" if DEBUG else f"{REPO_PATH}/llama/training/logs"
-
 training_args = TrainingArguments(
     output_dir=output_dir,
-    logging_dir=logging_dir,
-    per_device_train_batch_size=1 if DEBUG else 16,
-    per_device_eval_batch_size=1 if DEBUG else 16,
+    logging_dir=tensorboard_dir,
+    report_to="tensorboard",
+    per_device_train_batch_size=1 if DEBUG else 32,
+    per_device_eval_batch_size=1 if DEBUG else 32,
     learning_rate=1e-4,
     bf16=True,
     dataloader_num_workers=cpu_count,
     num_train_epochs=1 if DEBUG else 1,
-    max_steps=2 if DEBUG else -1,
-    logging_steps=1,
+    max_steps=5 if DEBUG else -1,
+    logging_steps=5,
     weight_decay = 0.01,
     save_strategy="no" if DEBUG else "epoch",
     eval_strategy="steps" if DEBUG else "epoch",
@@ -231,8 +259,145 @@ else:
     print("🚀 Starting training...")
     trainer.train()
 
+# ---------------------------- Save Metrics and Plot ----------------------------
+
+
+
+# Save metrics from trainer
+training_metrics = trainer.state.log_history
+metrics_save_path = os.path.join(metrics_dir, "metrics.json")
+
+with open(metrics_save_path, "w") as f:
+    json.dump(training_metrics, f, indent=4)
+
+print(f"✅ Saved metrics to {metrics_save_path}")
+
+# # Prepare arrays for plotting
+# steps = []
+# train_loss = []
+# eval_loss = []
+# accuracy = []
+# f1 = []
+# precision = []
+# recall = []
+# auc_list = []
+# fpr_curve = None
+# tpr_curve = None
+
+# for record in training_metrics:
+#     if 'step' in record:
+#         if 'loss' in record:
+#             steps.append(record['step'])
+#             train_loss.append(record['loss'])
+#         if 'eval_loss' in record:
+#             eval_loss.append(record['eval_loss'])
+#         if 'eval_accuracy' in record:
+#             accuracy.append(record['eval_accuracy'])
+#         if 'eval_f1' in record:
+#             f1.append(record['eval_f1'])
+#         if 'eval_precision' in record:
+#             precision.append(record['eval_precision'])
+#         if 'eval_recall' in record:
+#             recall.append(record['eval_recall'])
+#         if 'eval_auc' in record:
+#             auc_list.append(record['eval_auc'])
+#         if 'fpr' in record and 'tpr' in record:
+#             fpr_curve = record['fpr']
+#             tpr_curve = record['tpr']
+
+# # Create plots for training metrics
+# plt.figure(figsize=(20, 12))
+
+# # 1. Training Loss
+# plt.subplot(3, 3, 1)
+# plt.plot(steps, train_loss, label="Train Loss")
+# plt.xlabel("Steps")
+# plt.ylabel("Loss")
+# plt.title("Training Loss")
+# plt.grid()
+# plt.legend()
+
+# # 2. Evaluation Loss
+# plt.subplot(3, 3, 2)
+# plt.plot(steps, eval_loss, label="Eval Loss", color="orange")
+# plt.xlabel("Steps")
+# plt.ylabel("Loss")
+# plt.title("Evaluation Loss")
+# plt.grid()
+# plt.legend()
+
+# # 3. Accuracy
+# plt.subplot(3, 3, 3)
+# plt.plot(steps, accuracy, label="Accuracy", color="green")
+# plt.xlabel("Steps")
+# plt.ylabel("Accuracy")
+# plt.title("Evaluation Accuracy")
+# plt.grid()
+# plt.legend()
+
+# # 4. F1 Score
+# plt.subplot(3, 3, 4)
+# plt.plot(steps, f1, label="F1 Score", color="red")
+# plt.xlabel("Steps")
+# plt.ylabel("F1 Score")
+# plt.title("Evaluation F1 Score")
+# plt.grid()
+# plt.legend()
+
+# # 5. Precision
+# plt.subplot(3, 3, 5)
+# plt.plot(steps, precision, label="Precision", color="purple")
+# plt.xlabel("Steps")
+# plt.ylabel("Precision")
+# plt.title("Evaluation Precision")
+# plt.grid()
+# plt.legend()
+
+# # 6. Recall
+# plt.subplot(3, 3, 6)
+# plt.plot(steps, recall, label="Recall", color="brown")
+# plt.xlabel("Steps")
+# plt.ylabel("Recall")
+# plt.title("Evaluation Recall")
+# plt.grid()
+# plt.legend()
+
+# # 7. AUC
+# plt.subplot(3, 3, 7)
+# plt.plot(steps, auc_list, label="AUC", color="cyan")
+# plt.xlabel("Steps")
+# plt.ylabel("AUC")
+# plt.title("Evaluation AUC")
+# plt.grid()
+# plt.legend()
+
+# plt.tight_layout()
+# metrics_plot_path = os.path.join(metrics_dir, "training_metrics_full.png")
+# plt.savefig(metrics_plot_path)
+# print(f"✅ Saved training metrics plot at {metrics_plot_path}")
+# plt.close()
+
+# ---------------------------- ROC Curve Plot ----------------------------
+
+# # Now plot ROC curve separately if available
+# if fpr_curve is not None and tpr_curve is not None:
+#     plt.figure(figsize=(8, 6))
+#     plt.plot(fpr_curve, tpr_curve, label=f"ROC Curve (AUC = {auc_list[-1]:.2f})")
+#     plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
+#     plt.xlabel("False Positive Rate")
+#     plt.ylabel("True Positive Rate")
+#     plt.title("Receiver Operating Characteristic (ROC) Curve")
+#     plt.grid()
+#     plt.legend()
+#     roc_curve_path = os.path.join(metrics_dir, "roc_curve.png")
+#     plt.savefig(roc_curve_path)
+#     print(f"✅ Saved ROC curve plot at {roc_curve_path}")
+#     plt.close()
+# else:
+#     print("⚠️ Warning: No ROC data available to plot.")
+
 # ---------------------------- Save Final Model ----------------------------
 
 if not DEBUG:
-    trainer.save_model(f"{REPO_PATH}/LLMs/finetuned/classification/model/llama3-8B")
-    tokenizer.save_pretrained(f"{REPO_PATH}/LLMs/finetuned/classification/tokenizer/llama3-8B")
+    trainer.save_model(finetuned_model_dir)
+    tokenizer.save_pretrained(finetuned_tokenizer_dir)
