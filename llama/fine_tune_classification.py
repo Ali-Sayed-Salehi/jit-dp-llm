@@ -176,8 +176,8 @@ tokenized_dataset.set_format("torch")
 # ---------------------------- Apply LoRA ----------------------------
 
 lora_config = LoraConfig(
-    r=16,
-    lora_alpha=8,
+    r=8,
+    lora_alpha=16,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     lora_dropout=0.05,
     bias="none",
@@ -222,18 +222,19 @@ training_args = TrainingArguments(
     output_dir=output_dir,
     logging_dir=tensorboard_dir,
     report_to="tensorboard",
-    per_device_train_batch_size=1 if DEBUG else 32,
-    per_device_eval_batch_size=1 if DEBUG else 32,
-    learning_rate=1e-4,
+    per_device_train_batch_size=2 if DEBUG else 32,
+    per_device_eval_batch_size=2 if DEBUG else 32,
+    learning_rate=2e-5,
+    max_grad_norm=1.0,
     bf16=True,
     dataloader_num_workers=cpu_count,
     num_train_epochs=1 if DEBUG else 1,
     max_steps=5 if DEBUG else -1,
-    logging_steps=5,
+    logging_steps=1,
     weight_decay = 0.01,
     save_strategy="no" if DEBUG else "epoch",
-    eval_strategy="steps" if DEBUG else "epoch",
-    eval_steps=2 if DEBUG else None,
+    eval_strategy="steps",
+    eval_steps=1 if DEBUG else 10,
     save_total_limit=1,
     load_best_model_at_end=False if DEBUG else True,
     metric_for_best_model="recall"
@@ -271,130 +272,6 @@ with open(metrics_save_path, "w") as f:
     json.dump(training_metrics, f, indent=4)
 
 print(f"✅ Saved metrics to {metrics_save_path}")
-
-# # Prepare arrays for plotting
-# steps = []
-# train_loss = []
-# eval_loss = []
-# accuracy = []
-# f1 = []
-# precision = []
-# recall = []
-# auc_list = []
-# fpr_curve = None
-# tpr_curve = None
-
-# for record in training_metrics:
-#     if 'step' in record:
-#         if 'loss' in record:
-#             steps.append(record['step'])
-#             train_loss.append(record['loss'])
-#         if 'eval_loss' in record:
-#             eval_loss.append(record['eval_loss'])
-#         if 'eval_accuracy' in record:
-#             accuracy.append(record['eval_accuracy'])
-#         if 'eval_f1' in record:
-#             f1.append(record['eval_f1'])
-#         if 'eval_precision' in record:
-#             precision.append(record['eval_precision'])
-#         if 'eval_recall' in record:
-#             recall.append(record['eval_recall'])
-#         if 'eval_auc' in record:
-#             auc_list.append(record['eval_auc'])
-#         if 'fpr' in record and 'tpr' in record:
-#             fpr_curve = record['fpr']
-#             tpr_curve = record['tpr']
-
-# # Create plots for training metrics
-# plt.figure(figsize=(20, 12))
-
-# # 1. Training Loss
-# plt.subplot(3, 3, 1)
-# plt.plot(steps, train_loss, label="Train Loss")
-# plt.xlabel("Steps")
-# plt.ylabel("Loss")
-# plt.title("Training Loss")
-# plt.grid()
-# plt.legend()
-
-# # 2. Evaluation Loss
-# plt.subplot(3, 3, 2)
-# plt.plot(steps, eval_loss, label="Eval Loss", color="orange")
-# plt.xlabel("Steps")
-# plt.ylabel("Loss")
-# plt.title("Evaluation Loss")
-# plt.grid()
-# plt.legend()
-
-# # 3. Accuracy
-# plt.subplot(3, 3, 3)
-# plt.plot(steps, accuracy, label="Accuracy", color="green")
-# plt.xlabel("Steps")
-# plt.ylabel("Accuracy")
-# plt.title("Evaluation Accuracy")
-# plt.grid()
-# plt.legend()
-
-# # 4. F1 Score
-# plt.subplot(3, 3, 4)
-# plt.plot(steps, f1, label="F1 Score", color="red")
-# plt.xlabel("Steps")
-# plt.ylabel("F1 Score")
-# plt.title("Evaluation F1 Score")
-# plt.grid()
-# plt.legend()
-
-# # 5. Precision
-# plt.subplot(3, 3, 5)
-# plt.plot(steps, precision, label="Precision", color="purple")
-# plt.xlabel("Steps")
-# plt.ylabel("Precision")
-# plt.title("Evaluation Precision")
-# plt.grid()
-# plt.legend()
-
-# # 6. Recall
-# plt.subplot(3, 3, 6)
-# plt.plot(steps, recall, label="Recall", color="brown")
-# plt.xlabel("Steps")
-# plt.ylabel("Recall")
-# plt.title("Evaluation Recall")
-# plt.grid()
-# plt.legend()
-
-# # 7. AUC
-# plt.subplot(3, 3, 7)
-# plt.plot(steps, auc_list, label="AUC", color="cyan")
-# plt.xlabel("Steps")
-# plt.ylabel("AUC")
-# plt.title("Evaluation AUC")
-# plt.grid()
-# plt.legend()
-
-# plt.tight_layout()
-# metrics_plot_path = os.path.join(metrics_dir, "training_metrics_full.png")
-# plt.savefig(metrics_plot_path)
-# print(f"✅ Saved training metrics plot at {metrics_plot_path}")
-# plt.close()
-
-# ---------------------------- ROC Curve Plot ----------------------------
-
-# # Now plot ROC curve separately if available
-# if fpr_curve is not None and tpr_curve is not None:
-#     plt.figure(figsize=(8, 6))
-#     plt.plot(fpr_curve, tpr_curve, label=f"ROC Curve (AUC = {auc_list[-1]:.2f})")
-#     plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
-#     plt.xlabel("False Positive Rate")
-#     plt.ylabel("True Positive Rate")
-#     plt.title("Receiver Operating Characteristic (ROC) Curve")
-#     plt.grid()
-#     plt.legend()
-#     roc_curve_path = os.path.join(metrics_dir, "roc_curve.png")
-#     plt.savefig(roc_curve_path)
-#     print(f"✅ Saved ROC curve plot at {roc_curve_path}")
-#     plt.close()
-# else:
-#     print("⚠️ Warning: No ROC data available to plot.")
 
 # ---------------------------- Save Final Model ----------------------------
 
