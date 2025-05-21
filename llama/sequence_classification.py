@@ -1,5 +1,3 @@
-from huggingface_hub import notebook_login
-from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers import DataCollatorWithPadding
 import evaluate
@@ -8,6 +6,17 @@ from transformers import AutoModelForSequenceClassification, TrainingArguments, 
 from transformers import pipeline
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+import json
+import argparse
+from huggingface_hub import login as huggingface_hub_login
+from datasets import load_dataset, concatenate_datasets, DatasetDict
+from transformers import (
+    AutoTokenizer, AutoModelForSequenceClassification, AutoConfig,
+    TrainingArguments, Trainer, BitsAndBytesConfig, DataCollatorWithPadding, 
+    TrainerCallback, LlamaForSequenceClassification
+)
+from dotenv import load_dotenv
 
 # ---------------------------- constants  ----------------------------
 
@@ -32,6 +41,7 @@ for directory in training_dirs:
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
+parser.add_argument("--perf_data", action="store_true", help="Use performance dataset with oversampling instead of IMDb")
 
 args = parser.parse_args()
 DEBUG = args.debug
@@ -47,13 +57,58 @@ hugging_face_token = os.getenv("HUGGING_FACE_TOKEN")
 huggingface_hub_login(hugging_face_token)
 
 # ------------------------- Load dataset -------------------------
-imdb = load_dataset("imdb")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
-def preprocess_function(examples):
+if args.perf_data:
+    print("📂 Using performance dataset...")
+
+    dataset = load_dataset("json", data_files=f"{REPO_PATH}/datasets/dataset.jsonl", split="train")
+    split_ratio = 0.8
+    split_index = int(len(dataset) * split_ratio)
+
+    train_dataset = dataset.select(range(0, split_index))
+    eval_dataset = dataset.select(range(split_index, len(dataset)))
+
+    if DEBUG:
+        train_dataset = train_dataset.select(range(200))
+        eval_dataset = eval_dataset.select(range(200))
+
+    train_dataset = train_dataset.shuffle(seed=42)
+
+    def format_for_classification(example):
+        return {
+            "text": example['prompt'],
+            "label": int(example["response"])
+        }
+
+    train_formatted = train_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
+    eval_formatted = eval_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
+
+    # Perform minority oversampling
+    majority = train_formatted.filter(lambda ex: ex["label"] == 0)
+    minority = train_formatted.filter(lambda ex: ex["label"] == 1)
+
+    upsample_size = len(majority)
+    minority_upsampled = minority.shuffle(seed=42).select(
+        [random.randint(0, len(minority) - 1) for _ in range(upsample_size)]
+    )
+    balanced_train = concatenate_datasets([majority, minority_upsampled]).shuffle(seed=42)
+
+    dataset = DatasetDict({
+        "train": balanced_train,
+        "test": eval_formatted
+    })
+
+else:
+    print("📂 Using IMDb dataset...")
+    dataset = load_dataset("imdb")
+
+
+def tokenize_data(examples):
     return tokenizer(examples["text"], truncation=True)
 
-tokenized_imdb = imdb.map(preprocess_function, batched=True)
+tokenized_dataset = dataset.map(tokenize_data, batched=True)
+tokenized_dataset.set_format("torch")
 
 print("Tokenized dataset features:")
 print(tokenized_dataset['train'].features)
@@ -84,14 +139,21 @@ class SaveMetricsCallback(TrainerCallback):
         self.output_path = output_path
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+    def _write_metrics(self, state, metrics, metric_type):
         if metrics is not None:
             with open(self.output_path, "a") as f:
                 json.dump({
                     "step": state.global_step,
+                    "type": metric_type,
                     "metrics": metrics
                 }, f)
                 f.write("\n")
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        self._write_metrics(state, metrics, "eval")
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        self._write_metrics(state, logs, "train")
 
 callbacks = []
 
@@ -116,26 +178,27 @@ training_args = TrainingArguments(
     per_device_train_batch_size=16,
     per_device_eval_batch_size=16,
     num_train_epochs=1 if DEBUG else 2,
-    max_steps=5 if DEBUG else -1,
+    max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     save_strategy="no" if DEBUG else "steps",
     eval_strategy="steps",
     eval_steps=1 if DEBUG else 50,
     save_steps=1 if DEBUG else 50,
     save_total_limit=1,
-    load_best_model_at_end=True,
-    push_to_hub=False
+    load_best_model_at_end=False if DEBUG else True,
+    metric_for_best_model="recall"
 )
 
 # ------------------------- Trainer -------------------------
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_imdb["train"],
-    eval_dataset=tokenized_imdb["test"],
+    train_dataset=tokenized_dataset["train"],
+    eval_dataset=tokenized_dataset["test"],
     tokenizer=tokenizer,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
+    callbacks=callbacks
 )
 
 trainer.train()
