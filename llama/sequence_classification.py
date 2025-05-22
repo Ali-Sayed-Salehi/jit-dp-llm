@@ -17,6 +17,7 @@ from transformers import (
     TrainerCallback, LlamaForSequenceClassification
 )
 from dotenv import load_dotenv
+import random
 
 # ---------------------------- constants  ----------------------------
 
@@ -42,13 +43,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
 parser.add_argument("--perf_data", action="store_true", help="Use performance dataset with oversampling instead of IMDb")
+parser.add_argument("--model_name", type=str, default="distilbert-base-uncased", help="Name of the model to use")
 
 args = parser.parse_args()
 DEBUG = args.debug
 
 # ------------------------- Local model path -------------------------
 
-MODEL_PATH = f"{REPO_PATH}/LLMs/pretrained/distilbert-base-uncased"
+MODEL_PATH = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_name)
+print(f"🧠 Using model: {args.model_name} from {MODEL_PATH}")
 
 # ------------------------- HF login -------------------------
 
@@ -149,11 +152,12 @@ class SaveMetricsCallback(TrainerCallback):
                 }, f)
                 f.write("\n")
 
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and not any(k.startswith("eval_") for k in logs):
+            self._write_metrics(state, logs, "train")
+
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         self._write_metrics(state, metrics, "eval")
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        self._write_metrics(state, logs, "train")
 
 callbacks = []
 
@@ -180,6 +184,8 @@ training_args = TrainingArguments(
     num_train_epochs=1 if DEBUG else 2,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
+    logging_strategy="steps",
+    logging_steps=1 if DEBUG else 10,
     save_strategy="no" if DEBUG else "steps",
     eval_strategy="steps",
     eval_steps=1 if DEBUG else 50,
