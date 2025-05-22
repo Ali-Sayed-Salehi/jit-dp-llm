@@ -27,7 +27,7 @@ cd /speed-scratch/$USER/vscode ; setenv XDG_RUNTIME_DIR /speed-scratch/$USER/run
 
 
 # submit a batch job for single GPU
-sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/llm_fine_tune.sh
+sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/fine_tune_codebert.sh
 
 # submit a batch job for multiple GPUs using multiple nodes
 sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/dist_llm_fine_tune.sh
