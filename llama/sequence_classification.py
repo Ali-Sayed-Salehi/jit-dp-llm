@@ -51,7 +51,7 @@ parser.add_argument("--model_name", type=str, default="distilbert-base-uncased",
 parser.add_argument(
     "--class_imbalance_fix",
     type=str,
-    choices=["oversampling", "weighted_loss", "none"],
+    choices=["oversampling", "weighted_loss", "focal_loss", "none"],
     default="none",
     help="Class imbalance handling method: 'oversampling' (default), or 'weighted_loss'"
 )
@@ -67,6 +67,9 @@ args = parser.parse_args()
 DEBUG = args.debug
 LLAMA = "llama" in args.model_name.lower()
 MAX_SEQ_LENGTH = 8024 if LLAMA else None
+focal_loss_fct = None
+FL_ALPHA = 2
+FL_GAMMA = 5
 
 if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
     raise ValueError("Threshold must be between 0 and 1 if specified")
@@ -81,6 +84,29 @@ print(f"🧠 Using model: {args.model_name} from {MODEL_PATH}")
 load_dotenv(dotenv_path= f"{REPO_PATH}/secrets/.env")
 hugging_face_token = os.getenv("HUGGING_FACE_TOKEN")
 huggingface_hub_login(hugging_face_token)
+
+# ------------------------- focal loss setup -------------------------
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        log_probs = F.log_softmax(inputs, dim=-1)
+        probs = torch.exp(log_probs)
+        targets_one_hot = F.one_hot(targets, num_classes=inputs.size(-1)).float()
+
+        focal_term = (1 - probs) ** self.gamma
+        loss = -self.alpha * focal_term * log_probs * targets_one_hot
+
+        if self.reduction == 'mean':
+            return loss.sum(dim=1).mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
 
 # ------------------------- Load dataset and fix class imbalance -------------------------
 
@@ -103,7 +129,7 @@ if args.perf_data:
     def format_for_classification(example):
         return {
             "text": example['prompt'],
-            "labels": int(example["response"])
+            "label": int(example["response"])
         }
 
     train_formatted = train_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
@@ -114,7 +140,7 @@ if args.perf_data:
     if imbalance_fix == "weighted_loss":
         print("🔄 Applying weighted loss...")
 
-        train_labels_list = train_formatted['labels']
+        train_labels_list = train_formatted['label']
         class_labels = np.array(sorted(set(train_labels_list)))
         class_weights = compute_class_weight(
             class_weight='balanced',
@@ -133,10 +159,18 @@ if args.perf_data:
             "test": eval_formatted
         })
 
+    elif imbalance_fix == "focal_loss":
+        print("🔥 Using Focal Loss for class imbalance.")
+        focal_loss_fct = FocalLoss(FL_ALPHA, FL_GAMMA)
+        dataset = DatasetDict({
+            "train": train_formatted,
+            "test": eval_formatted
+        })
+
     elif imbalance_fix == "oversampling":
         print("🔄 Applying basic minority oversampling...")
-        majority = train_formatted.filter(lambda ex: ex["labels"] == 0)
-        minority = train_formatted.filter(lambda ex: ex["labels"] == 1)
+        majority = train_formatted.filter(lambda ex: ex["label"] == 0)
+        minority = train_formatted.filter(lambda ex: ex["label"] == 1)
         upsample_size = len(majority)
         minority_upsampled = minority.shuffle(seed=42).select(
             [random.randint(0, len(minority) - 1) for _ in range(upsample_size)]
@@ -153,13 +187,12 @@ if args.perf_data:
             "test": eval_formatted
         })
 
-
 else:
     print("📂 Using IMDb dataset...")
     dataset = load_dataset("imdb")
 
 # Compute class distribution from training data
-train_labels = dataset["train"]["labels"]
+train_labels = dataset["train"]["label"]
 label_counts = Counter(train_labels)
 class_distribution = {
     str(label): int(count)
@@ -193,12 +226,29 @@ precision = evaluate.load("precision")
 recall = evaluate.load("recall")
 f1 = evaluate.load("f1")
 
+def recall_at_top_k(pred_scores, true_labels, percentages=[0.1, 0.25, 0.5]):
+    results = {}
+    total_positives = np.sum(true_labels)
+    
+    sorted_indices = np.argsort(-pred_scores)
+    sorted_labels = true_labels[sorted_indices]
+
+    for pct in percentages:
+        k = int(len(pred_scores) * pct)
+        top_k_labels = sorted_labels[:k]
+        recall = np.sum(top_k_labels) / total_positives
+        results[f"recall@top_{int(pct * 100)}%"] = recall
+    return results
+
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
 
     # Apply softmax to get probabilities
     probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
 
+    # Simulate gating the top k % of most likely regressions
+    recall_at_k_metrics = recall_at_top_k(probs[:, 1], labels, percentages=[0.1, 0.25, 0.5])
+    
     if args.threshold is not None:
         threshold = args.threshold
         predictions = (probs[:, 1] >= threshold).astype(int)
@@ -219,6 +269,7 @@ def compute_metrics(eval_pred):
         "f1": f1.compute(predictions=predictions, references=labels, average="binary")["f1"],
     }
     metrics.update(output_distribution)
+    metrics.update(recall_at_k_metrics)
 
     return metrics
 
@@ -306,8 +357,9 @@ if args.lora:
 training_args = TrainingArguments(
     output_dir=output_dir,
     learning_rate=2e-5,
-    per_device_train_batch_size=2 if DEBUG else 16,
-    per_device_eval_batch_size=2 if DEBUG else 16,
+    per_device_train_batch_size=2 if DEBUG else 32,
+    per_device_eval_batch_size=4 if DEBUG else 32,
+    gradient_accumulation_steps=2,
     num_train_epochs=1 if DEBUG else 4,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
@@ -320,7 +372,8 @@ training_args = TrainingArguments(
     save_total_limit=1,
     load_best_model_at_end=False if DEBUG else True,
     metric_for_best_model="recall",
-    label_names=["labels"]
+    label_names=["labels"],
+    max_grad_norm=1.0
 )
 
 # ------------------------- Save Config to File -------------------------
@@ -338,7 +391,9 @@ config_snapshot = {
     "class_distribution": class_distribution,
     "decision_threshold": args.threshold if args.threshold is not None else "argmax",
     "quantized": args.quant,
-    "lora_enabled": args.lora
+    "lora_enabled": args.lora,
+    "focal_loss_gamma": FL_GAMMA if args.class_imbalance_fix == "focal_loss" else "None",
+    "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None"
 }
 
 with open(config_path, "w") as f:
@@ -349,23 +404,26 @@ print(f"⚙️ Logged config to: {config_path}")
 # ------------------------- Trainer -------------------------
 
 class CustomTrainer(Trainer):
-    def __init__(self, *args, class_weights=None, **kwargs):
+    def __init__(self, *args, class_weights=None, focal_loss_fct=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if class_weights is not None:
-            self.class_weights = torch.tensor(class_weights, 
-            dtype=torch.float32).to(self.args.device)
-        else:
-            self.class_weights = None
+        self.class_weights = (
+            torch.tensor(class_weights, dtype=torch.float32).to(self.args.device)
+            if class_weights is not None else None
+        )
+        self.focal_loss_fct = focal_loss_fct
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels").long()
         outputs = model(**inputs)
         logits = outputs.get('logits')
 
-        if self.class_weights is not None:
+        if self.focal_loss_fct:
+            loss = self.focal_loss_fct(logits, labels)
+        elif self.class_weights is not None:
             loss = F.cross_entropy(logits, labels, weight=self.class_weights)
         else:
             loss = F.cross_entropy(logits, labels)
+
         return (loss, outputs) if return_outputs else loss
 
 trainer = CustomTrainer(
@@ -377,7 +435,8 @@ trainer = CustomTrainer(
     data_collator=data_collator,
     compute_metrics=compute_metrics,
     callbacks=callbacks,
-    class_weights=class_weights if args.class_imbalance_fix == "weighted_loss" else None
+    class_weights=class_weights if args.class_imbalance_fix == "weighted_loss" else None,
+    focal_loss_fct=focal_loss_fct if args.class_imbalance_fix == "focal_loss" else None
 )
 
 trainer.train()
