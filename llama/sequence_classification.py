@@ -1,3 +1,6 @@
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
@@ -5,7 +8,6 @@ import torch.nn as nn
 import evaluate
 import numpy as np
 from dotenv import load_dotenv
-import os
 from datetime import datetime
 import json
 import argparse
@@ -20,7 +22,6 @@ import random
 from collections import Counter
 from sklearn.utils.class_weight import compute_class_weight
 from peft import get_peft_model, LoraConfig, TaskType, prepare_model_for_kbit_training
-
 
 # ---------------------------- constants  ----------------------------
 
@@ -62,11 +63,12 @@ parser.add_argument(
 )
 parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
 parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
+parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 training")
+parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")
 
 args = parser.parse_args()
 DEBUG = args.debug
 LLAMA = "llama" in args.model_name.lower()
-MAX_SEQ_LENGTH = 8024 if LLAMA else None
 focal_loss_fct = None
 FL_ALPHA = 2
 FL_GAMMA = 5
@@ -205,11 +207,29 @@ if LLAMA:
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.pad_token = tokenizer.eos_token
 
+# Dynamically determine max sequence length
+DEFAULT_MAX_SEQ_LENGTH = 4096 if LLAMA else tokenizer.model_max_length
+
+def get_token_length(example):
+    return {"length": len(tokenizer(example["text"], truncation=False)["input_ids"])}
+
+length_sample = dataset["train"]
+
+lengths_dataset = length_sample.map(get_token_length)
+lengths = lengths_dataset["length"]
+
+calculated_max_length = int(np.percentile(lengths, 80))
+
+MAX_SEQ_LENGTH = min(calculated_max_length, DEFAULT_MAX_SEQ_LENGTH)
+
+print(f"✅ Using max_seq_length={MAX_SEQ_LENGTH} (80th percentile = {calculated_max_length}, tokenizer limit = {MAX_SEQ_LENGTH})")
+
+
 def tokenize_data(examples):
     return tokenizer(
         examples["text"],
         truncation=True,
-        max_length=MAX_SEQ_LENGTH if MAX_SEQ_LENGTH else tokenizer.model_max_length
+        max_length=MAX_SEQ_LENGTH
     )
 
 tokenized_dataset = dataset.map(tokenize_data, batched=True)
@@ -338,6 +358,9 @@ model.config.pad_token_id = tokenizer.pad_token_id
 model.config.use_cache = False
 model.config.pretraining_tp = 1
 
+if args.gradient_checkpointing:
+    model.gradient_checkpointing_enable()
+
 # ------------------------- LORA -------------------------
 if args.lora:
     print("✨ Applying LoRA...")
@@ -357,10 +380,10 @@ if args.lora:
 training_args = TrainingArguments(
     output_dir=output_dir,
     learning_rate=2e-5,
-    per_device_train_batch_size=2 if DEBUG else 32,
-    per_device_eval_batch_size=4 if DEBUG else 32,
+    per_device_train_batch_size=2 if DEBUG else 2,
+    per_device_eval_batch_size=2 if DEBUG else 2,
     gradient_accumulation_steps=2,
-    num_train_epochs=1 if DEBUG else 4,
+    num_train_epochs=1 if DEBUG else 2,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     logging_strategy="steps",
@@ -373,7 +396,9 @@ training_args = TrainingArguments(
     load_best_model_at_end=False if DEBUG else True,
     metric_for_best_model="recall",
     label_names=["labels"],
-    max_grad_norm=1.0
+    max_grad_norm=1.0,
+    bf16=args.bf16,
+    gradient_checkpointing=args.gradient_checkpointing
 )
 
 # ------------------------- Save Config to File -------------------------
@@ -393,7 +418,9 @@ config_snapshot = {
     "quantized": args.quant,
     "lora_enabled": args.lora,
     "focal_loss_gamma": FL_GAMMA if args.class_imbalance_fix == "focal_loss" else "None",
-    "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None"
+    "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None",
+    "bf16": args.bf16,
+    "gradient_checkpointing": args.gradient_checkpointing
 }
 
 with open(config_path, "w") as f:
@@ -438,6 +465,8 @@ trainer = CustomTrainer(
     class_weights=class_weights if args.class_imbalance_fix == "weighted_loss" else None,
     focal_loss_fct=focal_loss_fct if args.class_imbalance_fix == "focal_loss" else None
 )
+
+torch.cuda.empty_cache()
 
 trainer.train()
 
