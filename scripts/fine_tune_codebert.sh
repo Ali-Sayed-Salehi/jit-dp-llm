@@ -15,7 +15,7 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
 
 echo "running the training script"
-python python sequence_classification.py --model_name codebert-base --live_metrics --perf_data
+python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --model_name codebert-base --live_metrics --perf_data --class_imbalance_fix focal_loss
 echo "training finished"
 
 echo "Cleaning up"
