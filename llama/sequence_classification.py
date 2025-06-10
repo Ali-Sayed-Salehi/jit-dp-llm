@@ -380,9 +380,9 @@ if args.lora:
 training_args = TrainingArguments(
     output_dir=output_dir,
     learning_rate=2e-5,
-    per_device_train_batch_size=2 if DEBUG else 2,
-    per_device_eval_batch_size=2 if DEBUG else 2,
-    gradient_accumulation_steps=2,
+    per_device_train_batch_size=2 if DEBUG else 4,
+    per_device_eval_batch_size=2 if DEBUG else 4,
+    gradient_accumulation_steps=8,
     num_train_epochs=1 if DEBUG else 2,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
@@ -420,7 +420,8 @@ config_snapshot = {
     "focal_loss_gamma": FL_GAMMA if args.class_imbalance_fix == "focal_loss" else "None",
     "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None",
     "bf16": args.bf16,
-    "gradient_checkpointing": args.gradient_checkpointing
+    "gradient_checkpointing": args.gradient_checkpointing,
+    "debug": DEBUG
 }
 
 with open(config_path, "w") as f:
