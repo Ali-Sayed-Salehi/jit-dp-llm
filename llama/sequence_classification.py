@@ -23,31 +23,19 @@ from collections import Counter
 from sklearn.utils.class_weight import compute_class_weight
 from peft import get_peft_model, LoraConfig, TaskType, prepare_model_for_kbit_training
 
-# ---------------------------- constants  ----------------------------
-
-REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-print(f"✅ Detected REPO_PATH: {REPO_PATH}")
-run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-output_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/output"
-tensorboard_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tensorboard"
-metrics_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/metrics"
-live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
-config_path = os.path.join(metrics_dir, "config.json")
-finetuned_model_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/model"
-finetuned_tokenizer_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tokenizer"
-
-training_dirs = [output_dir, tensorboard_dir, metrics_dir, finetuned_model_dir, finetuned_tokenizer_dir]
-
-for directory in training_dirs:
-    os.makedirs(directory, exist_ok=True)
-
 # ---------------------------- Parse Arguments ----------------------------
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
-parser.add_argument("--perf_data", action="store_true", help="Use performance dataset with oversampling instead of IMDb")
+parser.add_argument(
+    "--dataset",
+    type=str,
+    choices=["perf", "jit", "imdb"],
+    default="imdb",
+    help="Choose which dataset to use: 'perf', 'jit', or 'imdb'"
+)
+
 parser.add_argument("--model_name", type=str, default="distilbert-base-uncased", help="Name of the model to use")
 parser.add_argument(
     "--class_imbalance_fix",
@@ -65,6 +53,12 @@ parser.add_argument("--quant", action="store_true", help="Enable quantization wi
 parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
 parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 training")
 parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")
+parser.add_argument(
+    "--continue_from_dir", 
+    type=str, 
+    help="""Resume training from this checkpoint directory. 
+    Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output/checkpoint-100'"""
+)
 
 args = parser.parse_args()
 DEBUG = args.debug
@@ -72,9 +66,37 @@ LLAMA = "llama" in args.model_name.lower()
 focal_loss_fct = None
 FL_ALPHA = 2
 FL_GAMMA = 5
+LLAMA_MAX_SEQ_LENGTH = 4096 # or 8192
 
 if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
     raise ValueError("Threshold must be between 0 and 1 if specified")
+
+# ---------------------------- constants  ----------------------------
+
+REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+print(f"✅ Detected REPO_PATH: {REPO_PATH}")
+
+if args.continue_from_dir:
+    output_dir = args.continue_from_dir
+    run_timestamp = os.path.basename(os.path.dirname(output_dir)).split("_", 1)[-1]
+    print(f"🔁 Resuming from checkpoint in: {output_dir}")
+else:
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/output"
+
+
+tensorboard_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tensorboard"
+metrics_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/metrics"
+live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
+config_path = os.path.join(metrics_dir, "config.json")
+finetuned_model_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/model"
+finetuned_tokenizer_dir = f"{REPO_PATH}/llama/training/run_{run_timestamp}/tokenizer"
+
+training_dirs = [output_dir, tensorboard_dir, metrics_dir, finetuned_model_dir, finetuned_tokenizer_dir]
+
+for directory in training_dirs:
+    os.makedirs(directory, exist_ok=True)
+
 
 # ------------------------- Local model path -------------------------
 
@@ -112,10 +134,19 @@ class FocalLoss(nn.Module):
 
 # ------------------------- Load dataset and fix class imbalance -------------------------
 
-if args.perf_data:
-    print("📂 Using performance dataset...")
+dataset_name = args.dataset
+print(f"📂 Loading dataset: {dataset_name}")
 
-    dataset = load_dataset("json", data_files=f"{REPO_PATH}/datasets/dataset.jsonl", split="train")
+dataset_file_map = {
+    "perf": "dataset.jsonl",
+    "jit": "jit_dp/final_dataset.jsonl",
+    "imdb": None  # will use Hugging Face IMDb dataset
+}
+
+if dataset_name in ["perf", "jit"]:
+    dataset_path = os.path.join(REPO_PATH, "datasets", dataset_file_map[dataset_name])
+    dataset = load_dataset("json", data_files=dataset_path, split="train")
+
     split_ratio = 0.8
     split_index = int(len(dataset) * split_ratio)
 
@@ -208,7 +239,7 @@ if LLAMA:
     tokenizer.pad_token = tokenizer.eos_token
 
 # Dynamically determine max sequence length
-DEFAULT_MAX_SEQ_LENGTH = 4096 if LLAMA else tokenizer.model_max_length
+DEFAULT_MAX_SEQ_LENGTH = LLAMA_MAX_SEQ_LENGTH if LLAMA else tokenizer.model_max_length
 
 def get_token_length(example):
     return {"length": len(tokenizer(example["text"], truncation=False)["input_ids"])}
@@ -392,7 +423,7 @@ training_args = TrainingArguments(
     eval_strategy="steps",
     eval_steps=1 if DEBUG else 50,
     save_steps=1 if DEBUG else 50,
-    save_total_limit=1,
+    save_total_limit=2,
     load_best_model_at_end=False if DEBUG else True,
     metric_for_best_model="recall",
     label_names=["labels"],
@@ -406,7 +437,7 @@ config_snapshot = {
     "timestamp": run_timestamp,
     "model_name": args.model_name,
     "class_imbalance_fix": args.class_imbalance_fix,
-    "dataset": "perf_data" if args.perf_data else "IMDb",
+    "dataset": dataset_name,
     "learning_rate": training_args.learning_rate,
     "epochs": training_args.num_train_epochs,
     "train_batch_size": training_args.per_device_train_batch_size,
@@ -421,6 +452,7 @@ config_snapshot = {
     "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None",
     "bf16": args.bf16,
     "gradient_checkpointing": args.gradient_checkpointing,
+    "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
     "debug": DEBUG
 }
 
@@ -469,7 +501,7 @@ trainer = CustomTrainer(
 
 torch.cuda.empty_cache()
 
-trainer.train()
+trainer.train(resume_from_checkpoint=args.continue_from_dir)
 
 # ---------------------------- Save Metrics and Plot ----------------------------
 
