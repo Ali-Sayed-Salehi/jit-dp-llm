@@ -23,7 +23,9 @@ def get_commit_message(owner, repo, sha):
     url = f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}"
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
-        return response.json()["commit"]["message"]
+        full_message = response.json()["commit"]["message"]
+        main_message = full_message.split("\n\n")[0].strip()
+        return main_message
     else:
         raise Exception(f"❌ Failed to get commit message: {response.status_code} {response.text}")
 
