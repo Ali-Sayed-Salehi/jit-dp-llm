@@ -501,7 +501,7 @@ trainer = CustomTrainer(
 
 torch.cuda.empty_cache()
 
-trainer.train(resume_from_checkpoint=args.continue_from_dir)
+trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
 # ---------------------------- Save Metrics and Plot ----------------------------
 
