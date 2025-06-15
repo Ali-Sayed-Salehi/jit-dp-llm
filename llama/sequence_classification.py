@@ -36,13 +36,17 @@ parser.add_argument(
     help="Choose which dataset to use: 'perf', 'jit', or 'imdb'"
 )
 
-parser.add_argument("--model_name", type=str, default="distilbert-base-uncased", help="Name of the model to use")
+parser.add_argument("--model_name", type=str, default="distilbert/distilbert-base-uncased", help="""Name of the model to use. 
+                                                                                    Example: meta-llama/Llama-3.2-3B, 
+                                                                                    meta-llama/Meta-Llama-3-8B, 
+                                                                                    microsoft/codebert-base, 
+                                                                                    distilbert/distilbert-base-uncased""")
 parser.add_argument(
     "--class_imbalance_fix",
     type=str,
     choices=["oversampling", "weighted_loss", "focal_loss", "none"],
     default="none",
-    help="Class imbalance handling method: 'oversampling' (default), or 'weighted_loss'"
+    help="Class imbalance handling method: 'oversampling', or 'weighted_loss. Default is no fix for class imbalance.'"
 )
 parser.add_argument(
     "--threshold",
@@ -57,7 +61,7 @@ parser.add_argument(
     "--continue_from_dir", 
     type=str, 
     help="""Resume training from this checkpoint directory. 
-    Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output/checkpoint-100'"""
+    Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
 )
 
 args = parser.parse_args()
@@ -66,7 +70,8 @@ LLAMA = "llama" in args.model_name.lower()
 focal_loss_fct = None
 FL_ALPHA = 2
 FL_GAMMA = 5
-LLAMA_MAX_SEQ_LENGTH = 4096 # or 8192
+# what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
+SEQ_LEN_PERCENTILE = 100
 
 if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
     raise ValueError("Threshold must be between 0 and 1 if specified")
@@ -102,6 +107,9 @@ for directory in training_dirs:
 
 MODEL_PATH = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_name)
 print(f"🧠 Using model: {args.model_name} from {MODEL_PATH}")
+
+if not os.path.isdir(MODEL_PATH):
+    raise ValueError(f"🚫 MODEL_PATH does not exist: {MODEL_PATH}")
 
 # ------------------------- HF login -------------------------
 
@@ -139,7 +147,7 @@ print(f"📂 Loading dataset: {dataset_name}")
 
 dataset_file_map = {
     "perf": "dataset.jsonl",
-    "jit": "jit_dp/final_dataset.jsonl",
+    "jit": "jit_dp/apachejit_llm_small.jsonl",
     "imdb": None  # will use Hugging Face IMDb dataset
 }
 
@@ -169,6 +177,13 @@ if dataset_name in ["perf", "jit"]:
     eval_formatted = eval_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
 
     imbalance_fix = args.class_imbalance_fix
+
+    # Compute class distribution before class imbalance fix
+    original_label_counts = Counter(train_formatted["label"])
+    original_class_distribution = {
+        str(label): int(count)
+        for label, count in sorted(original_label_counts.items())
+    }
 
     if imbalance_fix == "weighted_loss":
         print("🔄 Applying weighted loss...")
@@ -234,12 +249,11 @@ class_distribution = {
 
 # ------------------------- tokenize -------------------------
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+config = AutoConfig.from_pretrained(MODEL_PATH)
+
 if LLAMA:
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.pad_token = tokenizer.eos_token
-
-# Dynamically determine max sequence length
-DEFAULT_MAX_SEQ_LENGTH = LLAMA_MAX_SEQ_LENGTH if LLAMA else tokenizer.model_max_length
 
 def get_token_length(example):
     return {"length": len(tokenizer(example["text"], truncation=False)["input_ids"])}
@@ -249,11 +263,14 @@ length_sample = dataset["train"]
 lengths_dataset = length_sample.map(get_token_length)
 lengths = lengths_dataset["length"]
 
-calculated_max_length = int(np.percentile(lengths, 80))
+calculated_max_length = int(np.percentile(lengths, SEQ_LEN_PERCENTILE))
 
-MAX_SEQ_LENGTH = min(calculated_max_length, DEFAULT_MAX_SEQ_LENGTH)
+MAX_SEQ_LENGTH = min(calculated_max_length, tokenizer.model_max_length, config.max_position_embeddings)
 
-print(f"✅ Using max_seq_length={MAX_SEQ_LENGTH} (80th percentile = {calculated_max_length}, tokenizer limit = {MAX_SEQ_LENGTH})")
+print(f"""✅ Using max_seq_length={MAX_SEQ_LENGTH}, 
+    {SEQ_LEN_PERCENTILE}th percentile = {calculated_max_length}, 
+    tokenizer limit = {MAX_SEQ_LENGTH}, 
+    model limit = {config.max_position_embeddings}""")
 
 
 def tokenize_data(examples):
@@ -277,7 +294,7 @@ precision = evaluate.load("precision")
 recall = evaluate.load("recall")
 f1 = evaluate.load("f1")
 
-def recall_at_top_k(pred_scores, true_labels, percentages=[0.1, 0.25, 0.5]):
+def recall_at_top_k(pred_scores, true_labels, percentages=[0.05, 0.1, 0.5]):
     results = {}
     total_positives = np.sum(true_labels)
     
@@ -298,7 +315,7 @@ def compute_metrics(eval_pred):
     probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
 
     # Simulate gating the top k % of most likely regressions
-    recall_at_k_metrics = recall_at_top_k(probs[:, 1], labels, percentages=[0.1, 0.25, 0.5])
+    recall_at_k_metrics = recall_at_top_k(probs[:, 1], labels, percentages=[0.05, 0.1, 0.5])
     
     if args.threshold is not None:
         threshold = args.threshold
@@ -411,9 +428,9 @@ if args.lora:
 training_args = TrainingArguments(
     output_dir=output_dir,
     learning_rate=2e-5,
-    per_device_train_batch_size=2 if DEBUG else 4,
-    per_device_eval_batch_size=2 if DEBUG else 4,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=1 if DEBUG else 1,
+    per_device_eval_batch_size=1 if DEBUG else 1,
+    gradient_accumulation_steps=16,
     num_train_epochs=1 if DEBUG else 2,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
@@ -425,7 +442,8 @@ training_args = TrainingArguments(
     save_steps=1 if DEBUG else 25,
     save_total_limit=2,
     load_best_model_at_end=False if DEBUG else True,
-    metric_for_best_model="recall",
+    metric_for_best_model="f1",
+    greater_is_better=True,
     label_names=["labels"],
     max_grad_norm=1.0,
     bf16=args.bf16,
@@ -445,6 +463,7 @@ config_snapshot = {
     "weight_decay": training_args.weight_decay,
     "metric_for_best_model": training_args.metric_for_best_model,
     "class_distribution": class_distribution,
+    "original_class_distribution": original_class_distribution,
     "decision_threshold": args.threshold if args.threshold is not None else "argmax",
     "quantized": args.quant,
     "lora_enabled": args.lora,
@@ -453,8 +472,11 @@ config_snapshot = {
     "bf16": args.bf16,
     "gradient_checkpointing": args.gradient_checkpointing,
     "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+    "max_sequence_length": MAX_SEQ_LENGTH,
     "debug": DEBUG
 }
+
+config_snapshot["model_config"] = model.config.to_dict()
 
 with open(config_path, "w") as f:
     json.dump(config_snapshot, f, indent=2)
@@ -502,6 +524,17 @@ trainer = CustomTrainer(
 torch.cuda.empty_cache()
 
 trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
+
+# ---------------------------- Evaluate Best Model and Save ----------------------------
+
+if training_args.load_best_model_at_end:
+    best_eval_metrics = trainer.evaluate()
+
+    best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
+    with open(best_model_metrics_path, "w") as f:
+        json.dump(best_eval_metrics, f, indent=4)
+
+    print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
 
 # ---------------------------- Save Metrics and Plot ----------------------------
 
