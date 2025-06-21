@@ -7,6 +7,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, precision_score, f1_score, roc_auc_score, recall_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import resample
+from sklearn.model_selection import train_test_split
 import joblib
 from imblearn.over_sampling import SMOTE
 from itertools import product
@@ -40,14 +41,26 @@ for directory in training_dirs:
 
 # ---------------------------- Load Dataset ----------------------------
 
-dataset_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_logreg_small.csv")
+dataset_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_logreg.csv")
 df = pd.read_csv(dataset_path)
 X = df.iloc[:, :-1].values
 y = df.iloc[:, -1].values
 
-split_index = int(len(X) * 0.8)
-X_train, X_test = X[:split_index], X[split_index:]
-y_train, y_test = y[:split_index], y[split_index:]
+# Chronologically split the dataset: 64% train, 16% eval, 20% test
+n_total = len(X)
+n_train = int(n_total * 0.64)
+n_eval = int(n_total * 0.16)
+
+X_train = X[:n_train]
+y_train = y[:n_train]
+
+X_eval = X[n_train:n_train + n_eval]
+y_eval = y[n_train:n_train + n_eval]
+
+X_test = X[n_train + n_eval:]
+y_test = y[n_train + n_eval:]
+
+print(f"🔢 Dataset split sizes — Train: {len(X_train)}, Eval: {len(X_eval)}, Test: {len(X_test)}")
 
 original_class_distribution = {str(k): int(v) for k, v in Counter(y_train).items()}
 
@@ -55,6 +68,7 @@ original_class_distribution = {str(k): int(v) for k, v in Counter(y_train).items
 
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
+X_eval_scaled = scaler.transform(X_eval)
 X_test_scaled = scaler.transform(X_test)
 
 # ---------------------------- Imbalance Handling ----------------------------
@@ -75,6 +89,15 @@ def apply_class_imbalance_fix(strategy, X, y):
         X_resampled = upsampled.iloc[:, :-1].values
         y_resampled = upsampled.iloc[:, -1].values.astype(int)
         return X_resampled, y_resampled, None
+    elif strategy == "downsample":
+        df_combined = pd.DataFrame(np.hstack((X, y.reshape(-1, 1))))
+        majority = df_combined[df_combined.iloc[:, -1] == 0]
+        minority = df_combined[df_combined.iloc[:, -1] == 1]
+        majority_downsampled = resample(majority, replace=False, n_samples=len(minority), random_state=42)
+        downsampled = pd.concat([majority_downsampled, minority])
+        X_resampled = downsampled.iloc[:, :-1].values
+        y_resampled = downsampled.iloc[:, -1].values.astype(int)
+        return X_resampled, y_resampled, None
     return X, y, None
 
 # ---------------------------- Evaluation Metric ----------------------------
@@ -93,7 +116,7 @@ def recall_at_top_k(pred_probs, true_labels, percentages=[0.1]):
 
 # ---------------------------- Grid Search Setup ----------------------------
 
-imbalance_strategies = [None, "class_weight", "smote", "oversample"]
+imbalance_strategies = [None, "class_weight", "smote", "oversample", "downsample"]
 penalties = ["l1", "l2", "elasticnet", None]
 solvers = ["liblinear", "lbfgs", "newton-cg", "sag", "saga"]
 C_values = [0.01, 0.1, 1, 10, 100]
@@ -118,7 +141,7 @@ for strategy, penalty, solver, C in product(imbalance_strategies, penalties, sol
 
     print(f"\n🔍 Trying: imbalance strategy={strategy}, penalty={penalty}, solver={solver}, C={C}")
     X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    X_eval_scaled = scaler.transform(X_eval)
     X_fixed, y_fixed, class_weight = apply_class_imbalance_fix(strategy, X_train_scaled, y_train)
     new_class_distribution = {str(k): int(v) for k, v in Counter(y_fixed).items()}
 
@@ -140,17 +163,17 @@ for strategy, penalty, solver, C in product(imbalance_strategies, penalties, sol
         print(f"❌ Skipping due to error: {e}")
         continue
 
-    y_proba = model.predict_proba(X_test_scaled)[:, 1]
-    y_pred = model.predict(X_test_scaled)
+    y_proba = model.predict_proba(X_eval_scaled)[:, 1]
+    y_pred = model.predict(X_eval_scaled)
 
-    recall_top_k = recall_at_top_k(y_proba, y_test, percentages=[0.05, 0.1, 0.5])
-    recall = recall_score(y_test, y_pred, zero_division=0)
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, zero_division=0)
-    f1 = f1_score(y_test, y_pred, zero_division=0)
-    auc = roc_auc_score(y_test, y_proba)
-    # report = classification_report(y_test, y_pred, output_dict=True)
-    conf_matrix = confusion_matrix(y_test, y_pred).tolist()
+    recall_top_k = recall_at_top_k(y_proba, y_eval, percentages=[0.05, 0.1, 0.5])
+    recall = recall_score(y_eval, y_pred, zero_division=0)
+    accuracy = accuracy_score(y_eval, y_pred)
+    precision = precision_score(y_eval, y_pred, zero_division=0)
+    f1 = f1_score(y_eval, y_pred, zero_division=0)
+    auc = roc_auc_score(y_eval, y_proba)
+    # report = classification_report(y_eval, y_pred, output_dict=True)
+    conf_matrix = confusion_matrix(y_eval, y_pred).tolist()
 
     metrics = {
         "imbalance strategy": strategy,
@@ -198,3 +221,40 @@ joblib.dump(best_scaler, os.path.join(model_dir, "scaler.joblib"))
 print("\n🏆 Best config:")
 print(json.dumps(best_metrics, indent=2))
 print(f"📂 Results saved in {output_dir}")
+
+# ---------------------------- Final Inference on Chronological Test Set ----------------------------
+
+X_final_test_scaled = best_scaler.transform(X_test)
+y_final_proba = best_model.predict_proba(X_final_test_scaled)[:, 1]
+y_final_pred = best_model.predict(X_final_test_scaled)
+
+final_recall_top_k = recall_at_top_k(y_final_proba, y_test, percentages=[0.05, 0.1, 0.5])
+final_recall = recall_score(y_test, y_final_pred, zero_division=0)
+final_accuracy = accuracy_score(y_test, y_final_pred)
+final_precision = precision_score(y_test, y_final_pred, zero_division=0)
+final_f1 = f1_score(y_test, y_final_pred, zero_division=0)
+final_auc = roc_auc_score(y_test, y_final_proba)
+final_conf_matrix = confusion_matrix(y_test, y_final_pred).tolist()
+
+final_test_metrics = {
+    "accuracy": final_accuracy,
+    "precision": final_precision,
+    "recall": final_recall,
+    "f1_score": final_f1,
+    "auc": final_auc,
+    "confusion_matrix": final_conf_matrix,
+    "recall_at_top_k": final_recall_top_k,
+}
+
+final_test_output = {
+    "metrics": final_test_metrics,
+    "predictions": y_final_pred.tolist(),
+    "probabilities": y_final_proba.tolist(),
+    "true_labels": y_test.tolist()
+}
+
+with open(os.path.join(metrics_dir, "final_test_results.json"), "w") as f:
+    json.dump(final_test_output, f, indent=2)
+
+print("\n🧪 Final test set evaluation:")
+print(json.dumps(final_test_metrics, indent=2))

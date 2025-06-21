@@ -1,7 +1,7 @@
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import os
 
-model_id = "meta-llama/Llama-4-Scout-17B-16E"
+model_id = "meta-llama/Llama-3.1-8B"
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 print(f"✅ Detected REPO_PATH: {REPO_PATH}")

@@ -14,3 +14,4 @@ __pychache__/
 /LLMs
 /slurm_jobs
 /llama/training
+/github_api/repos/*

@@ -5,7 +5,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=100:00:00
+#SBATCH --time=150:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
 
@@ -21,5 +21,6 @@ echo "activating venv"
 source /speed-scratch/$USER/repos/perf-pilot/venv/bin/activate.csh
 
 echo "running the data extraction script . . ."
-python /speed-scratch/a_s87063/repos/perf-pilot/github_api/get_jit_dataset.py
+# python /speed-scratch/a_s87063/repos/perf-pilot/github_api/get_jit_dataset.py
+python /speed-scratch/a_s87063/repos/perf-pilot/llama/data_preparation.py --mode apachejit_logreg
 echo "extraction finished"
