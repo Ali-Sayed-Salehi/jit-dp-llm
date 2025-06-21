@@ -3,27 +3,59 @@ from pprint import pprint
 import sys
 import os
 import time
+import json
+import csv
+import argparse
 from fetch_commit_data import get_commit_diff, get_commit_message
 
+# ---------------------------- Parse Args ----------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument("--debug", action="store_true", help="Run in debug mode with only a few commits")
+args = parser.parse_args()
+
+DEBUG = args.debug
+
+# ---------------------------- Setup Paths ----------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
-csv_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_train.csv")
+csv_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_total.csv")
+success_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_with_diff.jsonl")
+fail_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_failed.csv")
 
 apachejit_df = pd.read_csv(csv_path)
 apachejit_list = apachejit_df.to_dict(orient='records')
 
-jit_with_diff_list = []
-failed_commits = []
+# ---------------------------- Load Already Processed ----------------------------
+processed_commit_ids = set()
+if os.path.exists(success_path):
+    with open(success_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                processed_commit_ids.add(data.get("commit_id"))
+            except json.JSONDecodeError:
+                continue
+
+if DEBUG:
+    apachejit_list = apachejit_list[:10]
+    print("🐞 DEBUG mode is ON: Only processing first 10 commits")
 
 OWNER = "apache"
 MAX_RETRIES = 2
 RETRY_DELAY = 1  # seconds
-REQUEST_DELAY = 1.4  # rate limit is 5000 req/hour
+REQUEST_DELAY = 1.4  # GitHub API limit ~5000 req/hour
+
+# Track if fail file exists to decide on writing header
+fail_file_exists = os.path.exists(fail_path)
 
 for commit in apachejit_list:
+    commit_hash = commit.get('commit_id')
+    if commit_hash in processed_commit_ids:
+        print(f"⏩ Skipping already processed commit {commit_hash}")
+        continue
+
     project = commit.get('project')
     project_parts = project.split("/")
     repo = project_parts[1]
-    commit_hash = commit.get('commit_id')
 
     retries = 0
     success = False
@@ -34,7 +66,7 @@ for commit in apachejit_list:
             diff = get_commit_diff(OWNER, repo, commit_hash)
             success = True
             if retries > 0:
-                print(f"✅ Success after {retries} retries")
+                print(f"✅ Success after {retries} retries for {commit_hash}")
             time.sleep(REQUEST_DELAY)
         except Exception as e:
             retries += 1
@@ -42,7 +74,14 @@ for commit in apachejit_list:
                 time.sleep(RETRY_DELAY)
             else:
                 print(f"❌ Skipping commit {commit_hash} after {MAX_RETRIES} failed attempts.")
-                failed_commits.append(commit)
+                # Append failed commit immediately
+                write_header = not fail_file_exists
+                with open(fail_path, "a", newline='', encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=commit.keys())
+                    if write_header:
+                        writer.writeheader()
+                        fail_file_exists = True
+                    writer.writerow(commit)
                 break
 
     if not success:
@@ -51,19 +90,9 @@ for commit in apachejit_list:
     commit_with_diff = commit
     commit_with_diff['commit_message'] = message
     commit_with_diff['diff'] = diff
-    jit_with_diff_list.append(commit_with_diff)
 
-# Save successful commits to JSONL
-jit_with_diff_df = pd.DataFrame(jit_with_diff_list)
-jit_with_diff_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_with_diff.jsonl")
-jit_with_diff_df.to_json(jit_with_diff_path, orient="records", lines=True)
-print(f"✅ Saved {len(jit_with_diff_list)} successful commits to {jit_with_diff_path}")
+    with open(success_path, "a", encoding="utf-8") as f:
+        json.dump(commit_with_diff, f)
+        f.write("\n")
 
-# Save failed commits to CSV
-if failed_commits:
-    failed_df = pd.DataFrame(failed_commits)
-    failed_path = os.path.join(script_dir, "..", "datasets", "jit_dp", "apachejit_failed.csv")
-    failed_df.to_csv(failed_path, index=False)
-    print(f"⚠️ Saved {len(failed_commits)} failed commits to {failed_path}")
-else:
-    print("✅ All commits processed successfully!")
+print("✅ Finished. All results written incrementally to output files.")

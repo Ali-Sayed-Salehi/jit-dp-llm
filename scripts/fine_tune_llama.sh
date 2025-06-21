@@ -7,7 +7,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=100:00:00
+#SBATCH --time=150:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
 
@@ -15,7 +15,7 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
 
 echo "running the training script"
-python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit --model_name meta-llama/Meta-Llama-3-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing
+python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small --model_name meta-llama/Llama-3.1-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_5%
 echo "training finished"
 
 echo "Cleaning up"
