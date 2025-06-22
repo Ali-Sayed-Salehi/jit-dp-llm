@@ -1,32 +1,12 @@
 import os
 import subprocess
 import sys
+import javalang
 from difflib import unified_diff
 from collections import defaultdict
-import re
-from tree_sitter import Language, Parser
 
 # ---------------------- Config ----------------------
-REPOS_ROOT = "/speed-scratch/a_s87063/repos/perf-pilot/github_api/repos"
-JAVA_LANGUAGE_LIB = "/speed-scratch/a_s87063/repos/perf-pilot/github_api/tree-sitter-langs.so"
-JAVA_LANGUAGE_REPO = "tree-sitter-java"
-
-# ---------------------- Tree-sitter Init Script Call ----------------------
-def initialize_tree_sitter():
-    if not os.path.exists(JAVA_LANGUAGE_LIB):
-        print("⚙️ Initializing Tree-sitter shared library...")
-        subprocess.run([
-            "python", "tree_sitter_init.py",
-            JAVA_LANGUAGE_LIB,
-            JAVA_LANGUAGE_REPO
-        ], check=True)
-
-initialize_tree_sitter()
-
-JAVA_LANGUAGE = Language(JAVA_LANGUAGE_LIB, "java")
-PARSER = Parser()
-if PARSER.language != JAVA_LANGUAGE:
-    PARSER.set_language(JAVA_LANGUAGE)
+REPOS_ROOT = "/speed-scratch/a_s87063/repos/perf-pilot/github_api/repos"  # All repos will be cloned here
 
 def get_repo_path(owner, name):
     return os.path.join(REPOS_ROOT, f"{owner}__{name}")
@@ -36,7 +16,7 @@ def clone_if_needed(owner, name):
     if not os.path.exists(repo_path):
         os.makedirs(REPOS_ROOT, exist_ok=True)
         url = f"https://github.com/{owner}/{name}.git"
-        print(f"📅 Cloning {url}...")
+        print(f"📥 Cloning {url}...")
         subprocess.run(["git", "clone", url, repo_path], check=True)
     return repo_path
 
@@ -64,77 +44,55 @@ def get_file(repo_path, revision, filepath):
     except subprocess.CalledProcessError:
         return []
 
-# ---------------------- Tree-sitter Utilities ----------------------
+# ---------------------- AST Logic ----------------------
 
-def remove_comments_and_imports(code_lines):
+def parse_ast_info(code_lines, lineno):
     code = "\n".join(code_lines)
-    tree = PARSER.parse(bytes(code, "utf8"))
-    root = tree.root_node
-    lines_to_exclude = set()
-
-    def visit(node):
-        if node.type in {"line_comment", "block_comment"}:
-            for i in range(node.start_point[0], node.end_point[0] + 1):
-                lines_to_exclude.add(i)
-        elif node.type in {"import_declaration", "package_declaration"}:
-            for i in range(node.start_point[0], node.end_point[0] + 1):
-                lines_to_exclude.add(i)
-        for child in node.children:
-            visit(child)
-
-    visit(root)
-    return [line for idx, line in enumerate(code_lines) if idx not in lines_to_exclude]
-
-def get_enclosing_method_and_path(code_lines, lineno, max_depth=6):
-    code = "\n".join(code_lines)
-    tree = PARSER.parse(bytes(code, "utf8"))
-    root = tree.root_node
+    try:
+        tree = javalang.parse.parse(code)
+    except Exception as e:
+        print(f"⚠️ AST parse failed at line {lineno}: {e}")
+        return "UnknownMethod", "UnknownPath"
 
     method_name = "UnknownMethod"
-    ast_path = []
+    shortest_path = None
 
-    def find(node, path):
-        nonlocal method_name, ast_path
-        if node.start_point[0] <= lineno <= node.end_point[0]:
-            path.append(node.type)
-            if node.type == "method_declaration":
-                method_name = code[node.start_byte:node.end_byte].split("(")[0].strip().split()[-1]
-            for child in node.children:
-                find(child, path[:])
-            if len(path) <= max_depth:
-                ast_path = path
+    for path, node in tree.filter(javalang.tree.Node):
+        # Get method name if inside one
+        if isinstance(node, javalang.tree.MethodDeclaration):
+            if node.position and node.position.line and node.position.line <= lineno:
+                method_name = node.name
 
-    find(root, [])
-    return method_name, ">".join(ast_path) if ast_path else "UnknownPath"
+        # Check if this node corresponds to the diff line
+        if hasattr(node, 'position') and node.position and node.position.line == lineno:
+            path_names = [type(p).__name__ for p in path] + [type(node).__name__]
+            if not shortest_path or len(path_names) < len(shortest_path):
+                shortest_path = path_names
+
+    return method_name, ">".join(shortest_path) if shortest_path else "UnknownPath"
+
 
 # ---------------------- Diff Formatter ----------------------
 
 def format_diff(owner, repo_name, commit_hash):
     repo_path = clone_if_needed(owner, repo_name)
     output_lines = []
+
     output_lines.append(f"<COMMIT_MESSAGE>{get_commit_message(repo_path, commit_hash)}</COMMIT_MESSAGE>\n")
 
     changed_files = get_changed_java_files(repo_path, commit_hash)
     for file_path in changed_files:
-        before_raw = get_file(repo_path, f"{commit_hash}^", file_path)
-        after_raw = get_file(repo_path, commit_hash, file_path)
-
-        if not before_raw and after_raw:
-            output_lines.append(f"<FILE name=\"{file_path}\">\n  <ADDED_FILE/>\n</FILE>\n")
-            continue
-        elif before_raw and not after_raw:
-            output_lines.append(f"<FILE name=\"{file_path}\">\n  <REMOVED_FILE/>\n</FILE>\n")
-            continue
-
-        before = remove_comments_and_imports(before_raw)
-        after = remove_comments_and_imports(after_raw)
+        before = get_file(repo_path, f"{commit_hash}^", file_path)
+        after = get_file(repo_path, commit_hash, file_path)
 
         output_lines.append(f"<FILE name=\"{file_path}\">")
 
         diff = list(unified_diff(before, after, n=0))
+
         old_line = None
         new_line = None
 
+        # Structure: {function: {'removed': {path: [lines]}, 'added': {path: [lines]}}}
         function_changes = defaultdict(lambda: {'removed': defaultdict(list), 'added': defaultdict(list)})
 
         for line in diff:
@@ -146,14 +104,14 @@ def format_diff(owner, repo_name, commit_hash):
                 if old_line is None:
                     continue
                 content = line[1:].rstrip()
-                method, path = get_enclosing_method_and_path(before, old_line - 1)
+                method, path = parse_ast_info(before, old_line)
                 function_changes[method]['removed'][path].append(content)
                 old_line += 1
             elif line.startswith('+'):
                 if new_line is None:
                     continue
                 content = line[1:].rstrip()
-                method, path = get_enclosing_method_and_path(after, new_line - 1)
+                method, path = parse_ast_info(after, new_line)
                 function_changes[method]['added'][path].append(content)
                 new_line += 1
 
@@ -180,12 +138,14 @@ def format_diff(owner, repo_name, commit_hash):
 
             output_lines.append("  </FUNCTION>")
 
-        output_lines.append("</FILE>\n")
+        output_lines.append(f"</FILE>\n")
 
     filename = f"{owner}__{repo_name}__{commit_hash}.xml"
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(output_lines))
     print(f"✅ Output written to {filename}")
+
+
 
 # ---------------------- Entry ----------------------
 
