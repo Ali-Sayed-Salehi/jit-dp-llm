@@ -8,6 +8,7 @@ import re
 # ---------------------- Config ----------------------
 REPOS_ROOT = "/speed-scratch/a_s87063/repos/perf-pilot/github_api/repos"  # All repos will be cloned here
 GUMTREE_CLI = os.path.join(os.path.dirname(__file__), "tools", "gumtree", "bin", "gumtree")
+SUPPORTED_EXTENSIONS = {".java", ".py", ".js", ".c", ".cpp", ".xml", ".json", ".txt", ".html", ".css"}
 
 # ---------------------- Git Logic ----------------------
 
@@ -19,7 +20,7 @@ def clone_if_needed(owner, name):
     if not os.path.exists(repo_path):
         os.makedirs(REPOS_ROOT, exist_ok=True)
         url = f"https://github.com/{owner}/{name}.git"
-        print(f"📥 Cloning {url}...")
+        print(f"📅 Cloning {url}...")
         subprocess.run(["git", "clone", url, repo_path], check=True)
     return repo_path
 
@@ -55,6 +56,24 @@ def run_gumtree_diff(file_before, file_after):
     except subprocess.CalledProcessError:
         return ["(gumtree error)"]
 
+def run_fallback_diff(text_before, text_after):
+    before_lines = text_before.strip().splitlines()
+    after_lines = text_after.strip().splitlines()
+    diff = []
+    for i, (b, a) in enumerate(zip(before_lines, after_lines)):
+        if b != a:
+            diff.append(f"- {b}")
+            diff.append(f"+ {a}")
+    if len(after_lines) > len(before_lines):
+        diff.extend(f"+ {line}" for line in after_lines[len(before_lines):])
+    elif len(before_lines) > len(after_lines):
+        diff.extend(f"- {line}" for line in before_lines[len(after_lines):])
+    return diff if diff else ["(no significant change)"]
+
+def is_supported_file(path):
+    _, ext = os.path.splitext(path)
+    return ext.lower() in SUPPORTED_EXTENSIONS
+
 # ---------------------- Main Formatter ----------------------
 
 def summarize_diff(owner, repo_name, commit_hash):
@@ -67,28 +86,37 @@ def summarize_diff(owner, repo_name, commit_hash):
     for status, path in changed_files:
         output_lines.append(f"--- {status} {path} ---")
 
-        if status == 'A':
-            after = get_file_content(repo_path, commit_hash, path)
-            with tempfile.NamedTemporaryFile(delete=False, mode='w') as tmp_after:
-                tmp_after.write(after)
-                after_path = tmp_after.name
-            output = run_gumtree_diff("/dev/null", after_path)
-        elif status == 'D':
-            before = get_file_content(repo_path, f"{commit_hash}^", path)
-            with tempfile.NamedTemporaryFile(delete=False, mode='w') as tmp_before:
-                tmp_before.write(before)
-                before_path = tmp_before.name
-            output = run_gumtree_diff(before_path, "/dev/null")
+        before = get_file_content(repo_path, f"{commit_hash}^", path) if status != 'A' else ""
+        after = get_file_content(repo_path, commit_hash, path) if status != 'D' else ""
+
+        if is_supported_file(path):
+            ext = os.path.splitext(path)[1]
+            if status == 'A':
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_empty:
+                    tmp_empty.write("")
+                    empty_path = tmp_empty.name
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_after:
+                    tmp_after.write(after)
+                    after_path = tmp_after.name
+                output = run_gumtree_diff(empty_path, after_path)
+            elif status == 'D':
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_before:
+                    tmp_before.write(before)
+                    before_path = tmp_before.name
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_empty:
+                    tmp_empty.write("")
+                    empty_path = tmp_empty.name
+                output = run_gumtree_diff(tmp_before.name, empty_path)
+            else:
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_before:
+                    tmp_before.write(before)
+                    before_path = tmp_before.name
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=ext) as tmp_after:
+                    tmp_after.write(after)
+                    after_path = tmp_after.name
+                output = run_gumtree_diff(before_path, after_path)
         else:
-            before = get_file_content(repo_path, f"{commit_hash}^", path)
-            after = get_file_content(repo_path, commit_hash, path)
-            with tempfile.NamedTemporaryFile(delete=False, mode='w') as tmp_before:
-                tmp_before.write(before)
-                before_path = tmp_before.name
-            with tempfile.NamedTemporaryFile(delete=False, mode='w') as tmp_after:
-                tmp_after.write(after)
-                after_path = tmp_after.name
-            output = run_gumtree_diff(before_path, after_path)
+            output = run_fallback_diff(before, after)
 
         output_lines.extend(output)
         output_lines.append("")
