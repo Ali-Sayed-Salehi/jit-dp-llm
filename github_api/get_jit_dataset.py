@@ -26,12 +26,13 @@ DEBUG = args.debug
 # ---------------------------- Setup Paths ----------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
 csv_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}.csv")
-if args.struc:
-    success_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_with_struc_diff.jsonl")
-    fail_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_failed_struc.csv")
-elif args.ast:
+
+if args.ast:
     success_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_with_struc_ast_diff.jsonl")
     fail_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_failed_struc_ast.csv")
+elif args.struc:
+    success_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_with_struc_diff.jsonl")
+    fail_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_failed_struc.csv")
 else:
     success_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_with_diff.jsonl")
     fail_path = os.path.join(script_dir, "..", "datasets", "jit_dp", f"apachejit_{size}_failed.csv")
