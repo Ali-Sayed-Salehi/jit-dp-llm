@@ -21,5 +21,5 @@ echo "activating venv"
 source /speed-scratch/$USER/repos/perf-pilot/venv/bin/activate.csh
 
 echo "running logistic regression script . . ."
-python /speed-scratch/a_s87063/repos/perf-pilot/llama/logistic_regression_grid_search.py --selection_metric recall@top_5%
+python /speed-scratch/a_s87063/repos/perf-pilot/llama/logistic_regression_grid_search.py --selection_metric recall@top_30%
 echo "optimization finished"
