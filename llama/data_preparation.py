@@ -18,7 +18,8 @@ parser.add_argument(
     help="""choose which data operation to do.
     apachejit_llm: ApacheJIT defect prediction dataset for LLMs,
     apachejit_logreg: ApacheJIT defect prediction dataset for logistic regression,
-    mozilla_perf: Mozilla Performance regression dataset
+    mozilla_perf: Mozilla Performance regression dataset,
+    apachejit_llm_struc: ApacheJIT defect prediction dataset for LLMs with structured commits
     """
 )
 parser.add_argument("--debug", action="store_true", help="Process only a small portion of the data")
@@ -154,12 +155,17 @@ elif args.mode == "mozilla_perf":
     print(f"✅ Saved dataset to {output_data_path}")
 
 elif args.mode == "apachejit_llm_struc":
-    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "test.jsonl")
+    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_small_with_struc_ast_diff.jsonl")
     apachejit_with_diff_df = pd.read_json(input_data_path, lines=True)
     
     if args.include_metadata:
         metadata_cols = ["la","ld","nf","nd","ns","ent","ndev","age","nuc","aexp","arexp","asexp"]
-        min_max_stats = {col: (apachejit_with_diff_df[col].min(), apachejit_with_diff_df[col].max()) for col in metadata_cols}
+        # Exclude outliers using 5th and 95th percentiles
+        min_max_stats = {
+            col: tuple(apachejit_with_diff_df[col].clip(lower=apachejit_with_diff_df[col].quantile(0.05),
+                                                        upper=apachejit_with_diff_df[col].quantile(0.95)).agg(['min', 'max']))
+            for col in metadata_cols
+        }
 
         for col in metadata_cols:
             min_val, max_val = min_max_stats[col]
@@ -224,6 +230,6 @@ elif args.mode == "apachejit_llm_struc":
         new_jit_list.append({'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc_meta.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc_ast_meta.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")

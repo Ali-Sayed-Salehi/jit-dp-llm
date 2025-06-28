@@ -13,15 +13,16 @@ from imblearn.over_sampling import SMOTE
 from itertools import product
 from collections import Counter
 import argparse
+from sklearn.metrics import average_precision_score
 
 # ---------------------------- Argparse ----------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument("--selection_metric", type=str, default="recall@top_10%",
-                    help="Metric to select the best model: recall@top_10%, f1_score, precision, recall, auc, accuracy")
+                    help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1_score, precision, recall, auc, accuracy")
 args = parser.parse_args()
 selection_metric = args.selection_metric
 
-valid_topk_metrics = {"recall@top_5%", "recall@top_10%", "recall@top_50%"}
+valid_topk_metrics = {"recall@top_5%", "recall@top_10%", "recall@top_30%"}
 print(f"🔧 Selecting best model based on: {selection_metric}")
 
 # ---------------------------- constants ----------------------------
@@ -41,7 +42,7 @@ for directory in training_dirs:
 
 # ---------------------------- Load Dataset ----------------------------
 
-dataset_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_logreg.csv")
+dataset_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_logreg_small.csv")
 df = pd.read_csv(dataset_path)
 X = df.iloc[:, :-1].values
 y = df.iloc[:, -1].values
@@ -102,7 +103,7 @@ def apply_class_imbalance_fix(strategy, X, y):
 
 # ---------------------------- Evaluation Metric ----------------------------
 
-def recall_at_top_k(pred_probs, true_labels, percentages=[0.1]):
+def recall_at_top_k(pred_probs, true_labels, percentages=[0.05, 0.1, 0.3]):
     results = {}
     total_positives = np.sum(true_labels)
     sorted_indices = np.argsort(-pred_probs)
@@ -166,12 +167,14 @@ for strategy, penalty, solver, C in product(imbalance_strategies, penalties, sol
     y_proba = model.predict_proba(X_eval_scaled)[:, 1]
     y_pred = model.predict(X_eval_scaled)
 
-    recall_top_k = recall_at_top_k(y_proba, y_eval, percentages=[0.05, 0.1, 0.5])
+    recall_top_k = recall_at_top_k(y_proba, y_eval, percentages=[0.05, 0.1, 0.3])
     recall = recall_score(y_eval, y_pred, zero_division=0)
     accuracy = accuracy_score(y_eval, y_pred)
     precision = precision_score(y_eval, y_pred, zero_division=0)
     f1 = f1_score(y_eval, y_pred, zero_division=0)
-    auc = roc_auc_score(y_eval, y_proba)
+    roc_auc = roc_auc_score(y_eval, y_proba)
+    pr_auc = average_precision_score(y_eval, y_proba)
+
     # report = classification_report(y_eval, y_pred, output_dict=True)
     conf_matrix = confusion_matrix(y_eval, y_pred).tolist()
 
@@ -184,7 +187,8 @@ for strategy, penalty, solver, C in product(imbalance_strategies, penalties, sol
         "precision": precision,
         "recall": recall,
         "f1_score": f1,
-        "auc": auc,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
         "confusion_matrix": conf_matrix,
         "recall_at_top_k": recall_top_k,
         "class_distribution_before": original_class_distribution,
@@ -222,18 +226,32 @@ print("\n🏆 Best config:")
 print(json.dumps(best_metrics, indent=2))
 print(f"📂 Results saved in {output_dir}")
 
-# ---------------------------- Final Inference on Chronological Test Set ----------------------------
+# ---------------------------- Final Inference on Held-out Test Set ----------------------------
 
 X_final_test_scaled = best_scaler.transform(X_test)
 y_final_proba = best_model.predict_proba(X_final_test_scaled)[:, 1]
 y_final_pred = best_model.predict(X_final_test_scaled)
 
-final_recall_top_k = recall_at_top_k(y_final_proba, y_test, percentages=[0.05, 0.1, 0.5])
+final_recall_top_k = recall_at_top_k(y_final_proba, y_test, percentages=[0.05, 0.1, 0.3])
+
+# Compute maximum possible recall at each top-k cutoff
+max_possible_recall_top_k = {}
+total_positives = np.sum(y_test)
+n_samples = len(y_test)
+
+for pct in [0.05, 0.1, 0.3]:
+    k = int(n_samples * pct)
+    positives_in_top_k = min(total_positives, k)
+    max_possible_recall = positives_in_top_k / total_positives if total_positives > 0 else 0.0
+    max_possible_recall_top_k[f"max_possible_recall@top_{int(pct * 100)}%"] = max_possible_recall
+
 final_recall = recall_score(y_test, y_final_pred, zero_division=0)
 final_accuracy = accuracy_score(y_test, y_final_pred)
 final_precision = precision_score(y_test, y_final_pred, zero_division=0)
 final_f1 = f1_score(y_test, y_final_pred, zero_division=0)
-final_auc = roc_auc_score(y_test, y_final_proba)
+final_roc_auc = roc_auc_score(y_test, y_final_proba)
+final_pr_auc = average_precision_score(y_test, y_final_proba)
+
 final_conf_matrix = confusion_matrix(y_test, y_final_pred).tolist()
 
 final_test_metrics = {
@@ -241,9 +259,11 @@ final_test_metrics = {
     "precision": final_precision,
     "recall": final_recall,
     "f1_score": final_f1,
-    "auc": final_auc,
+    "roc_auc": final_roc_auc,
+    "pr_auc": final_pr_auc,
     "confusion_matrix": final_conf_matrix,
     "recall_at_top_k": final_recall_top_k,
+    "max_possible_recall_at_top_k": max_possible_recall_top_k
 }
 
 final_test_output = {
