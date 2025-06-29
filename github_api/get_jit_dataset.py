@@ -17,7 +17,7 @@ parser.add_argument("--ast", action="store_true", help="get structred diffs with
 parser.add_argument("--small", action="store_true", help="Use the apachejit small dataset instead of the complete dataset.")
 args = parser.parse_args()
 
-if args.struc and not args.ast:
+if args.ast and not args.struc:
     raise ValueError("ast flag can only be set with structured diffs")
 
 size = "small" if args.small else "total"

@@ -3,13 +3,13 @@
 #SBATCH --job-name=llama-finetune
 #SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --partition=pt
+#SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=150:00:00
 #SBATCH --account=pcr
-#SBATCH --constraint=el9
+#SBATCH --constraint=gpu20
 
 echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
