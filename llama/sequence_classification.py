@@ -44,9 +44,9 @@ from llm_config_utils import (
     run_final_inference,
     evaluate_and_save_best_model,
     save_training_metrics,
-    save_training_config
+    save_training_config,
+    setup_live_metrics
 )
-
 
 # ---------------------------- Parse Arguments ----------------------------
 args = parse_training_args()
@@ -58,6 +58,7 @@ FL_GAMMA = 5
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
 SEQ_LEN_PERCENTILE = 100
 RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
+trainer_callbacks = []
 
 # ---------------------------- handle directories  ----------------------------
 
@@ -145,13 +146,9 @@ print(tokenized_dataset['train'].features)
 def custom_metrics(eval_pred):
     return compute_custom_metrics(eval_pred, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
 
-callbacks = []
-
-if args.live_metrics:
-    callbacks.append(SaveMetricsCallback(live_metrics_path))
-    print(f"📊 Live metrics will be saved to: {live_metrics_path}")
-else:
-    print("📊 Live metrics logging disabled.")
+trainer_callbacks.extend(
+    setup_live_metrics(args.live_metrics, live_metrics_path)
+)
 
 # ------------------------- Load model and quantization-------------------------
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
@@ -213,7 +210,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=1 if DEBUG else 1,
     per_device_eval_batch_size=1 if DEBUG else 1,
     gradient_accumulation_steps=16,
-    num_train_epochs=1 if DEBUG else 3,
+    num_train_epochs=1 if DEBUG else 2,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     logging_strategy="steps",
@@ -259,7 +256,7 @@ trainer = CustomTrainer(
     tokenizer=tokenizer,
     data_collator=data_collator,
     compute_metrics=custom_metrics,
-    callbacks=callbacks,
+    callbacks=trainer_callbacks,
     class_weights=class_weights if args.class_imbalance_fix == "weighted_loss" else None,
     focal_loss_fct=focal_loss_fct if args.class_imbalance_fix == "focal_loss" else None
 )
@@ -272,17 +269,13 @@ trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 evaluate_and_save_best_model(trainer, training_args, metrics_dir)
 
 # ---------------------------- Save Metrics ----------------------------
-save_training_metrics(trainer, metrics_dir)
+save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 
 # ---------------------------- Run inference on held-out test set ----------------------------
 run_final_inference(
     trainer=trainer,
     test_dataset=tokenized_dataset["final_test"],
     metrics_dir=metrics_dir,
-    accuracy=accuracy,
-    precision=precision,
-    recall=recall,
-    f1=f1,
     percentages=RECALL_AT_TOP_K_PERCENTAGES,
     threshold=args.threshold,
 )

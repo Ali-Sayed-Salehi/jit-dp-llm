@@ -47,7 +47,12 @@ def parse_training_args():
         default="imdb",
         help="Choose which dataset to use"
     )
-    parser.add_argument("--model_name", type=str, default="distilbert/distilbert-base-uncased", help="Name of the model to use")
+    parser.add_argument("--model_name", type=str, default="distilbert/distilbert-base-uncased", help="""Name of the model to use. 
+                                                                                    Example: meta-llama/Llama-3.2-3B, 
+                                                                                    meta-llama/Meta-Llama-3-8B, 
+                                                                                    microsoft/codebert-base,
+                                                                                    meta-llama/Llama-3.1-8B, 
+                                                                                    distilbert/distilbert-base-uncased""")
     parser.add_argument(
         "--class_imbalance_fix",
         type=str,
@@ -67,13 +72,14 @@ def parse_training_args():
     parser.add_argument(
         "--continue_from_dir", 
         type=str, 
-        help="Resume training from this checkpoint directory"
-    )
+        help="""Resume training from this checkpoint directory. 
+        Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
+        )
     parser.add_argument(
         "--selection_metric",
         type=str,
         default="recall@top_5%",
-        help="Metric to select the best model"
+        help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy"
     )
     
     args = parser.parse_args()
@@ -753,16 +759,11 @@ class CustomTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-
 def run_final_inference(
     trainer,
     test_dataset,
     metrics_dir,
-    accuracy,
-    precision,
-    recall,
-    f1,
-    pertentages,
+    percentages,
     threshold=None,
 ):
     """
@@ -773,10 +774,9 @@ def run_final_inference(
         trainer (transformers.Trainer): The trained Hugging Face `Trainer` object used for inference.
         test_dataset (Dataset): The held-out test dataset to evaluate.
         metrics_dir (str): Directory path where the metrics will be saved as `final_test_results.json`.
-        accuracy, precision, recall, f1: Metric objects from `evaluate.load(...)` used to compute standard metrics.
+        percentages (list of float): Percentages to compute recall@top_k.
         threshold (float, optional): If provided, applies a custom decision threshold to the probability 
                                      of the positive class instead of using argmax for prediction.
-        pertentages : pertentages to compute recall@top-k
 
     Output:
         Saves a JSON file `final_test_results.json` in `metrics_dir`, containing:
@@ -809,23 +809,25 @@ def run_final_inference(
         - Handles exceptions gracefully if AUC metrics cannot be computed (e.g., due to single-class predictions).
     """
 
+    accuracy = evaluate.load("accuracy")
+    precision = evaluate.load("precision")
+    recall = evaluate.load("recall")
+    f1 = evaluate.load("f1")
+
     print("\n🧪 Running final inference on held-out test set...")
 
     test_results = trainer.predict(test_dataset)
     logits = test_results.predictions
     labels = test_results.label_ids
 
-    # Compute predicted probabilities
     probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
     preds = np.argmax(probs, axis=1)
 
     if threshold is not None:
         preds = (probs[:, 1] >= threshold).astype(int)
 
-    # Recall@top-k
-    recall_at_k = recall_at_top_k(probs[:, 1], labels, pertentages)
+    recall_at_k = recall_at_top_k(probs[:, 1], labels, percentages)
 
-    # Safe AUCs
     try:
         final_roc_auc = roc_auc_score(labels, probs[:, 1])
     except ValueError:
@@ -908,6 +910,28 @@ def evaluate_and_save_best_model(trainer, training_args, metrics_dir):
     else:
         print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
         return None
+
+
+def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
+    """
+    Sets up Trainer callbacks for live metrics logging.
+
+    Args:
+        live_metrics_enabled (bool): Whether to enable live metrics logging.
+        live_metrics_path (str): Path to save live metrics JSONL file if enabled.
+
+    Returns:
+        list: A list of TrainerCallback instances.
+    """
+    callbacks = []
+
+    if live_metrics_enabled:
+        callbacks.append(SaveMetricsCallback(live_metrics_path))
+        print(f"📊 Live metrics will be saved to: {live_metrics_path}")
+    else:
+        print("📊 Live metrics logging disabled.")
+
+    return callbacks
 
 
 

@@ -1,6 +1,13 @@
 # run interactive job with GPU
 # THIS SHOULD BE RUN FIRST AND SEPARATELY FROM OTHER COMMANDS
-salloc --partition=pt --constraint=el9 --mem=10G --gpus=2 -A pcr
+# 16 GB GPU
+salloc --partition=pg --constraint=gpu16 --cpus-per-task=4 --mem=100G --gpus=1 -A pcr
+
+# 20 GB GPU
+salloc --partition=ps,pg,pt --constraint=gpu20 --cpus-per-task=4 --mem=100G --gpus=1 -A pcr
+
+# 32 GB GPU
+salloc --partition=ps,pg,pt --constraint=gpu32 --mem=100G --gpus=1 -A pcr --time=1:00:00
 
 #prepare environment
 cd /speed-scratch/$USER/vscode
@@ -32,8 +39,16 @@ sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/fine_tune_codebert.sh
 # submit a batch job for multiple GPUs using multiple nodes
 sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/dist_llm_fine_tune.sh
 
+sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/extract_data.sh
+
+sbatch /speed-scratch/$USER/repos/perf-pilot/scripts/log_reg.sh
+
 # see slurm job logs
 cd /speed-scratch/$USER/repos/perf-pilot/slurm_jobs
 
 # get the status for a job
 sacct -j <job_id> --format=JobID,State,ExitCode,Elapsed
+
+squeue -u $USER
+sacct -j 540762 --format=JobID,State,ExitCode,Elapsed
+scontrol show job 540762
