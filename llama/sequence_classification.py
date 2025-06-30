@@ -124,7 +124,8 @@ MAX_SEQ_LENGTH = estimate_max_sequence_length(
     dataset=dataset,
     tokenizer=tokenizer,
     config=config,
-    percentile=SEQ_LEN_PERCENTILE
+    percentile=SEQ_LEN_PERCENTILE,
+    override_max_seq_length=args.max_seq_length
 )
 
 def tokenize_data(examples):
@@ -210,7 +211,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=1 if DEBUG else 1,
     per_device_eval_batch_size=1 if DEBUG else 1,
     gradient_accumulation_steps=16,
-    num_train_epochs=1 if DEBUG else 2,
+    num_train_epochs=1 if DEBUG else 5,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     logging_strategy="steps",

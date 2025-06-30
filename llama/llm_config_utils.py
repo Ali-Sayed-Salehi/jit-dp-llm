@@ -81,6 +81,12 @@ def parse_training_args():
         default="recall@top_5%",
         help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy"
     )
+    parser.add_argument(
+        "--max_seq_length",
+        type=int,
+        default=None,
+        help="Optional. If set, overrides the estimated max sequence length."
+    )
     
     args = parser.parse_args()
     
@@ -369,11 +375,22 @@ def compute_class_distribution(labels) -> dict:
     }
 
 
-
-def estimate_max_sequence_length(dataset, tokenizer, config, percentile=100, text_field="text"):
+def estimate_max_sequence_length(
+    dataset,
+    tokenizer,
+    config,
+    percentile=100,
+    text_field="text",
+    override_max_seq_length=None
+):
     """
     Estimate the maximum sequence length to use for tokenization,
-    based on a percentile of tokenized text lengths in the TRAIN split.
+    based on a percentile of tokenized text lengths in the TRAIN split,
+    unless an explicit override is provided.
+
+    If `override_max_seq_length` is not None, it will be returned instead
+    of calculating the length from the data. This is useful if you want
+    consistent or manually-tuned max sequence length for comparison runs.
 
     Args:
         dataset (DatasetDict): The entire dataset object with 'train' split.
@@ -381,10 +398,15 @@ def estimate_max_sequence_length(dataset, tokenizer, config, percentile=100, tex
         config: Model configuration.
         percentile (float): Percentile to use for max length cutoff.
         text_field (str): The field in the dataset containing text.
+        override_max_seq_length (int, optional): If provided, overrides any estimated value.
 
     Returns:
-        int: Estimated max sequence length.
+        int: Final max sequence length to use.
     """
+    if override_max_seq_length is not None:
+        print(f"⚙️ Overriding max sequence length with user-specified value: {override_max_seq_length}")
+        return override_max_seq_length
+
     if "train" not in dataset:
         raise ValueError("The dataset must contain a 'train' split to estimate sequence length.")
 
@@ -395,7 +417,11 @@ def estimate_max_sequence_length(dataset, tokenizer, config, percentile=100, tex
     lengths = lengths_dataset["length"]
 
     calculated_max_length = int(np.percentile(lengths, percentile))
-    max_seq_len = min(calculated_max_length, tokenizer.model_max_length, config.max_position_embeddings)
+    max_seq_len = min(
+        calculated_max_length,
+        tokenizer.model_max_length,
+        config.max_position_embeddings
+    )
 
     print(f"""✅ Using max_seq_length={max_seq_len}, 
     {percentile}th percentile={calculated_max_length}, 
@@ -403,7 +429,6 @@ def estimate_max_sequence_length(dataset, tokenizer, config, percentile=100, tex
     model limit={config.max_position_embeddings}""")
 
     return max_seq_len
-
 
 
 class FocalLoss(nn.Module):
@@ -1061,7 +1086,6 @@ def save_training_config(
             true_labels_test_set = np.array(dataset["final_test"]["label"])
             
             defect_rate = compute_defect_rate(true_labels_test_set)
-            print(f"📊 Held-out test set defect rate: {defect_rate:.4f}")
 
             if RECALL_AT_TOP_K_PERCENTAGES:
                 max_recall_at_k = compute_max_recall_at_top_k(true_labels_test_set, RECALL_AT_TOP_K_PERCENTAGES)
