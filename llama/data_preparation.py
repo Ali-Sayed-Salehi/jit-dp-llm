@@ -155,7 +155,7 @@ elif args.mode == "mozilla_perf":
     print(f"✅ Saved dataset to {output_data_path}")
 
 elif args.mode == "apachejit_llm_struc":
-    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_small_with_struc_ast_diff.jsonl")
+    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_small_with_struc_diff.jsonl")
     apachejit_with_diff_df = pd.read_json(input_data_path, lines=True)
     
     if args.include_metadata:
@@ -230,6 +230,6 @@ elif args.mode == "apachejit_llm_struc":
         new_jit_list.append({'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc_ast_meta.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc_meta.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
