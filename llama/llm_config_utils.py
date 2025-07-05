@@ -34,6 +34,7 @@ from peft import (
 )
 
 import evaluate
+from attach_classification_head import CustomLlamaForSequenceClassification
 
 
 def parse_training_args():
@@ -47,12 +48,7 @@ def parse_training_args():
         default="imdb",
         help="Choose which dataset to use"
     )
-    parser.add_argument("--model_name", type=str, default="distilbert/distilbert-base-uncased", help="""Name of the model to use. 
-                                                                                    Example: meta-llama/Llama-3.2-3B, 
-                                                                                    meta-llama/Meta-Llama-3-8B, 
-                                                                                    microsoft/codebert-base,
-                                                                                    meta-llama/Llama-3.1-8B, 
-                                                                                    distilbert/distilbert-base-uncased""")
+    parser.add_argument("--model_path", type=str, required=True, help="Full path to the local pretrained model directory")
     parser.add_argument(
         "--class_imbalance_fix",
         type=str,
@@ -141,30 +137,6 @@ def setup_training_directories(repo_root, continue_from_dir=None):
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
     }
-
-
-def get_local_model_path(repo_root, model_name):
-    """
-    Constructs and validates the path to a locally stored pretrained model.
-
-    Args:
-        repo_root (str): Root directory of the repository.
-        model_name (str): Name of the model.
-
-    Returns:
-        str: Full path to the model.
-
-    Raises:
-        ValueError: If the path does not exist.
-    """
-    model_path = os.path.join(repo_root, "LLMs", "pretrained", model_name)
-    print(f"🧠 Using model: {model_name} from {model_path}")
-
-    if not os.path.isdir(model_path):
-        raise ValueError(f"🚫 MODEL_PATH does not exist: {model_path}")
-
-    return model_path
-
 
 
 def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
@@ -1067,7 +1039,7 @@ def save_training_config(
     Example output:
         {
             "timestamp": "...",
-            "model_name": "...",
+            "model_path": "...",
             ...
             "held_out_test_defect_rate": 0.23,
             "max_possible_recall@top_k": {
@@ -1096,7 +1068,7 @@ def save_training_config(
     # ------------------ Build snapshot ------------------
     config_snapshot = {
         "timestamp": run_timestamp,
-        "model_name": args.model_name,
+        "model_path": args.model_path,
         "class_imbalance_fix": args.class_imbalance_fix,
         "dataset": args.dataset,
         "learning_rate": training_args.learning_rate,
@@ -1147,3 +1119,24 @@ def compute_max_recall_at_top_k(true_labels, percentages):
         results[f"max_recall@top_{int(pct * 100)}%"] = max_recall
     return results
 
+
+def register_custom_llama_if_needed(model_path: str):
+    """
+    Checks the local model config.json and registers CustomLlamaForSequenceClassification
+    if the architecture matches 'CustomLlamaForSequenceClassification'.
+    Otherwise, does nothing.
+    """
+    config = AutoConfig.from_pretrained(model_path)
+    model_type = "llama-sequence-classification"
+    architectures = config.architectures
+
+    if architectures and "CustomLlamaForSequenceClassification" in architectures:
+        AutoConfig.register(model_type, AutoConfig)
+        AutoModelForSequenceClassification.register(AutoConfig, CustomLlamaForSequenceClassification)
+        print(f"✅ Registered CustomLlamaForSequenceClassification for model_type='{model_type}'.")
+    else:
+        print(f"ℹ️ No custom registration needed. model_type='{model_type}'.")
+
+    print("✅ Sanity check on config.json:")
+    print(f"  architectures: {config.architectures}")
+    print(f"  model_type: {config.model_type}")

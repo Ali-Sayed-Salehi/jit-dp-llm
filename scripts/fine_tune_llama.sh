@@ -15,8 +15,8 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
 
 echo "running the training script"
-# python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small_struc_ast_meta --model_name meta-llama/Meta-Llama-3-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_30%
-python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small_struc_ast_meta --model_name meta-llama/Llama-3.1-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_30% --max_seq_length 14000
+# python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small_struc_ast_meta --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/custom/meta-llama/Meta-Llama-3-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_30%
+python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small_struc_ast_meta --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_30% --max_seq_length 14000
 echo "training finished"
 
 echo "Cleaning up"
