@@ -30,7 +30,6 @@ from peft import (
 from llm_config_utils import (
     parse_training_args,
     setup_training_directories,
-    get_local_model_path,
     login_to_huggingface,
     load_and_split_dataset,
     compute_class_distribution,
@@ -45,14 +44,15 @@ from llm_config_utils import (
     evaluate_and_save_best_model,
     save_training_metrics,
     save_training_config,
-    setup_live_metrics
+    setup_live_metrics,
+    register_custom_llama_if_needed
 )
 
 # ---------------------------- Parse Arguments ----------------------------
 args = parse_training_args()
 
 DEBUG = args.debug
-LLAMA = "llama" in args.model_name.lower()
+LLAMA = "llama" in args.model_path.lower()
 FL_ALPHA = 2
 FL_GAMMA = 5
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
@@ -77,7 +77,8 @@ finetuned_model_dir = paths["model_dir"]
 finetuned_tokenizer_dir = paths["tokenizer_dir"]
 
 # ------------------------- Local model path -------------------------
-MODEL_PATH = get_local_model_path(REPO_PATH, args.model_name)
+MODEL_PATH = args.model_path
+print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
@@ -154,6 +155,8 @@ trainer_callbacks.extend(
 # ------------------------- Load model and quantization-------------------------
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1}
+
+register_custom_llama_if_needed(MODEL_PATH)
 
 if args.quant and LLAMA:
     print("🧠 Loading model with 4-bit quantization using BitsAndBytesConfig...")
