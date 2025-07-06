@@ -80,6 +80,8 @@ finetuned_tokenizer_dir = paths["tokenizer_dir"]
 MODEL_PATH = args.model_path
 print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
+register_custom_llama_if_needed(MODEL_PATH)
+
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
 
@@ -114,8 +116,8 @@ if imbalance_fix == "focal_loss":
 class_distribution = compute_class_distribution(dataset["train"]["label"])
 
 # ------------------------- tokenize -------------------------
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-config = AutoConfig.from_pretrained(MODEL_PATH)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
+config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True)
 
 if LLAMA:
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -156,8 +158,6 @@ trainer_callbacks.extend(
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1}
 
-register_custom_llama_if_needed(MODEL_PATH)
-
 if args.quant and LLAMA:
     print("🧠 Loading model with 4-bit quantization using BitsAndBytesConfig...")
     quant_config = BitsAndBytesConfig(
@@ -173,7 +173,8 @@ if args.quant and LLAMA:
         id2label=id2label,
         label2id=label2id,
         quantization_config=quant_config,
-        device_map="auto"
+        device_map="auto",
+        local_files_only=True
     )
 else:
     print("🧠 Loading model without quantization...")
@@ -181,7 +182,8 @@ else:
         MODEL_PATH,
         num_labels=2,
         id2label=id2label,
-        label2id=label2id
+        label2id=label2id,
+        local_files_only=True
     )
 
 model.config.pad_token_id = tokenizer.pad_token_id
