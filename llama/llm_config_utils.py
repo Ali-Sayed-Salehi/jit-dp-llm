@@ -34,7 +34,7 @@ from peft import (
 )
 
 import evaluate
-from attach_classification_head import CustomLlamaForSequenceClassification
+from attach_classification_head import CustomLlamaForSequenceClassification, CustomLlamaConfig
 
 
 def parse_training_args():
@@ -219,6 +219,7 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
         if debug:
             train_dataset = train_dataset.select(range(200))
             eval_dataset = eval_dataset.select(range(200))
+            test_dataset = test_dataset.select(range(200))
 
         train_dataset = train_dataset.shuffle(seed=seed)
 
@@ -1121,22 +1122,10 @@ def compute_max_recall_at_top_k(true_labels, percentages):
 
 
 def register_custom_llama_if_needed(model_path: str):
-    """
-    Checks the local model config.json and registers CustomLlamaForSequenceClassification
-    if the architecture matches 'CustomLlamaForSequenceClassification'.
-    Otherwise, does nothing.
-    """
+    AutoConfig.register(CustomLlamaConfig.model_type, CustomLlamaConfig)
+    AutoModelForSequenceClassification.register(CustomLlamaConfig, CustomLlamaForSequenceClassification)
+
     config = AutoConfig.from_pretrained(model_path)
-    model_type = "llama-sequence-classification"
-    architectures = config.architectures
+    print(f"✅ model and config registered: model_type={config.model_type}, architectures={config.architectures}")
 
-    if architectures and "CustomLlamaForSequenceClassification" in architectures:
-        AutoConfig.register(model_type, AutoConfig)
-        AutoModelForSequenceClassification.register(AutoConfig, CustomLlamaForSequenceClassification)
-        print(f"✅ Registered CustomLlamaForSequenceClassification for model_type='{model_type}'.")
-    else:
-        print(f"ℹ️ No custom registration needed. model_type='{model_type}'.")
 
-    print("✅ Sanity check on config.json:")
-    print(f"  architectures: {config.architectures}")
-    print(f"  model_type: {config.model_type}")
