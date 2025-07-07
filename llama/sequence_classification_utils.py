@@ -34,7 +34,7 @@ from peft import (
 )
 
 import evaluate
-from attach_classification_head import CustomLlamaForSequenceClassification, CustomLlamaConfig
+from attach_custom_head import CustomLlamaForSequenceClassification, CustomLlamaConfig
 
 
 def parse_training_args():
@@ -218,8 +218,8 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
 
         if debug:
             train_dataset = train_dataset.select(range(200))
-            eval_dataset = eval_dataset.select(range(200))
-            test_dataset = test_dataset.select(range(200))
+            eval_dataset = eval_dataset.select(range(100))
+            test_dataset = test_dataset.select(range(100))
 
         train_dataset = train_dataset.shuffle(seed=seed)
 
@@ -396,10 +396,7 @@ def estimate_max_sequence_length(
         config.max_position_embeddings
     )
 
-    print(f"""✅ Using max_seq_length={max_seq_len}, 
-    {percentile}th percentile={calculated_max_length}, 
-    tokenizer limit={tokenizer.model_max_length}, 
-    model limit={config.max_position_embeddings}""")
+    print(f"✅ Using max_seq_length={max_seq_len}")
 
     return max_seq_len
 
@@ -862,38 +859,22 @@ def run_final_inference(
     print(json.dumps(final_metrics, indent=4))
 
 
-def evaluate_and_save_best_model(trainer, training_args, metrics_dir):
+def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir):
     """
-    Evaluates the best checkpointed model after training (if enabled) and saves the evaluation metrics.
+    Evaluates the best checkpointed model (if enabled), saves the eval metrics,
+    and saves ONLY the LoRA adapter weights + tokenizer to disk.
 
-    This function checks if `load_best_model_at_end=True` in the training arguments.
-    If so, it runs evaluation using `trainer.evaluate()` and saves the resulting metrics to
-    a JSON file (`best_model_metrics.json`) inside the given metrics directory.
+    This assumes you want to reload later by attaching the adapter to the base model.
 
     Args:
-        trainer (transformers.Trainer): A Hugging Face `Trainer` object, expected to have loaded the best model.
-        training_args (transformers.TrainingArguments): The training arguments used during fine-tuning.
-        metrics_dir (str): Directory where the evaluation results should be saved.
+        trainer (transformers.Trainer): Trainer with PEFT-wrapped model + tokenizer.
+        training_args (transformers.TrainingArguments): Your TrainingArguments.
+        metrics_dir (str): Directory to save `best_model_metrics.json`.
+        adapter_dir (str): Directory to save the LoRA adapter weights.
+        tokenizer_dir (str): Directory to save the tokenizer.
 
     Returns:
-        dict or None: A dictionary of evaluation metrics if evaluated, otherwise `None`.
-
-    Side Effects:
-        - Creates (or overwrites) a file named `best_model_metrics.json` in `metrics_dir`.
-        - Prints status messages to the console.
-
-    Example Output File (`best_model_metrics.json`):
-        {
-            "eval_loss": 0.42,
-            "eval_accuracy": 0.87,
-            "eval_runtime": 5.2,
-            ...
-        }
-
-    Notes:
-        - This function is typically used after training completes, especially if early stopping or
-          metric-based checkpointing is used.
-        - If `load_best_model_at_end` is `False`, evaluation is skipped.
+        dict or None: Final evaluation metrics if run, else None.
     """
 
     if training_args.load_best_model_at_end:
@@ -904,10 +885,23 @@ def evaluate_and_save_best_model(trainer, training_args, metrics_dir):
             json.dump(best_eval_metrics, f, indent=4)
 
         print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
-        return best_eval_metrics
     else:
         print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
-        return None
+        best_eval_metrics = None
+
+    # ✅ Save only LoRA adapter weights
+    print(f"💾 Saving LoRA adapter to {adapter_dir}")
+    trainer.model.save_pretrained(adapter_dir)  # PEFT model knows how to save adapter only
+
+    if hasattr(trainer, "tokenizer") and trainer.tokenizer is not None:
+        print(f"💾 Saving tokenizer to {tokenizer_dir}")
+        trainer.tokenizer.save_pretrained(tokenizer_dir)
+
+    print("⚡️ To use this later: load the same base model and attach the adapter with PeftModel.from_pretrained()")
+
+    return best_eval_metrics
+
+
 
 
 def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
@@ -1122,10 +1116,22 @@ def compute_max_recall_at_top_k(true_labels, percentages):
 
 
 def register_custom_llama_if_needed(model_path: str):
-    AutoConfig.register(CustomLlamaConfig.model_type, CustomLlamaConfig)
-    AutoModelForSequenceClassification.register(CustomLlamaConfig, CustomLlamaForSequenceClassification)
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"config.json not found at: {config_path}")
 
-    config = AutoConfig.from_pretrained(model_path)
-    print(f"✅ model and config registered: model_type={config.model_type}, architectures={config.architectures}")
+    with open(config_path, "r") as f:
+        config_data = json.load(f)
+    
+    model_type = config_data.get("model_type", "")
+    architectures = config_data.get("architectures", [])
+
+    if model_type == CustomLlamaConfig.model_type:
+        AutoConfig.register(CustomLlamaConfig.model_type, CustomLlamaConfig)
+        AutoModelForSequenceClassification.register(CustomLlamaConfig, CustomLlamaForSequenceClassification)
+        print(f"✅ Registered custom LLaMA: model_type={model_type}, architectures={architectures}")
+    else:
+        print(f"ℹ️ Skipped custom registration: model_type={model_type}")
+
 
 

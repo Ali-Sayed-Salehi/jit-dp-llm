@@ -27,7 +27,7 @@ from peft import (
     prepare_model_for_kbit_training
 )
 
-from llm_config_utils import (
+from sequence_classification_utils import (
     parse_training_args,
     setup_training_directories,
     login_to_huggingface,
@@ -46,7 +46,7 @@ from llm_config_utils import (
     save_training_config,
     setup_live_metrics,
     register_custom_llama_if_needed
-)
+    )
 
 # ---------------------------- Parse Arguments ----------------------------
 args = parse_training_args()
@@ -79,8 +79,6 @@ finetuned_tokenizer_dir = paths["tokenizer_dir"]
 # ------------------------- Local model path -------------------------
 MODEL_PATH = args.model_path
 print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
-
-register_custom_llama_if_needed(MODEL_PATH)
 
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
@@ -221,12 +219,12 @@ training_args = TrainingArguments(
     weight_decay=0.01,
     logging_strategy="steps",
     logging_steps=1 if DEBUG else 25,
-    save_strategy="no" if DEBUG else "steps",
+    save_strategy="steps",
     eval_strategy="steps",
     eval_steps=1 if DEBUG else 25,
     save_steps=1 if DEBUG else 25,
     save_total_limit=2,
-    load_best_model_at_end=False if DEBUG else True,
+    load_best_model_at_end= True,
     metric_for_best_model=args.selection_metric,
     greater_is_better=True,
     label_names=["labels"],
@@ -259,7 +257,6 @@ trainer = CustomTrainer(
     args=training_args,
     train_dataset=tokenized_dataset["train"],
     eval_dataset=tokenized_dataset["test"],
-    tokenizer=tokenizer,
     data_collator=data_collator,
     compute_metrics=custom_metrics,
     callbacks=trainer_callbacks,
@@ -272,7 +269,13 @@ torch.cuda.empty_cache()
 trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
 # ---------------------------- Evaluate Best Model and Save ----------------------------
-evaluate_and_save_best_model(trainer, training_args, metrics_dir)
+evaluate_and_save_best_model(
+    trainer=trainer,
+    training_args=training_args,
+    metrics_dir=metrics_dir,
+    adapter_dir=finetuned_model_dir,
+    tokenizer_dir=finetuned_tokenizer_dir,
+)
 
 # ---------------------------- Save Metrics ----------------------------
 save_training_metrics(trainer, metrics_dir, filename="metrics.json")
