@@ -92,6 +92,39 @@ plt.tight_layout()  # Adjust layout to make room for legend
 plt.savefig(os.path.join(plots_dir, "eval_metrics_curve.png"), bbox_inches='tight')
 plt.close()
 
+# --------------------- 2b. Recall@Top-K% Trends ---------------------
+plt.figure(figsize=(10, 6))
+
+topk_metrics = ["eval_recall@top_5%", "eval_recall@top_10%", "eval_recall@top_30%"]
+color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+plotted_any = False
+
+for i, metric in enumerate(topk_metrics):
+    steps = [m["step"] for m in live_metrics if m["type"] == "eval" and metric in m["metrics"]]
+    values = [m["metrics"][metric] for m in live_metrics if m["type"] == "eval" and metric in m["metrics"]]
+    if steps:
+        plotted_any = True
+        color = color_cycle[i % len(color_cycle)]
+        plt.plot(steps, values, label=f"{metric} (eval)", color=color)
+
+        # Try to match final test metric without "eval_" prefix
+        final_metric_name = metric.replace("eval_", "")
+        final_value = final_metrics.get(final_metric_name)
+        if final_value is not None:
+            plt.axhline(y=final_value, linestyle="--", color=color, label=f"{final_metric_name} (final test)")
+
+if plotted_any:
+    plt.xlabel("Steps")
+    plt.ylabel("Recall")
+    plt.title("Recall@Top-K% Trends (with Final Test Values)")
+    plt.legend(loc='center left', bbox_to_anchor=(1.05, 0.5))
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, "recall_at_topk_trends.png"), bbox_inches='tight')
+    plt.close()
+else:
+    print("⚠️ No Recall@Top-K% metrics found in live_metrics.jsonl. Skipping Recall@Top-K% plot.")
 
 # --------------------- 3. ROC Curve ---------------------
 fpr, tpr, _ = roc_curve(labels, probs)

@@ -396,7 +396,10 @@ def estimate_max_sequence_length(
         config.max_position_embeddings
     )
 
-    print(f"✅ Using max_seq_length={max_seq_len}")
+    print(f"""✅ Using max_seq_length={max_seq_len}, 
+    {percentile}th percentile={calculated_max_length}, 
+    tokenizer limit={tokenizer.model_max_length}, 
+    model limit={config.max_position_embeddings}""")
 
     return max_seq_len
 
@@ -859,49 +862,33 @@ def run_final_inference(
     print(json.dumps(final_metrics, indent=4))
 
 
-def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir):
+def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir, tokenizer=None):
     """
     Evaluates the best checkpointed model (if enabled), saves the eval metrics,
     and saves ONLY the LoRA adapter weights + tokenizer to disk.
-
-    This assumes you want to reload later by attaching the adapter to the base model.
-
-    Args:
-        trainer (transformers.Trainer): Trainer with PEFT-wrapped model + tokenizer.
-        training_args (transformers.TrainingArguments): Your TrainingArguments.
-        metrics_dir (str): Directory to save `best_model_metrics.json`.
-        adapter_dir (str): Directory to save the LoRA adapter weights.
-        tokenizer_dir (str): Directory to save the tokenizer.
-
-    Returns:
-        dict or None: Final evaluation metrics if run, else None.
     """
-
     if training_args.load_best_model_at_end:
         best_eval_metrics = trainer.evaluate()
         best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
-
         with open(best_model_metrics_path, "w") as f:
             json.dump(best_eval_metrics, f, indent=4)
-
         print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
     else:
         print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
         best_eval_metrics = None
 
-    # ✅ Save only LoRA adapter weights
     print(f"💾 Saving LoRA adapter to {adapter_dir}")
-    trainer.model.save_pretrained(adapter_dir)  # PEFT model knows how to save adapter only
+    trainer.model.save_pretrained(adapter_dir)
 
-    if hasattr(trainer, "tokenizer") and trainer.tokenizer is not None:
+    if tokenizer is not None:
         print(f"💾 Saving tokenizer to {tokenizer_dir}")
-        trainer.tokenizer.save_pretrained(tokenizer_dir)
+        tokenizer.save_pretrained(tokenizer_dir)
+    else:
+        print("⚠️ No tokenizer provided; skipping save.")
 
     print("⚡️ To use this later: load the same base model and attach the adapter with PeftModel.from_pretrained()")
 
     return best_eval_metrics
-
-
 
 
 def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
