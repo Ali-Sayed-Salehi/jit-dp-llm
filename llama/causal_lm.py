@@ -21,7 +21,6 @@ from peft import (
     TaskType,
     prepare_model_for_kbit_training
 )
-from unsloth import patch_transformers
 
 from causal_lm_utils import (
     parse_training_args,
@@ -85,9 +84,8 @@ dataset = load_and_split_dataset(
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
 config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True)
 
-if LLAMA:
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+tokenizer.pad_token = tokenizer.eos_token
 
 MAX_SEQ_LENGTH = estimate_max_sequence_length(
     dataset=dataset,
@@ -156,12 +154,15 @@ if args.gradient_checkpointing:
     model.gradient_checkpointing_enable()
 
 # ------------------------- LORA -------------------------
+
+# print([name for name, _ in model.named_modules() if "attn" in name])
+
 if args.lora:
     print("✨ Applying LoRA...")
     lora_config = LoraConfig(
         r=16,
         lora_alpha=8,
-        target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
+        target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ['c_attn', 'c_proj'],
         lora_dropout=0.05,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
@@ -223,26 +224,21 @@ torch.cuda.empty_cache()
 
 trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
-# # ---------------------------- Merge LoRA if enabled ----------------------------
-# if args.lora:
-#     print("🔗 Merging LoRA weights into base model for final export and inference...")
-#     model = model.merge_and_unload()
-#     trainer.model = model
-
 # ---------------------------- Evaluate Best Model and Save ----------------------------
 evaluate_and_save_best_model(
     trainer=trainer,
     training_args=training_args,
     metrics_dir=metrics_dir,
     adapter_dir=finetuned_model_dir,
-    tokenizer_dir=finetuned_tokenizer_dir
+    tokenizer_dir=finetuned_tokenizer_dir,
+    tokenizer=tokenizer
 )
 
 # ---------------------------- Save Metrics ----------------------------
 save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 
 # ---------------------------- Run inference on held-out test set ----------------------------
-run_final_inference_causal_lm(
+run_final_inference(
     trainer=trainer,
     test_dataset=tokenized_dataset["final_test"],
     metrics_dir=metrics_dir,

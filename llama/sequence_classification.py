@@ -275,6 +275,7 @@ evaluate_and_save_best_model(
     metrics_dir=metrics_dir,
     adapter_dir=finetuned_model_dir,
     tokenizer_dir=finetuned_tokenizer_dir,
+    tokenizer=tokenizer
 )
 
 # ---------------------------- Save Metrics ----------------------------

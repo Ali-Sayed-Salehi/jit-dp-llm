@@ -129,9 +129,9 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
     """
     Loads and splits a dataset for training, evaluation, and final testing.
 
-    This function supports both local JSONL datasets and the Hugging Face IMDb and ELI5 datasets.
+    This function supports both local JSONL datasets and the Hugging Face ELI5 datasets.
     For local datasets and ELI5, it performs a chronological split: 64% for training, 16% for evaluation,
-    and 20% for testing. The IMDb dataset is returned as-is from the Hugging Face hub.
+    and 20% for testing.
 
     Args:
         dataset_name (str): Name of the dataset to load. Supported values:
@@ -150,13 +150,7 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
             - "train": Training split
             - "test": Evaluation split
             - "final_test": Held-out test split
-
-        If `dataset_name == "imdb"`, returns the raw Hugging Face IMDb dataset without splitting.
     """
-
-    from datasets import load_dataset
-    import os
-
     dataset_file_map = {
         "perf": "dataset.jsonl",
         "jit": "jit_dp/apachejit_llm.jsonl",
@@ -169,7 +163,11 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
     print(f"📂 Loading dataset: {dataset_name}")
 
     if dataset_name == "eli5":
-        dataset = load_dataset("eli5_category", split="train[:7000]")  # example size limit
+        dataset = load_dataset(
+            "eli5_category",
+            split="train[:7000]",
+            trust_remote_code=True
+        )
     else:
         dataset_path = os.path.join(repo_path, "datasets", dataset_file_map[dataset_name])
         dataset = load_dataset("json", data_files=dataset_path, split="train")
@@ -257,7 +255,10 @@ def estimate_max_sequence_length(
         config.max_position_embeddings
     )
 
-    print(f"✅ Using max_seq_length={max_seq_len}")
+    print(f"""✅ Using max_seq_length={max_seq_len}, 
+    {percentile}th percentile={calculated_max_length}, 
+    tokenizer limit={tokenizer.model_max_length}, 
+    model limit={config.max_position_embeddings}""")
 
     return max_seq_len
 
@@ -303,6 +304,79 @@ def compute_custom_metrics(eval_pred):
         "perplexity": perplexity,
         "token_accuracy": token_accuracy
     }
+
+
+class SaveMetricsCallback(TrainerCallback):
+    """
+    A custom Hugging Face `TrainerCallback` for saving training and evaluation metrics 
+    to a JSON Lines (JSONL) file after each logging or evaluation step.
+
+    Works for **any task**: sequence classification, causal language modeling, etc.
+
+    Appends each set of metrics as a new line in the JSONL file, making it easy to 
+    parse and visualize later (e.g., with pandas, seaborn, or custom scripts).
+
+    Example metrics for Causal LM might include:
+        - Training loss (`loss`)
+        - Evaluation loss (`eval_loss`)
+        - Perplexity (`perplexity`) if your `compute_metrics` returns it
+
+    ---
+    Args:
+        output_path (str):
+            Path to the `.jsonl` file where metrics will be saved.
+            If the directory does not exist, it will be created automatically.
+
+    Example output file (`metrics.jsonl`):
+        {"step": 25, "type": "train", "metrics": {"loss": 2.345, "learning_rate": 2e-5}}
+        {"step": 50, "type": "eval", "metrics": {"eval_loss": 2.123, "perplexity": 8.34}}
+
+    ---
+    Methods:
+        - `on_log()`: Called after each logging event during training. Appends training metrics.
+        - `on_evaluate()`: Called after each evaluation event (e.g., validation). Appends eval metrics.
+
+    Usage:
+        callback = SaveMetricsCallback("path/to/metrics.jsonl")
+        Trainer(..., callbacks=[callback])
+
+    Note:
+        This does not replace TensorBoard or WandB — it complements them by giving you
+        an easy-to-parse file for custom plots or debugging.
+    """
+
+    def __init__(self, output_path):
+        """
+        Initialize the callback and create the output directory if needed.
+        """
+        self.output_path = output_path
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    def _write_metrics(self, state, metrics, metric_type):
+        """
+        Appends a single metric record to the JSONL file.
+
+        Args:
+            state (TrainerState): The current training state object.
+            metrics (dict): Dictionary of metric values.
+            metric_type (str): One of "train" or "eval" to identify the source.
+        """
+        if metrics is not None:
+            with open(self.output_path, "a") as f:
+                json.dump({
+                    "step": state.global_step,
+                    "type": metric_type,
+                    "metrics": metrics
+                }, f)
+                f.write("\n")
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and not any(k.startswith("eval_") for k in logs):
+            self._write_metrics(state, logs, "train")
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        self._write_metrics(state, metrics, "eval")
+
 
 def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
     """
@@ -385,43 +459,29 @@ def save_training_config(
     print(f"⚙️ Logged Causal LM config to: {config_path}")
 
 
-def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir):
+def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir, tokenizer=None):
     """
     Evaluates the best checkpointed model (if enabled), saves the eval metrics,
     and saves ONLY the LoRA adapter weights + tokenizer to disk.
-
-    This assumes you want to reload later by attaching the adapter to the base model.
-
-    Args:
-        trainer (transformers.Trainer): Trainer with PEFT-wrapped model + tokenizer.
-        training_args (transformers.TrainingArguments): Your TrainingArguments.
-        metrics_dir (str): Directory to save `best_model_metrics.json`.
-        adapter_dir (str): Directory to save the LoRA adapter weights.
-        tokenizer_dir (str): Directory to save the tokenizer.
-
-    Returns:
-        dict or None: Final evaluation metrics if run, else None.
     """
-
     if training_args.load_best_model_at_end:
         best_eval_metrics = trainer.evaluate()
         best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
-
         with open(best_model_metrics_path, "w") as f:
             json.dump(best_eval_metrics, f, indent=4)
-
         print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
     else:
         print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
         best_eval_metrics = None
 
-    # Save only LoRA adapter weights
     print(f"💾 Saving LoRA adapter to {adapter_dir}")
     trainer.model.save_pretrained(adapter_dir)
 
-    if hasattr(trainer, "tokenizer") and trainer.tokenizer is not None:
+    if tokenizer is not None:
         print(f"💾 Saving tokenizer to {tokenizer_dir}")
-        trainer.tokenizer.save_pretrained(tokenizer_dir)
+        tokenizer.save_pretrained(tokenizer_dir)
+    else:
+        print("⚠️ No tokenizer provided; skipping save.")
 
     print("⚡️ To use this later: load the same base model and attach the adapter with PeftModel.from_pretrained()")
 
@@ -473,14 +533,15 @@ def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
     return metrics_save_path
 
 
-def run_final_inference_causal_lm(
+def run_final_inference(
     trainer,
     test_dataset,
     metrics_dir,
 ):
     """
     Runs final inference on a held-out test dataset for a Causal LM.
-    Computes final loss and perplexity, and saves the results to a JSON file.
+    Computes final eval loss, perplexity, and token-level accuracy,
+    and saves the results to a JSON file.
 
     Args:
         trainer (transformers.Trainer): Your fine-tuned Trainer object.
@@ -491,17 +552,20 @@ def run_final_inference_causal_lm(
         Saves a JSON file with:
           - eval_loss
           - perplexity
+          - token_accuracy
 
     Example:
         {
             "eval_loss": 1.23,
-            "perplexity": 3.42
+            "perplexity": 3.42,
+            "token_accuracy": 0.78
         }
     """
 
     print("\n🧪 Running final inference on held-out test set...")
 
     test_results = trainer.predict(test_dataset)
+    logits, labels = test_results.predictions, test_results.label_ids
 
     # Some Trainer versions log 'test_loss', some 'eval_loss'
     eval_loss = test_results.metrics.get("test_loss", test_results.metrics.get("eval_loss"))
@@ -512,9 +576,22 @@ def run_final_inference_causal_lm(
     except OverflowError:
         perplexity = float("inf")
 
+    # ✅ Compute token-level accuracy (same logic as in compute_custom_metrics)
+    logits = torch.tensor(logits)
+    labels = torch.tensor(labels)
+
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
+    preds = shift_logits.argmax(dim=-1)
+    mask = shift_labels != -100
+    correct = (preds == shift_labels) & mask
+    token_accuracy = correct.sum().item() / mask.sum().item()
+
     final_metrics = {
         "eval_loss": eval_loss,
-        "perplexity": perplexity
+        "perplexity": perplexity,
+        "token_accuracy": token_accuracy
     }
 
     os.makedirs(metrics_dir, exist_ok=True)
@@ -524,3 +601,4 @@ def run_final_inference_causal_lm(
 
     print(f"📄 Final test set results saved to: {final_test_metrics_path}")
     print(json.dumps(final_metrics, indent=4))
+

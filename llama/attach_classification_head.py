@@ -16,19 +16,6 @@ from transformers import (
 )
 
 
-def init_classification_head(model):
-    if hasattr(model, "score"):  # LlamaForSequenceClassification
-        head = model.score
-    elif hasattr(model, "classifier"):  # BertForSequenceClassification
-        head = model.classifier
-    else:
-        raise ValueError("Unknown model: no classification head found.")
-
-    for module in head.modules():
-        if isinstance(module, nn.Linear):
-            module.reset_parameters()
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_lm_path", type=str, required=True, help="Path to base LLaMA Causal LM")

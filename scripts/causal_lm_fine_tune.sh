@@ -15,8 +15,8 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
 
 echo "running the training script"
-python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset eli5 --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/distilbert/distilgpt2 --quant --lora --bf16 --gradient_checkpointing --debug
-# python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset jit_small_struc_ast_meta --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Meta-Llama-3-8B --quant --lora --bf16 --gradient_checkpointing --debug
+python /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset eli5 --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/distilbert/distilgpt2 --quant --lora --bf16 --gradient_checkpointing --max_seq_length 512 --debug
+# python /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset jit_small_struc_ast_meta --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Meta-Llama-3-8B --quant --lora --bf16 --gradient_checkpointing --debug
 echo "training finished"
 
 echo "Cleaning up"
