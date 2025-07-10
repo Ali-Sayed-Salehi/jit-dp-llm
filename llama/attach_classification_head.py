@@ -35,11 +35,15 @@ def main():
     classification_lm = AutoModelForSequenceClassification.from_pretrained(pretrained_classification_model_path, local_files_only=True)
 
     # Create new classification model with same config
-    config = classification_lm.config
-    config.num_labels = 2
-    config.problem_type = "single_label_classification"  # For normal classification
+    # config = classification_lm.config
+    # config.num_labels = 2
+    # config.problem_type = "single_label_classification"  # For normal classification
 
-    final_model = AutoModelForSequenceClassification.from_config(config, local_files_only=True)
+    # final_model = AutoModelForSequenceClassification.from_config(config, local_files_only=True)
+
+    classification_lm.config.num_labels = 2
+    classification_lm.config.problem_type = "single_label_classification"
+    final_model = classification_lm
 
     # Copy backbone weights
     final_model.model.load_state_dict(causal_lm.model.state_dict())
@@ -47,10 +51,10 @@ def main():
     # Save the final model + config
     os.makedirs(SAVE_PATH, exist_ok=True)
     final_model.save_pretrained(SAVE_PATH)
-    config.save_pretrained(SAVE_PATH)
+    final_model.config.save_pretrained(SAVE_PATH)
 
     # Save tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_classification_model_path, local_files_only=True)
     tokenizer.save_pretrained(SAVE_PATH)
 
     print(f"✅ New classification model + tokenizer saved to: {SAVE_PATH}")

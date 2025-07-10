@@ -13,7 +13,8 @@ from transformers import (
     TrainingArguments,
     DataCollatorForLanguageModeling,
     Trainer,
-    AutoModelForCausalLM
+    AutoModelForCausalLM,
+    BitsAndBytesConfig
 )
 from peft import (
     get_peft_model,
@@ -81,8 +82,8 @@ dataset = load_and_split_dataset(
 )
 
 # ------------------------- tokenize -------------------------
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
-config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
+config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
 
 tokenizer.pad_token_id = tokenizer.eos_token_id
 tokenizer.pad_token = tokenizer.eos_token
@@ -136,13 +137,15 @@ if args.quant and LLAMA:
         MODEL_PATH,
         quantization_config=quant_config,
         device_map="auto",
-        local_files_only=True
+        local_files_only=True,
+        trust_remote_code=True
     )
 else:
     print("🧠 Loading model without quantization...")
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
-        local_files_only=True
+        local_files_only=True,
+        trust_remote_code=True
     )
 
 model.config.pad_token_id = tokenizer.pad_token_id
@@ -178,7 +181,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=1 if DEBUG else 1,
     per_device_eval_batch_size=1 if DEBUG else 1,
     gradient_accumulation_steps=16,
-    num_train_epochs=1 if DEBUG else 5,
+    num_train_epochs=1 if DEBUG else 3,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     logging_strategy="steps",
