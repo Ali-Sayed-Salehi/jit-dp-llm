@@ -117,8 +117,8 @@ if imbalance_fix == "focal_loss":
 class_distribution = compute_class_distribution(dataset["train"]["label"])
 
 # ------------------------- tokenize -------------------------
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
-config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
+config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
 
 if LLAMA:
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -139,7 +139,7 @@ def tokenize_data(examples):
         max_length=MAX_SEQ_LENGTH
     )
 
-tokenized_dataset = dataset.map(tokenize_data, batched=True)
+tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
 tokenized_dataset.set_format("torch")
 
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
@@ -167,6 +167,7 @@ if args.quant and LLAMA:
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.float16
     )
+    # llm_int8_enable_fp32_cpu_offload=True
 
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_PATH,
@@ -175,7 +176,8 @@ if args.quant and LLAMA:
         label2id=label2id,
         quantization_config=quant_config,
         device_map="auto",
-        local_files_only=True
+        local_files_only=True,
+        trust_remote_code=True
     )
 else:
     print("🧠 Loading model without quantization...")
@@ -184,7 +186,8 @@ else:
         num_labels=2,
         id2label=id2label,
         label2id=label2id,
-        local_files_only=True
+        local_files_only=True,
+        trust_remote_code=True
     )
 
 model.config.pad_token_id = tokenizer.pad_token_id
@@ -217,7 +220,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=1 if DEBUG else 1,
     per_device_eval_batch_size=1 if DEBUG else 1,
     gradient_accumulation_steps=16,
-    num_train_epochs=1 if DEBUG else 5,
+    num_train_epochs=1 if DEBUG else 3,
     max_steps=2 if DEBUG else -1,
     weight_decay=0.01,
     logging_strategy="steps",

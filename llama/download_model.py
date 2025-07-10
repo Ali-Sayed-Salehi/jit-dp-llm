@@ -37,18 +37,18 @@ print(f"✅ Model will be saved to: {save_path}")
 
 # ----------------- Tokenizer -----------------
 print("✨ Downloading tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(args.model_id)
+tokenizer = AutoTokenizer.from_pretrained(args.model_id, trust_remote_code=True)
 tokenizer.save_pretrained(save_path)
 print("✅ Tokenizer saved.")
 
 # ----------------- Model -----------------
 print(f"✨ Downloading {args.model_head} model...")
-config = AutoConfig.from_pretrained(args.model_id)
+# config = AutoConfig.from_pretrained(args.model_id, trust_remote_code=True)
 
 if args.model_head == "causal-lm":
-    model = AutoModelForCausalLM.from_pretrained(args.model_id, config=config)
+    model = AutoModelForCausalLM.from_pretrained(args.model_id, trust_remote_code=True)
 else:
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_id, config=config)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_id, trust_remote_code=True)
 
 os.makedirs(save_path, exist_ok=True)
 model.save_pretrained(save_path)
