@@ -11,9 +11,9 @@ from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
-    LlamaConfig,
-    LlamaModel,
-    LlamaPreTrainedModel
+    Llama4TextConfig,
+    Llama4TextModel,
+    Llama4PreTrainedModel
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 
@@ -31,16 +31,16 @@ def can_return_tuple(func):
         return output
     return wrapper
 
-class CustomLlamaConfig(LlamaConfig):
-    model_type = "custom-llama-classification"
+class CustomLlama4TextConfig(Llama4TextConfig):
+    model_type = "custom-llama4-classification"
 
-class CustomLlamaForSequenceClassification(LlamaPreTrainedModel):
-    config_class = CustomLlamaConfig
+class CustomLlama4ForSequenceClassification(Llama4PreTrainedModel):
+    config_class = CustomLlama4TextConfig
 
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.model = LlamaModel(config)
+        self.model = Llama4TextModel(config)
         self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
         self.post_init()
 
@@ -93,7 +93,7 @@ class CustomLlamaForSequenceClassification(LlamaPreTrainedModel):
 
         pooled_logits = logits[torch.arange(batch_size, device=logits.device), last_non_pad_token]
 
-        # loss is not calculated cause it is overridden by compute_loss in CustomTrainer class
+        # loss is not calculated because it is overridden by compute_loss in CustomTrainer class
 
         return SequenceClassifierOutputWithPast(
             logits=pooled_logits,
@@ -115,24 +115,24 @@ def main():
     SAVE_PATH = os.path.join(args.save_path, org_name, model_name)
 
     # ✅ Register the custom config + model class
-    AutoConfig.register(CustomLlamaConfig.model_type, CustomLlamaConfig)
-    AutoModelForSequenceClassification.register(CustomLlamaConfig, CustomLlamaForSequenceClassification)
+    AutoConfig.register(CustomLlama4TextConfig.model_type, CustomLlama4TextConfig)
+    AutoModelForSequenceClassification.register(CustomLlama4TextConfig, CustomLlama4ForSequenceClassification)
 
     # ✅ Load base Causal LM and get its backbone weights
     print(f"🔍 Loading base Causal LM: {args.base_lm_path}")
-    causal_lm = AutoModelForCausalLM.from_pretrained(args.base_lm_path)
-    backbone = causal_lm.model  # type: LlamaModel
+    causal_lm = AutoModelForCausalLM.from_pretrained(args.base_lm_path, local_files_only=True)
+    backbone = causal_lm.model  # type: Llama4Model
 
     # ✅ Build your custom config
-    base_config = LlamaConfig.from_pretrained(args.base_lm_path)
-    config = CustomLlamaConfig.from_dict(base_config.to_dict())
-    config.model_type = CustomLlamaConfig.model_type
-    config.architectures = ["CustomLlamaForSequenceClassification"]
+    base_config = AutoConfig.from_pretrained(args.base_lm_path, local_files_only=True)
+    config = CustomLlama4TextConfig.from_dict(base_config.to_dict())
+    config.model_type = CustomLlama4TextConfig.model_type
+    config.architectures = ["CustomLlama4ForSequenceClassification"]
     config.num_labels = 2
     config.pad_token_id = base_config.pad_token_id
 
     # ✅ Create your classification model
-    final_model = CustomLlamaForSequenceClassification(config)
+    final_model = CustomLlama4ForSequenceClassification(config)
 
     # ✅ COPY the backbone weights
     final_model.model.load_state_dict(backbone.state_dict())
