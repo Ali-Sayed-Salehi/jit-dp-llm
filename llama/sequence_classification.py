@@ -45,7 +45,7 @@ from sequence_classification_utils import (
     save_training_metrics,
     save_training_config,
     setup_live_metrics,
-    register_custom_llama_if_needed
+    register_custom_llama4_if_needed
     )
 
 # ---------------------------- Parse Arguments ----------------------------
@@ -82,6 +82,9 @@ print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
+
+# ------------------------- Register custom llama -------------------------
+register_custom_llama4_if_needed(MODEL_PATH)
 
 # ------------------------- Load dataset and fix class imbalance -------------------------
 

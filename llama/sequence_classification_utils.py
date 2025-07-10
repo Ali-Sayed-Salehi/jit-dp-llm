@@ -34,7 +34,7 @@ from peft import (
 )
 
 import evaluate
-from attach_custom_head import CustomLlamaForSequenceClassification, CustomLlamaConfig
+from attach_classification_head_llama4 import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
 def parse_training_args():
@@ -1102,7 +1102,7 @@ def compute_max_recall_at_top_k(true_labels, percentages):
     return results
 
 
-def register_custom_llama_if_needed(model_path: str):
+def register_custom_llama4_if_needed(model_path: str):
     config_path = os.path.join(model_path, "config.json")
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"config.json not found at: {config_path}")
@@ -1113,9 +1113,9 @@ def register_custom_llama_if_needed(model_path: str):
     model_type = config_data.get("model_type", "")
     architectures = config_data.get("architectures", [])
 
-    if model_type == CustomLlamaConfig.model_type:
-        AutoConfig.register(CustomLlamaConfig.model_type, CustomLlamaConfig)
-        AutoModelForSequenceClassification.register(CustomLlamaConfig, CustomLlamaForSequenceClassification)
+    if model_type == CustomLlama4TextConfig.model_type:
+        AutoConfig.register(CustomLlama4TextConfig.model_type, CustomLlama4TextConfig)
+        AutoModelForSequenceClassification.register(CustomLlama4TextConfig, CustomLlama4ForSequenceClassification)
         print(f"✅ Registered custom LLaMA: model_type={model_type}, architectures={architectures}")
     else:
         print(f"ℹ️ Skipped custom registration: model_type={model_type}")

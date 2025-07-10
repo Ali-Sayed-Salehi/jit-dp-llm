@@ -39,7 +39,7 @@ def main():
     config.num_labels = 2
     config.problem_type = "single_label_classification"  # For normal classification
 
-    final_model = AutoModelForSequenceClassification.from_config(config)
+    final_model = AutoModelForSequenceClassification.from_config(config, local_files_only=True)
 
     # Copy backbone weights
     final_model.model.load_state_dict(causal_lm.model.state_dict())
@@ -50,7 +50,7 @@ def main():
     config.save_pretrained(SAVE_PATH)
 
     # Save tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path, local_files_only=True)
     tokenizer.save_pretrained(SAVE_PATH)
 
     print(f"✅ New classification model + tokenizer saved to: {SAVE_PATH}")
