@@ -35,7 +35,8 @@ from causal_lm_utils import (
     evaluate_and_save_best_model,
     save_training_metrics,
     save_training_config,
-    setup_live_metrics
+    setup_live_metrics,
+    chunk_long_samples
 )
 
 # ---------------------------- Parse Arguments ----------------------------
@@ -43,6 +44,7 @@ args = parse_training_args()
 
 DEBUG = args.debug
 LLAMA = "llama" in args.model_path.lower()
+LONG_LLAMA = "long_llama" in args.model_path.lower()
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
 SEQ_LEN_PERCENTILE = 100
 trainer_callbacks = []
@@ -74,7 +76,6 @@ print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 login_to_huggingface(REPO_PATH)
 
 # ------------------------- Load dataset -------------------------
-
 dataset = load_and_split_dataset(
     dataset_name=args.dataset,
     repo_path=REPO_PATH,
@@ -96,18 +97,36 @@ MAX_SEQ_LENGTH = estimate_max_sequence_length(
     override_max_seq_length=args.max_seq_length
 )
 
+should_truncate = args.sequence_length_fix == "truncate"
+
 def tokenize_data(examples):
     return tokenizer(
         examples["text"],
-        truncation=True,
+        truncation=should_truncate,
         max_length=MAX_SEQ_LENGTH
     )
 
 tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
-tokenized_dataset.set_format("torch")
+final_dataset = tokenized_dataset
 
 print("Tokenized dataset features:")
 print(tokenized_dataset['train'].features)
+
+# ------------------------------ Chunk commits ------------------------------
+if args.sequence_length_fix == "chunk":
+    chunked_dataset = chunk_long_samples(
+        tokenized_dataset,
+        max_seq_length=MAX_SEQ_LENGTH,
+        overlap_pct=0,
+        keep_original_size=True
+    )
+    final_dataset = chunked_dataset
+
+    print("✅ Chunked dataset features:")
+    print(chunked_dataset['train'].features)
+
+# ------------------------------ final dataset ------------------------------
+final_dataset.set_format("torch")
 
 # ------------------------------ Data Collator ------------------------------
 data_collator = DataCollatorForLanguageModeling(
@@ -124,29 +143,31 @@ trainer_callbacks.extend(
 )
 
 # ------------------------- Load model and quantization-------------------------
+optional_kwargs = {}
+
 if args.quant and LLAMA:
-    print("🧠 Loading model with 4-bit quantization using BitsAndBytesConfig...")
+    print("🔢 Using 4-bit quantization...")
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.float16
     )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        quantization_config=quant_config,
-        device_map="auto",
-        local_files_only=True,
-        trust_remote_code=True
-    )
+    # llm_int8_enable_fp32_cpu_offload=True
+    optional_kwargs["quantization_config"] = quant_config
 else:
-    print("🧠 Loading model without quantization...")
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        local_files_only=True,
-        trust_remote_code=True
-    )
+    print("🔢 Loading model without quantization...")
+
+if LONG_LLAMA:
+    optional_kwargs["mem_attention_grouping"] = (1, 2048)
+
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_PATH,
+    local_files_only=True,
+    trust_remote_code=True,
+    device_map="auto",
+    **optional_kwargs
+)
 
 model.config.pad_token_id = tokenizer.pad_token_id
 model.config.use_cache = False
@@ -216,8 +237,8 @@ save_training_config(
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_dataset["train"],
-    eval_dataset=tokenized_dataset["test"],
+    train_dataset=final_dataset["train"],
+    eval_dataset=final_dataset["test"],
     data_collator=data_collator,
     compute_metrics=custom_metrics,
     callbacks=trainer_callbacks,
@@ -243,6 +264,6 @@ save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 # ---------------------------- Run inference on held-out test set ----------------------------
 run_final_inference(
     trainer=trainer,
-    test_dataset=tokenized_dataset["final_test"],
+    test_dataset=final_dataset["final_test"],
     metrics_dir=metrics_dir,
 )

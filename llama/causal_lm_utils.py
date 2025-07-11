@@ -64,6 +64,14 @@ def parse_training_args():
         default=None,
         help="Optional. If set, overrides the estimated max sequence length."
     )
+    parser.add_argument(
+        "--sequence_length_fix",
+        choices=["truncate", "chunk"],
+        default="truncate",
+        help="How to handle inputs longer than max_seq_length: "
+            "'truncate' (tokenizer handles it) or 'chunk' (split into overlapping windows). "
+            "Default: truncate"
+    )
     
     args = parser.parse_args()
     
@@ -122,8 +130,6 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     huggingface_hub_login(token)
     print("✅ Logged in to Hugging Face.")
 
-
-from datasets import load_dataset, DatasetDict
 
 def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
     """
@@ -261,6 +267,90 @@ def estimate_max_sequence_length(
     model limit={config.max_position_embeddings}""")
 
     return max_seq_len
+
+
+def chunk_long_samples(
+    dataset_dict,
+    max_seq_length,
+    overlap_pct=0.0,
+    keep_original_size=False
+):
+    """
+    Splits each tokenized sample into fixed-size chunks of input_ids AND attention_mask,
+    with optional overlap controlled by overlap_pct.
+
+    Uses an explicit for-loop to guarantee each chunk becomes its own row.
+    If keep_original_size=True, each split is truncated to match its original size,
+    preserving the order of the commits.
+
+    Args:
+        dataset_dict: Hugging Face DatasetDict with splits like 'train', 'test', etc.
+        max_seq_length: Max tokens per chunk.
+        overlap_pct: Float in [0, 1). E.g., 0.2 means 20% overlap.
+        keep_original_size: If True, truncate chunked splits to original split size.
+        
+    Returns:
+        New DatasetDict with chunked splits.
+    """
+    if not (0.0 <= overlap_pct < 1.0):
+        raise ValueError(f"overlap_pct must be in [0, 1), got {overlap_pct}")
+
+    stride = int(max_seq_length * (1.0 - overlap_pct))
+    if stride <= 0:
+        raise ValueError(f"Calculated stride must be > 0, got stride={stride}")
+
+    print(f"📏 Chunking long samples using max_seq_length={max_seq_length}, "
+          f"overlap_pct={overlap_pct:.2f}, stride={stride}")
+
+    chunked_dataset = DatasetDict()
+
+    for split in dataset_dict:
+        before_count = len(dataset_dict[split])
+        print(f"🔍 Split '{split}': {before_count} samples before chunking...")
+
+        input_ids_chunks = []
+        attention_mask_chunks = []
+
+        for example in dataset_dict[split]:
+            tokens = example["input_ids"]
+            attn_mask = example["attention_mask"]
+            L = len(tokens)
+
+            if L <= max_seq_length:
+                input_ids_chunks.append(tokens)
+                attention_mask_chunks.append(attn_mask)
+            else:
+                for i in range(0, L, stride):
+                    end = i + max_seq_length
+                    chunk = tokens[i:end]
+                    chunk_mask = attn_mask[i:end]
+
+                    if len(chunk) > max_seq_length or len(chunk_mask) > max_seq_length:
+                        raise AssertionError(f"Chunk or mask length > max_seq_length.")
+
+                    if len(chunk) != len(chunk_mask):
+                        raise AssertionError(f"Chunk and mask lengths should match.")
+
+                    input_ids_chunks.append(chunk)
+                    attention_mask_chunks.append(chunk_mask)
+
+        after_count = len(input_ids_chunks)
+        print(f"✅ Split '{split}': {after_count} samples after chunking.")
+
+        ds = Dataset.from_dict({
+            "input_ids": input_ids_chunks,
+            "attention_mask": attention_mask_chunks
+        })
+
+        if keep_original_size and after_count > before_count:
+            print(f"🔻 Truncating '{split}' back to {before_count} samples (chronological).")
+            ds = ds.select(range(before_count))
+
+        chunked_dataset[split] = ds
+
+    return chunked_dataset
+
+
 
 
 def compute_custom_metrics(eval_pred):
