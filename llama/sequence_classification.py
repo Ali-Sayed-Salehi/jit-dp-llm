@@ -53,6 +53,7 @@ args = parse_training_args()
 
 DEBUG = args.debug
 LLAMA = "llama" in args.model_path.lower()
+LONG_LLAMA = "long_llama" in args.model_path.lower()
 FL_ALPHA = 2
 FL_GAMMA = 5
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
@@ -159,8 +160,10 @@ trainer_callbacks.extend(
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1}
 
+optional_kwargs = {}
+
 if args.quant and LLAMA:
-    print("🧠 Loading model with 4-bit quantization using BitsAndBytesConfig...")
+    print("🔢 Using 4-bit quantization...")
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
@@ -168,27 +171,23 @@ if args.quant and LLAMA:
         bnb_4bit_compute_dtype=torch.float16
     )
     # llm_int8_enable_fp32_cpu_offload=True
-
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_PATH,
-        num_labels=2,
-        id2label=id2label,
-        label2id=label2id,
-        quantization_config=quant_config,
-        device_map="auto",
-        local_files_only=True,
-        trust_remote_code=True
-    )
+    optional_kwargs["quantization_config"] = quant_config
 else:
-    print("🧠 Loading model without quantization...")
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_PATH,
-        num_labels=2,
-        id2label=id2label,
-        label2id=label2id,
-        local_files_only=True,
-        trust_remote_code=True
-    )
+    print("🔢 Loading model without quantization...")
+
+if LONG_LLAMA:
+    optional_kwargs["mem_attention_grouping"] = (1, 2048)
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_PATH,
+    num_labels=2,
+    id2label=id2label,
+    label2id=label2id,
+    local_files_only=True,
+    trust_remote_code=True,
+    device_map="auto",
+    **optional_kwargs
+)
 
 model.config.pad_token_id = tokenizer.pad_token_id
 model.config.use_cache = False
