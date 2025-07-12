@@ -3,6 +3,7 @@ import json
 import argparse
 from datetime import datetime
 from collections import Counter
+from subprocess import run
 
 import torch
 import numpy as np
@@ -31,6 +32,11 @@ from peft import (
     LoraConfig,
     TaskType,
     prepare_model_for_kbit_training
+)
+
+from accelerate import (
+    init_empty_weights,
+    infer_auto_device_map, 
 )
 
 import evaluate
@@ -78,10 +84,10 @@ def parse_training_args():
         help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy"
     )
     parser.add_argument(
-        "--max_seq_length",
+        "--truncation_len",
         type=int,
         default=None,
-        help="Optional. If set, overrides the estimated max sequence length."
+        help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
     )
     
     args = parser.parse_args()
@@ -98,7 +104,7 @@ def parse_training_args():
 
 
 
-def setup_training_directories(repo_root, continue_from_dir=None):
+def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     """
     Sets up output, metrics, tensorboard, and model/tokenizer directories.
 
@@ -114,6 +120,9 @@ def setup_training_directories(repo_root, continue_from_dir=None):
         run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
 
+    offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
+    slurm_tmpdir_dataset_prefix = os.path.join(os.environ[slurm_tmpdir], "dataset")
+
     base_run_dir = os.path.dirname(output_dir)
     tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
     metrics_dir = os.path.join(base_run_dir, "metrics")
@@ -122,7 +131,7 @@ def setup_training_directories(repo_root, continue_from_dir=None):
     config_path = os.path.join(metrics_dir, "config.json")
     live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
 
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir]
+    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir_dataset_prefix]
     for d in dirs_to_create:
         os.makedirs(d, exist_ok=True)
 
@@ -136,6 +145,8 @@ def setup_training_directories(repo_root, continue_from_dir=None):
         "model_dir": model_dir,
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
+        "offload_dir": offload_dir,
+        "slurm_tmpdir_dataset_prefix": slurm_tmpdir_dataset_prefix
     }
 
 
@@ -159,7 +170,7 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
 
 
 
-def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
+def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
     """
     Loads and splits a dataset for training, evaluation, and final testing.
 
@@ -204,8 +215,22 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
     print(f"📂 Loading dataset: {dataset_name}")
 
     if dataset_name != "imdb":
-        dataset_path = os.path.join(repo_path, "datasets", dataset_file_map[dataset_name])
-        dataset = load_dataset("json", data_files=dataset_path, split="train")
+        dataset_file = dataset_file_map[dataset_name]
+        source_file = os.path.join(repo_path, "datasets", dataset_file)
+
+        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_file))
+        os.makedirs(dest_dir, exist_ok=True)
+
+        dest_file = os.path.join(dest_dir, os.path.basename(dataset_file))
+
+        # Copy to slurm tmpdir
+        if not os.path.exists(dest_file):
+            run(["rsync", "-a", source_file, dest_file], check=True)
+            print(f"✅ Copied {source_file} → {dest_file}")
+        else:
+            print(f"✅ Dataset file already exists at {dest_file} — skipping copy.")
+
+        dataset = load_dataset("json", data_files=dest_file, split="train")
 
         # Chronologically split the dataset: 64% train, 16% eval, 20% test
         n_total = len(dataset)
@@ -349,59 +374,42 @@ def compute_class_distribution(labels) -> dict:
 
 
 def estimate_max_sequence_length(
-    dataset,
-    tokenizer,
-    config,
-    percentile=100,
-    text_field="text",
-    override_max_seq_length=None
+    truncation_len=None,
+    chunking_len=None
 ):
     """
-    Estimate the maximum sequence length to use for tokenization,
-    based on a percentile of tokenized text lengths in the TRAIN split,
-    unless an explicit override is provided.
-
-    If `override_max_seq_length` is not None, it will be returned instead
-    of calculating the length from the data. This is useful if you want
-    consistent or manually-tuned max sequence length for comparison runs.
+    Determines the final maximum sequence length to use for tokenization and training,
+    based on whether truncation, chunking, or both are applied.
 
     Args:
-        dataset (DatasetDict): The entire dataset object with 'train' split.
-        tokenizer: Hugging Face tokenizer.
-        config: Model configuration.
-        percentile (float): Percentile to use for max length cutoff.
-        text_field (str): The field in the dataset containing text.
-        override_max_seq_length (int, optional): If provided, overrides any estimated value.
+        truncation_len (int, optional):
+            If set, this value is used to truncate each sequence during tokenization.
+            This means any input longer than this will be clipped to `truncation_len`.
+        
+        chunking_len (int, optional):
+            If set, this value defines the target length for splitting (chunking) long sequences
+            into multiple fixed-size sub-sequences. Chunking typically happens *after*
+            truncation during data preparation.
 
     Returns:
-        int: Final max sequence length to use.
+        int or None:
+            - If both `truncation_len` and `chunking_len` are provided, returns `chunking_len`.
+            - If only `truncation_len` is provided, returns `truncation_len`.
+            - If only `chunking_len` is provided, returns `chunking_len`.
+            - If neither is set, returns None.
     """
-    if override_max_seq_length is not None:
-        print(f"⚙️ Overriding max sequence length with user-specified value: {override_max_seq_length}")
-        return override_max_seq_length
-
-    if "train" not in dataset:
-        raise ValueError("The dataset must contain a 'train' split to estimate sequence length.")
-
-    def get_token_length(example):
-        return {"length": len(tokenizer(example[text_field], truncation=False)["input_ids"])}
-
-    lengths_dataset = dataset["train"].map(get_token_length)
-    lengths = lengths_dataset["length"]
-
-    calculated_max_length = int(np.percentile(lengths, percentile))
-    max_seq_len = min(
-        calculated_max_length,
-        tokenizer.model_max_length,
-        config.max_position_embeddings
-    )
-
-    print(f"""✅ Using max_seq_length={max_seq_len}, 
-    {percentile}th percentile={calculated_max_length}, 
-    tokenizer limit={tokenizer.model_max_length}, 
-    model limit={config.max_position_embeddings}""")
-
-    return max_seq_len
+    if not truncation_len and not chunking_len:
+        print(f"✂️ No truncation or chunking used.")
+        return None
+    elif truncation_len and not chunking_len:
+        print(f"✂️ Tokenizer will truncate to {truncation_len} tokens. No chunking used")
+        return truncation_len
+    elif truncation_len and chunking_len:
+        print(f"✂️ Each sequence will be truncated to {truncation_len} tokens and further chunked into {chunking_len}-token samples.")
+        return chunking_len
+    elif not truncation_len and chunking_len:
+        print(f"✂️ Each sequence will be chunked into {chunking_len}-token samples. No truncation used.")
+        return chunking_len
 
 
 class FocalLoss(nn.Module):
@@ -1121,4 +1129,36 @@ def register_custom_llama4_if_needed(model_path: str):
         print(f"ℹ️ Skipped custom registration: model_type={model_type}")
 
 
+def calculate_custom_device_map(
+    model_path: str,
+    max_memory: dict,
+    no_split_module_classes: list = ["LlamaDecoderLayer"]
+):
+    """
+    Calculates a custom device map for a large model to balance GPU/CPU/disk.
+
+    Args:
+        model_path (str): Path to the local model.
+        max_memory (dict): Max memory per device. E.g., {0: "2GB", "cpu": "48GB", "disk": "200GB"}
+        no_split_module_classes (list): Blocks that shouldn’t be split.
+
+    Returns:
+        dict: The calculated device map.
+    """
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    with init_empty_weights():
+        model = AutoModelForSequenceClassification.from_config(config)
+
+    device_map = infer_auto_device_map(
+        model,
+        max_memory=max_memory,
+        no_split_module_classes=no_split_module_classes
+    )
+
+    print("\n📐 Custom device map:")
+    for module, device in device_map.items():
+        print(f"  {module:<40} => {device}")
+
+    return device_map
 
