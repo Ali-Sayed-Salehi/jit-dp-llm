@@ -3,6 +3,8 @@ import json
 import argparse
 from datetime import datetime
 from collections import Counter
+import shutil
+from subprocess import run
 
 import torch
 import numpy as np
@@ -59,26 +61,27 @@ def parse_training_args():
         Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
         )
     parser.add_argument(
-        "--max_seq_length",
+        "--truncation_len",
         type=int,
         default=None,
-        help="Optional. If set, overrides the estimated max sequence length."
+        help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
     )
     parser.add_argument(
-        "--sequence_length_fix",
-        choices=["truncate", "chunk"],
-        default="truncate",
-        help="How to handle inputs longer than max_seq_length: "
-            "'truncate' (tokenizer handles it) or 'chunk' (split into overlapping windows). "
-            "Default: truncate"
+        "--chunking_len",
+        type=int,
+        default=None,
+        help="Optional. The length to which the sequences should be chunked in order to reduce sequence length for the model."
     )
     
     args = parser.parse_args()
+
+    if args.truncation_len and args.chunking_len and args.truncation_len < args.chunking_len:
+        raise ValueError(f"truncation_len ({args.truncation_len}) cannot be large than chunking_len ({args.chunking_len})")
     
     return args
 
 
-def setup_training_directories(repo_root, continue_from_dir=None):
+def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     if continue_from_dir:
         output_dir = continue_from_dir
         run_timestamp = os.path.basename(os.path.dirname(output_dir)).split("_", 1)[-1]
@@ -86,6 +89,9 @@ def setup_training_directories(repo_root, continue_from_dir=None):
     else:
         run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
+
+    offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
+    slurm_tmpdir_dataset_prefix = os.path.join(os.environ[slurm_tmpdir], "dataset")
 
     base_run_dir = os.path.dirname(output_dir)
     tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
@@ -95,7 +101,7 @@ def setup_training_directories(repo_root, continue_from_dir=None):
     config_path = os.path.join(metrics_dir, "config.json")
     live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
 
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir]
+    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir_dataset_prefix]
     for d in dirs_to_create:
         os.makedirs(d, exist_ok=True)
 
@@ -109,6 +115,8 @@ def setup_training_directories(repo_root, continue_from_dir=None):
         "model_dir": model_dir,
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
+        "offload_dir": offload_dir,
+        "slurm_tmpdir_dataset_prefix": slurm_tmpdir_dataset_prefix
     }
 
 
@@ -131,7 +139,7 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
+def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
     """
     Loads and splits a dataset for training, evaluation, and final testing.
 
@@ -175,8 +183,22 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
             trust_remote_code=True
         )
     else:
-        dataset_path = os.path.join(repo_path, "datasets", dataset_file_map[dataset_name])
-        dataset = load_dataset("json", data_files=dataset_path, split="train")
+        dataset_file = dataset_file_map[dataset_name]
+        source_file = os.path.join(repo_path, "datasets", dataset_file)
+
+        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_file))
+        os.makedirs(dest_dir, exist_ok=True)
+
+        dest_file = os.path.join(dest_dir, os.path.basename(dataset_file))
+
+        # Copy to slurm tmpdir
+        if not os.path.exists(dest_file):
+            run(["rsync", "-a", source_file, dest_file], check=True)
+            print(f"✅ Copied {source_file} → {dest_file}")
+        else:
+            print(f"✅ Dataset file already exists at {dest_file} — skipping copy.")
+
+        dataset = load_dataset("json", data_files=dest_file, split="train")
 
     # Chronological split
     n_total = len(dataset)
@@ -214,80 +236,59 @@ def load_and_split_dataset(dataset_name, repo_path, debug=False, seed=42):
 
 
 def estimate_max_sequence_length(
-    dataset,
-    tokenizer,
-    config,
-    percentile=100,
-    text_field="text",
-    override_max_seq_length=None
+    truncation_len=None,
+    chunking_len=None
 ):
     """
-    Estimate the maximum sequence length to use for tokenization,
-    based on a percentile of tokenized text lengths in the TRAIN split,
-    unless an explicit override is provided.
-
-    If `override_max_seq_length` is not None, it will be returned instead
-    of calculating the length from the data. This is useful if you want
-    consistent or manually-tuned max sequence length for comparison runs.
+    Determines the final maximum sequence length to use for tokenization and training,
+    based on whether truncation, chunking, or both are applied.
 
     Args:
-        dataset (DatasetDict): The entire dataset object with 'train' split.
-        tokenizer: Hugging Face tokenizer.
-        config: Model configuration.
-        percentile (float): Percentile to use for max length cutoff.
-        text_field (str): The field in the dataset containing text.
-        override_max_seq_length (int, optional): If provided, overrides any estimated value.
+        truncation_len (int, optional):
+            If set, this value is used to truncate each sequence during tokenization.
+            This means any input longer than this will be clipped to `truncation_len`.
+        
+        chunking_len (int, optional):
+            If set, this value defines the target length for splitting (chunking) long sequences
+            into multiple fixed-size sub-sequences. Chunking typically happens *after*
+            truncation during data preparation.
 
     Returns:
-        int: Final max sequence length to use.
+        int or None:
+            - If both `truncation_len` and `chunking_len` are provided, returns `chunking_len`.
+            - If only `truncation_len` is provided, returns `truncation_len`.
+            - If only `chunking_len` is provided, returns `chunking_len`.
+            - If neither is set, returns None.
     """
-    if override_max_seq_length is not None:
-        print(f"⚙️ Overriding max sequence length with user-specified value: {override_max_seq_length}")
-        return override_max_seq_length
-
-    if "train" not in dataset:
-        raise ValueError("The dataset must contain a 'train' split to estimate sequence length.")
-
-    def get_token_length(example):
-        return {"length": len(tokenizer(example[text_field], truncation=False)["input_ids"])}
-
-    lengths_dataset = dataset["train"].map(get_token_length)
-    lengths = lengths_dataset["length"]
-
-    calculated_max_length = int(np.percentile(lengths, percentile))
-    max_seq_len = min(
-        calculated_max_length,
-        tokenizer.model_max_length,
-        config.max_position_embeddings
-    )
-
-    print(f"""✅ Using max_seq_length={max_seq_len}, 
-    {percentile}th percentile={calculated_max_length}, 
-    tokenizer limit={tokenizer.model_max_length}, 
-    model limit={config.max_position_embeddings}""")
-
-    return max_seq_len
+    if not truncation_len and not chunking_len:
+        print(f"✂️ No truncation or chunking used.")
+        return None
+    elif truncation_len and not chunking_len:
+        print(f"✂️ Tokenizer will truncate to {truncation_len} tokens. No chunking used")
+        return truncation_len
+    elif truncation_len and chunking_len:
+        print(f"✂️ Each sequence will be truncated to {truncation_len} tokens and further chunked into {chunking_len}-token samples.")
+        return chunking_len
+    elif not truncation_len and chunking_len:
+        print(f"✂️ Each sequence will be chunked into {chunking_len}-token samples. No truncation used.")
+        return chunking_len
 
 
 def chunk_long_samples(
     dataset_dict,
     max_seq_length,
-    overlap_pct=0.0,
-    keep_original_size=False
+    overlap_pct=0.0
 ):
     """
     Splits each tokenized sample into fixed-size chunks of input_ids AND attention_mask,
     with optional overlap controlled by overlap_pct.
 
     Uses an explicit for-loop to guarantee each chunk becomes its own row.
-    If keep_original_size=True, each split is truncated to match its original size,
-    preserving the order of the commits.
 
     Args:
         dataset_dict: Hugging Face DatasetDict with splits like 'train', 'test', etc.
         max_seq_length: Max tokens per chunk.
         overlap_pct: Float in [0, 1). E.g., 0.2 means 20% overlap.
-        keep_original_size: If True, truncate chunked splits to original split size.
         
     Returns:
         New DatasetDict with chunked splits.
@@ -337,16 +338,10 @@ def chunk_long_samples(
         after_count = len(input_ids_chunks)
         print(f"✅ Split '{split}': {after_count} samples after chunking.")
 
-        ds = Dataset.from_dict({
+        chunked_dataset[split] = Dataset.from_dict({
             "input_ids": input_ids_chunks,
             "attention_mask": attention_mask_chunks
         })
-
-        if keep_original_size and after_count > before_count:
-            print(f"🔻 Truncating '{split}' back to {before_count} samples (chronological).")
-            ds = ds.select(range(before_count))
-
-        chunked_dataset[split] = ds
 
     return chunked_dataset
 

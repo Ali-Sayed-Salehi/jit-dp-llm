@@ -39,7 +39,7 @@ from causal_lm_utils import (
     chunk_long_samples
 )
 
-# ---------------------------- Parse Arguments ----------------------------
+# ---------------------------- Parse Arguments and constants ----------------------------
 args = parse_training_args()
 
 DEBUG = args.debug
@@ -48,6 +48,7 @@ LONG_LLAMA = "long_llama" in args.model_path.lower()
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
 SEQ_LEN_PERCENTILE = 100
 trainer_callbacks = []
+slurm_tmpdir = "TMPDIR"
 
 # ------------------------------ Unsloth Patch ------------------------------
 # patch_transformers()
@@ -57,7 +58,7 @@ trainer_callbacks = []
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 print(f"✅ Detected REPO_PATH: {REPO_PATH}")
 
-paths = setup_training_directories(REPO_PATH, args.continue_from_dir)
+paths = setup_training_directories(REPO_PATH, slurm_tmpdir, args.continue_from_dir)
 
 output_dir = paths["output_dir"]
 run_timestamp = paths["run_timestamp"]
@@ -67,6 +68,8 @@ config_path = paths["config_path"]
 live_metrics_path = paths["live_metrics_path"]
 finetuned_model_dir = paths["model_dir"]
 finetuned_tokenizer_dir = paths["tokenizer_dir"]
+offload_dir = paths["offload_dir"]
+slurm_tmpdir_dataset_prefix = paths["slurm_tmpdir_dataset_prefix"]
 
 # ------------------------- Local model path -------------------------
 MODEL_PATH = args.model_path
@@ -79,6 +82,7 @@ login_to_huggingface(REPO_PATH)
 dataset = load_and_split_dataset(
     dataset_name=args.dataset,
     repo_path=REPO_PATH,
+    slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
     debug=DEBUG
 )
 
@@ -90,20 +94,15 @@ tokenizer.pad_token_id = tokenizer.eos_token_id
 tokenizer.pad_token = tokenizer.eos_token
 
 MAX_SEQ_LENGTH = estimate_max_sequence_length(
-    dataset=dataset,
-    tokenizer=tokenizer,
-    config=config,
-    percentile=SEQ_LEN_PERCENTILE,
-    override_max_seq_length=args.max_seq_length
+    truncation_len=args.truncation_len,
+    chunking_len=args.chunking_len
 )
-
-should_truncate = args.sequence_length_fix == "truncate"
 
 def tokenize_data(examples):
     return tokenizer(
         examples["text"],
-        truncation=should_truncate,
-        max_length=MAX_SEQ_LENGTH
+        truncation=True if args.truncation_len else False,
+        max_length=args.truncation_len
     )
 
 tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
@@ -113,12 +112,11 @@ print("Tokenized dataset features:")
 print(tokenized_dataset['train'].features)
 
 # ------------------------------ Chunk commits ------------------------------
-if args.sequence_length_fix == "chunk":
+if args.chunking_len:
     chunked_dataset = chunk_long_samples(
         tokenized_dataset,
-        max_seq_length=MAX_SEQ_LENGTH,
-        overlap_pct=0,
-        keep_original_size=True
+        max_seq_length=args.chunking_len,
+        overlap_pct=0
     )
     final_dataset = chunked_dataset
 
@@ -151,9 +149,9 @@ if args.quant and LLAMA:
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16
+        bnb_4bit_compute_dtype=torch.float16,
+        llm_int8_enable_fp32_cpu_offload=True
     )
-    # llm_int8_enable_fp32_cpu_offload=True
     optional_kwargs["quantization_config"] = quant_config
 else:
     print("🔢 Loading model without quantization...")
@@ -166,6 +164,8 @@ model = AutoModelForCausalLM.from_pretrained(
     local_files_only=True,
     trust_remote_code=True,
     device_map="auto",
+    offload_folder=offload_dir,
+    offload_state_dict=True,
     **optional_kwargs
 )
 

@@ -45,7 +45,8 @@ from sequence_classification_utils import (
     save_training_metrics,
     save_training_config,
     setup_live_metrics,
-    register_custom_llama4_if_needed
+    register_custom_llama4_if_needed,
+    calculate_custom_device_map
     )
 
 # ---------------------------- Parse Arguments ----------------------------
@@ -60,13 +61,14 @@ FL_GAMMA = 5
 SEQ_LEN_PERCENTILE = 100
 RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
 trainer_callbacks = []
+slurm_tmpdir = "TMPDIR"
 
 # ---------------------------- handle directories  ----------------------------
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 print(f"✅ Detected REPO_PATH: {REPO_PATH}")
 
-paths = setup_training_directories(REPO_PATH, args.continue_from_dir)
+paths = setup_training_directories(REPO_PATH, slurm_tmpdir, args.continue_from_dir)
 
 output_dir = paths["output_dir"]
 run_timestamp = paths["run_timestamp"]
@@ -76,6 +78,8 @@ config_path = paths["config_path"]
 live_metrics_path = paths["live_metrics_path"]
 finetuned_model_dir = paths["model_dir"]
 finetuned_tokenizer_dir = paths["tokenizer_dir"]
+offload_dir = paths["offload_dir"]
+slurm_tmpdir_dataset_prefix = paths["slurm_tmpdir_dataset_prefix"]
 
 # ------------------------- Local model path -------------------------
 MODEL_PATH = args.model_path
@@ -92,6 +96,7 @@ register_custom_llama4_if_needed(MODEL_PATH)
 dataset = load_and_split_dataset(
     dataset_name=args.dataset,
     repo_path=REPO_PATH,
+    slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
     debug=DEBUG
 )
 
@@ -107,7 +112,6 @@ dataset, class_weights, focal_loss_dict = apply_class_imbalance_strategy(
     alpha=FL_ALPHA,
     gamma=FL_GAMMA
 )
-
 
 # Prepare loss function if needed
 focal_loss_fct = None
@@ -126,27 +130,27 @@ if LLAMA:
     tokenizer.pad_token = tokenizer.eos_token
 
 MAX_SEQ_LENGTH = estimate_max_sequence_length(
-    dataset=dataset,
-    tokenizer=tokenizer,
-    config=config,
-    percentile=SEQ_LEN_PERCENTILE,
-    override_max_seq_length=args.max_seq_length
+    truncation_len=args.truncation_len
 )
 
 def tokenize_data(examples):
     return tokenizer(
         examples["text"],
-        truncation=True,
-        max_length=MAX_SEQ_LENGTH
+        truncation=True if args.truncation_len else False,
+        max_length=args.truncation_len
     )
 
 tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
-tokenized_dataset.set_format("torch")
-
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+final_dataset = tokenized_dataset
 
 print("Tokenized dataset features:")
 print(tokenized_dataset['train'].features)
+
+# ------------------------------ final dataset ------------------------------
+final_dataset.set_format("torch")
+
+# ------------------------------ Data Collator ------------------------------
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
 # ------------------------- define metrics -------------------------
 def custom_metrics(eval_pred):
@@ -154,6 +158,18 @@ def custom_metrics(eval_pred):
 
 trainer_callbacks.extend(
     setup_live_metrics(args.live_metrics, live_metrics_path)
+)
+
+# ------------------------- Custom device map -------------------------
+max_memory = {
+    0: "8GB",
+    "cpu": "200GB",
+    "disk": "200GB"
+}
+
+device_map = calculate_custom_device_map(
+    model_path=MODEL_PATH,
+    max_memory=max_memory
 )
 
 # ------------------------- Load model and quantization-------------------------
@@ -168,9 +184,9 @@ if args.quant and LLAMA:
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16
+        bnb_4bit_compute_dtype=torch.float16,
+        llm_int8_enable_fp32_cpu_offload=True
     )
-    # llm_int8_enable_fp32_cpu_offload=True
     optional_kwargs["quantization_config"] = quant_config
 else:
     print("🔢 Loading model without quantization...")
@@ -185,7 +201,9 @@ model = AutoModelForSequenceClassification.from_pretrained(
     label2id=label2id,
     local_files_only=True,
     trust_remote_code=True,
-    device_map="auto",
+    device_map=device_map,
+    offload_folder=offload_dir,
+    offload_state_dict=True,
     **optional_kwargs
 )
 
@@ -260,8 +278,8 @@ save_training_config(
 trainer = CustomTrainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_dataset["train"],
-    eval_dataset=tokenized_dataset["test"],
+    train_dataset=final_dataset["train"],
+    eval_dataset=final_dataset["test"],
     data_collator=data_collator,
     compute_metrics=custom_metrics,
     callbacks=trainer_callbacks,
@@ -289,7 +307,7 @@ save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 # ---------------------------- Run inference on held-out test set ----------------------------
 run_final_inference(
     trainer=trainer,
-    test_dataset=tokenized_dataset["final_test"],
+    test_dataset=final_dataset["final_test"],
     metrics_dir=metrics_dir,
     percentages=RECALL_AT_TOP_K_PERCENTAGES,
     threshold=args.threshold,
