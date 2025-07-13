@@ -162,9 +162,9 @@ trainer_callbacks.extend(
 
 # ------------------------- Custom device map -------------------------
 max_memory = {
-    0: "8GB",
+    0: "2GB",
     "cpu": "200GB",
-    "disk": "200GB"
+    "disk": "0GB"
 }
 
 device_map = calculate_custom_device_map(
@@ -201,7 +201,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
     label2id=label2id,
     local_files_only=True,
     trust_remote_code=True,
-    device_map=device_map,
+    device_map="auto",
     offload_folder=offload_dir,
     offload_state_dict=True,
     **optional_kwargs
