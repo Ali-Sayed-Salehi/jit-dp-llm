@@ -120,7 +120,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
 
     offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
-    slurm_tmpdir_dataset_prefix = os.path.join(os.environ[slurm_tmpdir], "dataset")
+    slurm_tmpdir = os.environ[slurm_tmpdir]
 
     base_run_dir = os.path.dirname(output_dir)
     tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
@@ -130,7 +130,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     config_path = os.path.join(metrics_dir, "config.json")
     live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
 
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir_dataset_prefix]
+    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir]
     for d in dirs_to_create:
         os.makedirs(d, exist_ok=True)
 
@@ -145,7 +145,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
         "offload_dir": offload_dir,
-        "slurm_tmpdir_dataset_prefix": slurm_tmpdir_dataset_prefix
+        "slurm_tmpdir": slurm_tmpdir
     }
 
 
@@ -168,40 +168,40 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
+
+def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
     """
     Loads and splits a local JSONL dataset for training, evaluation, and final testing,
     or loads the IMDb dataset from Hugging Face if specified.
 
-    If a local dataset is used, the function preserves the directory structure under
-    the 'datasets/' folder inside your repo, copies it to SLURM tmpdir, and splits it
-    chronologically (64% train, 16% eval, 20% test). If the IMDb dataset is requested,
-    it splits the built-in test set in half to create 'test' and 'final_test'.
+    If a local dataset is used, the function mirrors its path relative to the repo root,
+    copies it to SLURM tmpdir under that same relative structure, and splits it chronologically
+    (64% train, 16% eval, 20% test). If the IMDb dataset is requested, it splits the built-in
+    test set in half to create 'test' and 'final_test'.
 
     Args:
         dataset_path (str or None): Absolute path to the local JSONL dataset,
                                     or "imdb" to load the Hugging Face IMDb dataset.
-        repo_path (str): Path to the root of the repository (used to find 'datasets/').
-        slurm_tmpdir_dataset_prefix (str): Path prefix inside SLURM tmpdir to copy the dataset.
-        debug (bool, optional): If True, reduces the dataset size for faster experimentation. Default is False.
-        seed (int, optional): Random seed for shuffling the training dataset. Default is 42.
+        repo_path (str): Path to the root of the repository (used to find relative path).
+        slurm_tmpdir (str): Path prefix inside SLURM tmpdir to copy the dataset.
+        debug (bool, optional): If True, reduces the dataset size for faster experimentation.
+        seed (int, optional): Random seed for shuffling the training dataset.
 
     Returns:
-        DatasetDict: A dictionary with Hugging Face `Dataset` objects with the following keys:
-            - "train": Training split, formatted with 'text' and 'label' fields.
-            - "test": Evaluation split, formatted with 'text' and 'label' fields.
-            - "final_test": Held-out test split, formatted with 'text' and 'label' fields.
+        DatasetDict: A dictionary with Hugging Face `Dataset` objects with keys:
+            - "train": Training split, formatted
+            - "test": Evaluation split, formatted
+            - "final_test": Held-out test split, formatted
 
     Raises:
         FileNotFoundError: If the specified local dataset file does not exist.
     """
 
-    # Handle IMDb dataset loading
+    # IMDb branch
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
-        print("Loading IMDb dataset from Hugging Face...")
+        print("🎬 Loading IMDb dataset from Hugging Face...")
         dataset = load_dataset("imdb")
 
-        # Split the original 'test' set into 'test' and 'final_test'
         test_dataset = dataset["test"]
         n_test = len(test_dataset)
         n_eval = n_test // 2
@@ -217,28 +217,28 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
 
         return imdb_ds
 
-    # Local dataset path
+    # Local dataset branch
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-    datasets_root = os.path.join(repo_path, "datasets")
-    dataset_relpath = os.path.relpath(dataset_path, start=datasets_root)
-    dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_relpath))
+    # Mirror the relatie path under slurm_tmdir
+    dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
+    dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
     os.makedirs(dest_dir, exist_ok=True)
 
     dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
 
-    # Always copy (overwrite)
+    # Always copy and overwrite
     run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
     print(f"✅ Copied {dataset_path} → {dest_file}")
 
-    # Load dataset from local JSONL
+    # Load dataset
     dataset = load_dataset("json", data_files=dest_file, split="train")
 
-    # Chronological split: 64% train, 16% eval, 20% test
+    # Chronological split
     n_total = len(dataset)
     n_train = int(n_total * 0.64)
-    n_eval = int(n_total * 0.16)
+    n_eval  = int(n_total * 0.16)
 
     train_dataset = dataset.select(range(0, n_train))
     eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
@@ -249,7 +249,6 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
 
-    # Shuffle training set
     train_dataset = train_dataset.shuffle(seed=seed)
 
     def format_for_classification(example):
@@ -267,7 +266,6 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
         "test": eval_formatted,
         "final_test": test_formatted
     })
-
 
 
 def apply_class_imbalance_strategy(
@@ -1182,3 +1180,57 @@ def calculate_custom_device_map(
 
     return device_map
 
+
+def copy_model_to_tmpdir(model_path, repo_root, tmpdir_prefix):
+    """
+    Copies a model directory (which also contains tokenizer files) to local scratch (e.g., $SLURM_TMPDIR),
+    preserving its relative structure under repo_root.
+
+    Args:
+        model_path (str): Absolute path to the model directory to copy.
+        repo_root (str): The root of your repo (used to compute relative paths).
+        tmpdir_prefix (str): Path prefix for local scratch, e.g., $SLURM_TMPDIR.
+
+    Returns:
+        str: Path to the copied model directory inside tmpdir.
+    """
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"❌ Source directory does not exist: {model_path}")
+
+    rel_path = os.path.relpath(model_path, start=repo_root)
+    dest_dir = os.path.join(tmpdir_prefix, rel_path)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    print(f"📂 Copying {model_path} → {dest_dir} ...")
+    run(["rsync", "-a", "--delete", model_path.rstrip("/") + "/", dest_dir], check=True)
+    print(f"✅ Copy complete: {dest_dir}")
+
+    return dest_dir
+
+
+import torch
+
+def get_mixed_precision_policy():
+    """
+    Checks whether the current GPU supports BF16 or FP16.
+    Returns:
+        - 'bf16' if BF16 is supported
+        - 'fp16' if FP16 is supported
+        - None if no GPU is available
+    """
+    if not torch.cuda.is_available():
+        print("❌ No GPU detected. Using full precision (FP32).")
+        return None
+
+    device = torch.device("cuda")
+    major, minor = torch.cuda.get_device_capability(device)
+
+    print(f"✅ Detected GPU compute capability: {major}.{minor}")
+
+    if major >= 8:
+        print("✨ Your GPU supports BF16 mixed precision.")
+        return "bf16"
+    else:
+        print("⚡️ Your GPU does not support native BF16. Using FP16 instead.")
+        return "fp16"

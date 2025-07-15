@@ -90,7 +90,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
 
     offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
-    slurm_tmpdir_dataset_prefix = os.path.join(os.environ[slurm_tmpdir], "dataset")
+    slurm_tmpdir = os.environ[slurm_tmpdir]
 
     base_run_dir = os.path.dirname(output_dir)
     tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
@@ -100,7 +100,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     config_path = os.path.join(metrics_dir, "config.json")
     live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
 
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir_dataset_prefix]
+    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir]
     for d in dirs_to_create:
         os.makedirs(d, exist_ok=True)
 
@@ -115,7 +115,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
         "offload_dir": offload_dir,
-        "slurm_tmpdir_dataset_prefix": slurm_tmpdir_dataset_prefix
+        "slurm_tmpdir": slurm_tmpdir
     }
 
 
@@ -138,21 +138,20 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-
-def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
+def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
     """
     Loads and splits a local JSONL dataset for causal LM training, evaluation, and final testing,
     or loads the Hugging Face ELI5 dataset if specified.
 
-    - Local datasets are copied to SLURM tmpdir under the same subpath as under 'datasets/' in your repo,
-      and always overwrite any existing file.
+    - Local datasets are mirrored under the same subpath as under the repo root,
+      then copied to SLURM tmpdir and always overwrite any existing file.
     - ELI5 is loaded directly from the Hugging Face hub and split chronologically.
 
     Args:
         dataset_path (str or None): Absolute path to the local JSONL dataset,
                                     or "eli5" to load the Hugging Face ELI5 dataset.
-        repo_path (str): Path to the root of the repository (used to find the 'datasets/' root).
-        slurm_tmpdir_dataset_prefix (str): Path prefix inside SLURM tmpdir to copy the dataset.
+        repo_path (str): Path to the root of the repository (used to compute the relative path).
+        slurm_tmpdir (str): Path prefix inside SLURM tmpdir to copy the dataset.
         debug (bool, optional): If True, reduces the dataset size for faster experimentation. Default is False.
         seed (int, optional): Random seed for shuffling the training dataset. Default is 42.
 
@@ -166,7 +165,7 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
         FileNotFoundError: If the specified local dataset file does not exist.
     """
 
-    # Load the dataset
+    # Load ELI5 if needed
     if dataset_path is None or str(dataset_path).strip().lower() == "eli5":
         print("📚 Loading ELI5 dataset from Hugging Face...")
         dataset = load_dataset(
@@ -178,11 +177,9 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-        # Compute relative path from datasets_root
-        datasets_root = os.path.join(repo_path, "datasets")
-        dataset_relpath = os.path.relpath(dataset_path, start=datasets_root)
-
-        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_relpath))
+        # Compute full relative path under repo root
+        dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
+        dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
         os.makedirs(dest_dir, exist_ok=True)
 
         dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
@@ -193,7 +190,7 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
 
         dataset = load_dataset("json", data_files=dest_file, split="train")
 
-    # Chronological split
+    # Chronological split: 64% train, 16% eval, 20% final test
     n_total = len(dataset)
     n_train = int(n_total * 0.64)
     n_eval  = int(n_total * 0.16)
@@ -225,19 +222,15 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix,
             return {"text": example["text"]}
         return {"text": ""}
 
-    keep_columns = ["text"]
-    remove_columns = [col for col in train_dataset.column_names if col not in keep_columns]
-
-    train_formatted = train_dataset.map(format_for_lm, remove_columns=remove_columns)
-    eval_formatted  = eval_dataset.map(format_for_lm, remove_columns=remove_columns)
-    test_formatted  = test_dataset.map(format_for_lm, remove_columns=remove_columns)
+    train_formatted = train_dataset.map(format_for_lm, remove_columns=train_dataset.column_names)
+    eval_formatted  = eval_dataset.map(format_for_lm, remove_columns=eval_dataset.column_names)
+    test_formatted  = test_dataset.map(format_for_lm, remove_columns=test_dataset.column_names)
 
     return DatasetDict({
         "train": train_formatted,
         "test": eval_formatted,
         "final_test": test_formatted
     })
-
 
 
 def estimate_max_sequence_length(

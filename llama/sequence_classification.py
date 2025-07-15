@@ -46,7 +46,9 @@ from sequence_classification_utils import (
     save_training_config,
     setup_live_metrics,
     register_custom_llama4_if_needed,
-    calculate_custom_device_map
+    calculate_custom_device_map,
+    copy_model_to_tmpdir,
+    get_mixed_precision_policy
     )
 
 # ---------------------------- Parse Arguments ----------------------------
@@ -61,14 +63,17 @@ FL_GAMMA = 5
 SEQ_LEN_PERCENTILE = 100
 RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
 trainer_callbacks = []
-slurm_tmpdir = "TMPDIR"
+SLURM_TMPDIR = "TMPDIR"
+
+# policy = get_mixed_precision_policy()
+# print(f"Recommended mixed precision policy: {policy}")
 
 # ---------------------------- handle directories  ----------------------------
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 print(f"✅ Detected REPO_PATH: {REPO_PATH}")
 
-paths = setup_training_directories(REPO_PATH, slurm_tmpdir, args.continue_from_dir)
+paths = setup_training_directories(REPO_PATH, SLURM_TMPDIR, args.continue_from_dir)
 
 output_dir = paths["output_dir"]
 run_timestamp = paths["run_timestamp"]
@@ -79,11 +84,17 @@ live_metrics_path = paths["live_metrics_path"]
 finetuned_model_dir = paths["model_dir"]
 finetuned_tokenizer_dir = paths["tokenizer_dir"]
 offload_dir = paths["offload_dir"]
-slurm_tmpdir_dataset_prefix = paths["slurm_tmpdir_dataset_prefix"]
+slurm_tmpdir = paths["slurm_tmpdir"]
 
 # ------------------------- Local model path -------------------------
 MODEL_PATH = args.model_path
 print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
+
+# local_model_path = copy_model_to_tmpdir(
+#     model_path=MODEL_PATH,
+#     repo_root=REPO_PATH,
+#     tmpdir_prefix=slurm_tmpdir
+# )
 
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
@@ -96,7 +107,7 @@ register_custom_llama4_if_needed(MODEL_PATH)
 dataset = load_and_split_dataset(
     dataset_path=args.dataset_path,
     repo_path=REPO_PATH,
-    slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
+    slurm_tmpdir=slurm_tmpdir,
     debug=DEBUG
 )
 
