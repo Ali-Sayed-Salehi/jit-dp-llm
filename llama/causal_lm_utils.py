@@ -43,11 +43,10 @@ def parse_training_args():
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
     parser.add_argument(
-        "--dataset",
+        "--dataset_path",
         type=str,
-        choices=["perf", "jit", "jit_balanced", "eli5", "jit_small", "jit_small_struc_ast_meta"],
         default="eli5",
-        help="Choose which dataset to use"
+        help="Choose which dataset to use by specifying its absolute path."
     )
     parser.add_argument("--model_path", type=str, required=True, help="Full path to the local pretrained model directory")
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
@@ -139,23 +138,21 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
-    """
-    Loads and splits a dataset for training, evaluation, and final testing.
 
-    This function supports both local JSONL datasets and the Hugging Face ELI5 datasets.
-    For local datasets and ELI5, it performs a chronological split: 64% for training, 16% for evaluation,
-    and 20% for testing.
+def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
+    """
+    Loads and splits a local JSONL dataset for causal LM training, evaluation, and final testing,
+    or loads the Hugging Face ELI5 dataset if specified.
+
+    - Local datasets are copied to SLURM tmpdir under the same subpath as under 'datasets/' in your repo,
+      and always overwrite any existing file.
+    - ELI5 is loaded directly from the Hugging Face hub and split chronologically.
 
     Args:
-        dataset_name (str): Name of the dataset to load. Supported values:
-            - "perf": Performance regression dataset.
-            - "jit": ApacheJIT dataset for LLMs.
-            - "jit_balanced": Balanced version of the ApacheJIT dataset.
-            - "jit_small": A smaller ApacheJIT dataset.
-            - "jit_small_struc_ast_meta": Structural ApacheJIT dataset with AST/meta info.
-            - "eli5": Loads eli5_category dataset from Hugging Face datasets library.
-        repo_path (str): Path to the root of the repository where local datasets are stored.
+        dataset_path (str or None): Absolute path to the local JSONL dataset,
+                                    or "eli5" to load the Hugging Face ELI5 dataset.
+        repo_path (str): Path to the root of the repository (used to find the 'datasets/' root).
+        slurm_tmpdir_dataset_prefix (str): Path prefix inside SLURM tmpdir to copy the dataset.
         debug (bool, optional): If True, reduces the dataset size for faster experimentation. Default is False.
         seed (int, optional): Random seed for shuffling the training dataset. Default is 42.
 
@@ -164,75 +161,83 @@ def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix,
             - "train": Training split
             - "test": Evaluation split
             - "final_test": Held-out test split
+
+    Raises:
+        FileNotFoundError: If the specified local dataset file does not exist.
     """
-    dataset_file_map = {
-        "perf": "dataset.jsonl",
-        "jit": "jit_dp/apachejit_llm.jsonl",
-        "jit_balanced": "jit_dp/apachejit_llm_balanced.jsonl",
-        "jit_small": "jit_dp/apachejit_llm_small.jsonl",
-        "jit_small_struc_ast_meta": "jit_dp/apachejit_llm_small_struc_ast_meta.jsonl",
-        "eli5": None  # use HF built-in
-    }
 
-    print(f"📂 Loading dataset: {dataset_name}")
-
-    if dataset_name == "eli5":
+    # Load the dataset
+    if dataset_path is None or str(dataset_path).strip().lower() == "eli5":
+        print("📚 Loading ELI5 dataset from Hugging Face...")
         dataset = load_dataset(
             "eli5_category",
             split="train[:7000]",
             trust_remote_code=True
         )
     else:
-        dataset_file = dataset_file_map[dataset_name]
-        source_file = os.path.join(repo_path, "datasets", dataset_file)
+        if not os.path.exists(dataset_path):
+            raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_file))
+        # Compute relative path from datasets_root
+        datasets_root = os.path.join(repo_path, "datasets")
+        dataset_relpath = os.path.relpath(dataset_path, start=datasets_root)
+
+        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_relpath))
         os.makedirs(dest_dir, exist_ok=True)
 
-        dest_file = os.path.join(dest_dir, os.path.basename(dataset_file))
+        dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
 
-        # Copy to slurm tmpdir
-        if not os.path.exists(dest_file):
-            run(["rsync", "-a", source_file, dest_file], check=True)
-            print(f"✅ Copied {source_file} → {dest_file}")
-        else:
-            print(f"✅ Dataset file already exists at {dest_file} — skipping copy.")
+        # Always copy (overwrite)
+        run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+        print(f"✅ Copied {dataset_path} → {dest_file}")
 
         dataset = load_dataset("json", data_files=dest_file, split="train")
 
     # Chronological split
     n_total = len(dataset)
     n_train = int(n_total * 0.64)
-    n_eval = int(n_total * 0.16)
+    n_eval  = int(n_total * 0.16)
 
     train_dataset = dataset.select(range(0, n_train))
-    eval_dataset = dataset.select(range(n_train, n_train + n_eval))
-    test_dataset = dataset.select(range(n_train + n_eval, n_total))
+    eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
+    test_dataset  = dataset.select(range(n_train + n_eval, n_total))
 
     if debug:
-        train_dataset = train_dataset.select(range(200))
-        eval_dataset = eval_dataset.select(range(100))
-        test_dataset = test_dataset.select(range(100))
+        train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
+        eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
+        test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
 
     train_dataset = train_dataset.shuffle(seed=seed)
 
+    # Format for causal LM
     def format_for_lm(example):
-        if dataset_name == "eli5":
-            text = " ".join(example.get("answers", {}).get("text", []))
-            return {"text": text}
+        if dataset_path is None or str(dataset_path).strip().lower() == "eli5":
+            answers = example.get("answers", {})
+            if isinstance(answers, dict):
+                texts = answers.get("text", [])
+                if isinstance(texts, list):
+                    return {"text": " ".join(texts)}
+                return {"text": str(texts)}
+            return {"text": ""}
         if "prompt" in example:
             return {"text": example["prompt"]}
-        return {"text": example.get("text", "")}
+        if "text" in example:
+            return {"text": example["text"]}
+        return {"text": ""}
 
-    train_formatted = train_dataset.map(format_for_lm, remove_columns=train_dataset.column_names)
-    eval_formatted = eval_dataset.map(format_for_lm, remove_columns=eval_dataset.column_names)
-    test_formatted = test_dataset.map(format_for_lm, remove_columns=test_dataset.column_names)
+    keep_columns = ["text"]
+    remove_columns = [col for col in train_dataset.column_names if col not in keep_columns]
+
+    train_formatted = train_dataset.map(format_for_lm, remove_columns=remove_columns)
+    eval_formatted  = eval_dataset.map(format_for_lm, remove_columns=remove_columns)
+    test_formatted  = test_dataset.map(format_for_lm, remove_columns=remove_columns)
 
     return DatasetDict({
         "train": train_formatted,
         "test": eval_formatted,
         "final_test": test_formatted
     })
+
 
 
 def estimate_max_sequence_length(
@@ -517,7 +522,7 @@ def save_training_config(
     config_snapshot = {
         "timestamp": run_timestamp,
         "model_path": args.model_path,
-        "dataset": args.dataset,
+        "dataset_path": args.dataset_path,
         "learning_rate": training_args.learning_rate,
         "epochs": training_args.num_train_epochs,
         "train_batch_size": training_args.per_device_train_batch_size,
