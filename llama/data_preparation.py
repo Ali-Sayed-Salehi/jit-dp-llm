@@ -230,6 +230,6 @@ elif args.mode == "apachejit_llm_struc":
         new_jit_list.append({'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc_meta.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
