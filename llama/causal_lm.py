@@ -48,7 +48,7 @@ LONG_LLAMA = "long_llama" in args.model_path.lower()
 # what percentile of sequence lengths from the data we use as cut-off limit for tokenizer
 SEQ_LEN_PERCENTILE = 100
 trainer_callbacks = []
-slurm_tmpdir = "TMPDIR"
+SLURM_TMPDIR = "TMPDIR"
 
 # ------------------------------ Unsloth Patch ------------------------------
 # patch_transformers()
@@ -58,7 +58,7 @@ slurm_tmpdir = "TMPDIR"
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 print(f"✅ Detected REPO_PATH: {REPO_PATH}")
 
-paths = setup_training_directories(REPO_PATH, slurm_tmpdir, args.continue_from_dir)
+paths = setup_training_directories(REPO_PATH, SLURM_TMPDIR, args.continue_from_dir)
 
 output_dir = paths["output_dir"]
 run_timestamp = paths["run_timestamp"]
@@ -69,7 +69,7 @@ live_metrics_path = paths["live_metrics_path"]
 finetuned_model_dir = paths["model_dir"]
 finetuned_tokenizer_dir = paths["tokenizer_dir"]
 offload_dir = paths["offload_dir"]
-slurm_tmpdir_dataset_prefix = paths["slurm_tmpdir_dataset_prefix"]
+slurm_tmpdir = paths["slurm_tmpdir"]
 
 # ------------------------- Local model path -------------------------
 MODEL_PATH = args.model_path
@@ -82,7 +82,7 @@ login_to_huggingface(REPO_PATH)
 dataset = load_and_split_dataset(
     dataset_path=args.dataset_path,
     repo_path=REPO_PATH,
-    slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
+    slurm_tmpdir=slurm_tmpdir,
     debug=DEBUG
 )
 
