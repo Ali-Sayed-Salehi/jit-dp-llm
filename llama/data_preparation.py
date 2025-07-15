@@ -206,7 +206,6 @@ elif args.mode == "apachejit_llm_struc":
             author_subsystem_experience = commit.get('asexp_bucketized')
 
             lines = [
-                "<COMMIT>",
                 "<METADATA>",
                 f"num_lines_added: {num_lines_added}",
                 f"num_lines_deleted: {num_lines_deleted}",
@@ -223,7 +222,6 @@ elif args.mode == "apachejit_llm_struc":
                 "</METADATA>",
                 "",
                 diff,
-                "</COMMIT>"
             ]
             prompt = "\n".join(lines)
         else:

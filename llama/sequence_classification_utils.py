@@ -48,11 +48,10 @@ def parse_training_args():
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
     parser.add_argument(
-        "--dataset",
+        "--dataset_path",
         type=str,
-        choices=["perf", "jit", "jit_balanced", "imdb", "jit_small", "jit_small_struc_ast_meta"],
         default="imdb",
-        help="Choose which dataset to use"
+        help="Choose which dataset to use by specifying its absolute path."
     )
     parser.add_argument("--model_path", type=str, required=True, help="Full path to the local pretrained model directory")
     parser.add_argument(
@@ -169,25 +168,22 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-
-def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
+def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir_dataset_prefix, debug=False, seed=42):
     """
-    Loads and splits a dataset for training, evaluation, and final testing.
+    Loads and splits a local JSONL dataset for training, evaluation, and final testing,
+    or loads the IMDb dataset from Hugging Face if specified.
 
-    This function supports both local JSONL datasets and the Hugging Face IMDb dataset.
-    For local datasets, it performs a chronological split: 64% for training, 16% for evaluation,
-    and 20% for testing. The IMDb dataset is returned as-is from the Hugging Face hub.
+    If a local dataset is used, the function preserves the directory structure under
+    the 'datasets/' folder inside your repo, copies it to SLURM tmpdir, and splits it
+    chronologically (64% train, 16% eval, 20% test). If the IMDb dataset is requested,
+    it splits the built-in test set in half to create 'test' and 'final_test'.
 
     Args:
-        dataset_name (str): Name of the dataset to load. Supported values:
-            - "perf": Performance regression dataset.
-            - "jit": ApacheJIT dataset for LLMs.
-            - "jit_balanced": Balanced version of the ApacheJIT dataset.
-            - "jit_small": A smaller ApacheJIT dataset.
-            - "jit_small_struc_ast_meta": Structural ApacheJIT dataset with AST/meta info.
-            - "imdb": Loads IMDb dataset from Hugging Face datasets library.
-        repo_path (str): Path to the root of the repository where local datasets are stored.
-        debug (bool, optional): If True, reduces the dataset size to 200 examples for faster experimentation. Default is False.
+        dataset_path (str or None): Absolute path to the local JSONL dataset,
+                                    or "imdb" to load the Hugging Face IMDb dataset.
+        repo_path (str): Path to the root of the repository (used to find 'datasets/').
+        slurm_tmpdir_dataset_prefix (str): Path prefix inside SLURM tmpdir to copy the dataset.
+        debug (bool, optional): If True, reduces the dataset size for faster experimentation. Default is False.
         seed (int, optional): Random seed for shuffling the training dataset. Default is 42.
 
     Returns:
@@ -195,77 +191,82 @@ def load_and_split_dataset(dataset_name, repo_path, slurm_tmpdir_dataset_prefix,
             - "train": Training split, formatted with 'text' and 'label' fields.
             - "test": Evaluation split, formatted with 'text' and 'label' fields.
             - "final_test": Held-out test split, formatted with 'text' and 'label' fields.
-        
-        If `dataset_name == "imdb"`, returns the raw Hugging Face IMDb dataset without splitting or formatting.
 
     Raises:
-        KeyError: If an unsupported `dataset_name` is provided.
-        FileNotFoundError: If the specified dataset file does not exist.
+        FileNotFoundError: If the specified local dataset file does not exist.
     """
 
-    dataset_file_map = {
-        "perf": "dataset.jsonl",
-        "jit": "jit_dp/apachejit_llm.jsonl",
-        "jit_balanced": "jit_dp/apachejit_llm_balanced.jsonl",
-        "jit_small": "jit_dp/apachejit_llm_small.jsonl",
-        "jit_small_struc_ast_meta": "jit_dp/apachejit_llm_small_struc_ast_meta.jsonl",
-        "imdb": None  # use HF built-in
-    }
-
-    print(f"📂 Loading dataset: {dataset_name}")
-
-    if dataset_name != "imdb":
-        dataset_file = dataset_file_map[dataset_name]
-        source_file = os.path.join(repo_path, "datasets", dataset_file)
-
-        dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_file))
-        os.makedirs(dest_dir, exist_ok=True)
-
-        dest_file = os.path.join(dest_dir, os.path.basename(dataset_file))
-
-        # Copy to slurm tmpdir
-        if not os.path.exists(dest_file):
-            run(["rsync", "-a", source_file, dest_file], check=True)
-            print(f"✅ Copied {source_file} → {dest_file}")
-        else:
-            print(f"✅ Dataset file already exists at {dest_file} — skipping copy.")
-
-        dataset = load_dataset("json", data_files=dest_file, split="train")
-
-        # Chronologically split the dataset: 64% train, 16% eval, 20% test
-        n_total = len(dataset)
-        n_train = int(n_total * 0.64)
-        n_eval = int(n_total * 0.16)
-
-        train_dataset = dataset.select(range(0, n_train))
-        eval_dataset = dataset.select(range(n_train, n_train + n_eval))
-        test_dataset = dataset.select(range(n_train + n_eval, n_total))
-
-        if debug:
-            train_dataset = train_dataset.select(range(200))
-            eval_dataset = eval_dataset.select(range(100))
-            test_dataset = test_dataset.select(range(100))
-
-        train_dataset = train_dataset.shuffle(seed=seed)
-
-        def format_for_classification(example):
-            return {
-                "text": example['prompt'],
-                "label": int(example["response"])
-            }
-
-        train_formatted = train_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
-        eval_formatted = eval_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
-        test_formatted = test_dataset.map(format_for_classification, remove_columns=["prompt", "response"])
-
-        return DatasetDict({
-            "train": train_formatted,
-            "test": eval_formatted,
-            "final_test": test_formatted
-        })
-    else:
+    # Handle IMDb dataset loading
+    if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
+        print("Loading IMDb dataset from Hugging Face...")
         dataset = load_dataset("imdb")
-        return dataset
+
+        # Split the original 'test' set into 'test' and 'final_test'
+        test_dataset = dataset["test"]
+        n_test = len(test_dataset)
+        n_eval = n_test // 2
+
+        eval_split = test_dataset.select(range(0, n_eval))
+        final_test_split = test_dataset.select(range(n_eval, n_test))
+
+        imdb_ds = DatasetDict({
+            "train": dataset["train"],
+            "test": eval_split,
+            "final_test": final_test_split
+        })
+
+        return imdb_ds
+
+    # Local dataset path
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
+
+    datasets_root = os.path.join(repo_path, "datasets")
+    dataset_relpath = os.path.relpath(dataset_path, start=datasets_root)
+    dest_dir = os.path.join(slurm_tmpdir_dataset_prefix, os.path.dirname(dataset_relpath))
+    os.makedirs(dest_dir, exist_ok=True)
+
+    dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+
+    # Always copy (overwrite)
+    run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+    print(f"✅ Copied {dataset_path} → {dest_file}")
+
+    # Load dataset from local JSONL
+    dataset = load_dataset("json", data_files=dest_file, split="train")
+
+    # Chronological split: 64% train, 16% eval, 20% test
+    n_total = len(dataset)
+    n_train = int(n_total * 0.64)
+    n_eval = int(n_total * 0.16)
+
+    train_dataset = dataset.select(range(0, n_train))
+    eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
+    test_dataset  = dataset.select(range(n_train + n_eval, n_total))
+
+    if debug:
+        train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
+        eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
+        test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
+
+    # Shuffle training set
+    train_dataset = train_dataset.shuffle(seed=seed)
+
+    def format_for_classification(example):
+        return {
+            "text": example['prompt'],
+            "label": int(example["response"])
+        }
+
+    train_formatted = train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names)
+    eval_formatted  = eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names)
+    test_formatted  = test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
+
+    return DatasetDict({
+        "train": train_formatted,
+        "test": eval_formatted,
+        "final_test": test_formatted
+    })
 
 
 
@@ -356,21 +357,40 @@ def apply_class_imbalance_strategy(
 
 
 
-def compute_class_distribution(labels) -> dict:
+def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
     """
-    Compute class distribution as a dictionary with string keys.
+    Compute class distribution for each split in a DatasetDict,
+    and the percentage of the positive class ('1').
 
     Args:
-        labels (List[int] or DatasetColumn): A list or dataset column of integer class labels.
+        dataset_dict (DatasetDict): A Hugging Face DatasetDict with splits.
+            Each split must contain a 'label' column.
 
     Returns:
-        dict: A dictionary where keys are class labels (as strings) and values are counts.
+        dict: A nested dictionary where each split name maps to:
+              - 'counts': class counts {class_label: count}
+              - 'positive_percentage': percentage of class '1'
     """
-    label_counts = Counter(labels)
-    return {
-        str(label): int(count)
-        for label, count in sorted(label_counts.items())
-    }
+    distribution = {}
+
+    for split_name, split_dataset in dataset_dict.items():
+        labels = split_dataset["label"]
+        label_counts = Counter(labels)
+        total = sum(label_counts.values())
+        pos_count = label_counts.get(1, 0)
+
+        counts = {
+            str(label): int(count)
+            for label, count in sorted(label_counts.items())
+        }
+        pos_pct = (pos_count / total * 100) if total > 0 else 0.0
+
+        distribution[split_name] = {
+            "counts": counts,
+            "positive_percentage": round(pos_pct, 2)
+        }
+
+    return distribution
 
 
 def estimate_max_sequence_length(
@@ -993,7 +1013,7 @@ def save_training_config(
     MAX_SEQ_LENGTH,
     SEQ_LEN_PERCENTILE,
     DEBUG,
-    dataset=None,  # ✅ pass the whole DatasetDict now
+    dataset=None,
     RECALL_AT_TOP_K_PERCENTAGES=None,
     FL_GAMMA=None,
     FL_ALPHA=None,
@@ -1060,7 +1080,7 @@ def save_training_config(
         "timestamp": run_timestamp,
         "model_path": args.model_path,
         "class_imbalance_fix": args.class_imbalance_fix,
-        "dataset": args.dataset,
+        "dataset_path": args.dataset_path,
         "learning_rate": training_args.learning_rate,
         "epochs": training_args.num_train_epochs,
         "train_batch_size": training_args.per_device_train_batch_size,

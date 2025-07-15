@@ -94,7 +94,7 @@ register_custom_llama4_if_needed(MODEL_PATH)
 # ------------------------- Load dataset and fix class imbalance -------------------------
 
 dataset = load_and_split_dataset(
-    dataset_name=args.dataset,
+    dataset_path=args.dataset_path,
     repo_path=REPO_PATH,
     slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
     debug=DEBUG
@@ -103,7 +103,7 @@ dataset = load_and_split_dataset(
 imbalance_fix = args.class_imbalance_fix
 
 # Compute class distribution before imbalance fix
-original_class_distribution = compute_class_distribution(dataset['train']["label"])
+original_class_distribution = compute_class_distribution(dataset)
 
 dataset, class_weights, focal_loss_dict = apply_class_imbalance_strategy(
     dataset=dataset,
@@ -119,7 +119,7 @@ if imbalance_fix == "focal_loss":
     focal_loss_fct = FocalLoss(**focal_loss_dict)
 
 # Compute class distribution after imbalance fix
-class_distribution = compute_class_distribution(dataset["train"]["label"])
+class_distribution = compute_class_distribution(dataset)
 
 # ------------------------- tokenize -------------------------
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
@@ -161,16 +161,16 @@ trainer_callbacks.extend(
 )
 
 # ------------------------- Custom device map -------------------------
-max_memory = {
-    0: "2GB",
-    "cpu": "200GB",
-    "disk": "0GB"
-}
+# max_memory = {
+#     0: "20GB",
+#     "cpu": "200GB",
+#     "disk": "200GB"
+# }
 
-device_map = calculate_custom_device_map(
-    model_path=MODEL_PATH,
-    max_memory=max_memory
-)
+# device_map = calculate_custom_device_map(
+#     model_path=MODEL_PATH,
+#     max_memory=max_memory
+# )
 
 # ------------------------- Load model and quantization-------------------------
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}

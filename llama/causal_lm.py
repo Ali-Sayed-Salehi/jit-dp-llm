@@ -80,7 +80,7 @@ login_to_huggingface(REPO_PATH)
 
 # ------------------------- Load dataset -------------------------
 dataset = load_and_split_dataset(
-    dataset_name=args.dataset,
+    dataset_path=args.dataset_path,
     repo_path=REPO_PATH,
     slurm_tmpdir_dataset_prefix=slurm_tmpdir_dataset_prefix,
     debug=DEBUG
