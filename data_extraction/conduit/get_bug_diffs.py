@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import os
 import sys
 import argparse
+from utils import remove_bug_prefix
 
 # - For each DREV, get its diff and attach it as a new column to its corresponding bug id from the perf_bugs.csv
 
@@ -63,6 +64,7 @@ for bug in bugs_list:
     bug_drev_titles_list = bug.get('titles', [])
     full_title = ""
     for title in bug_drev_titles_list:
+        title = remove_bug_prefix(title)
         new_title = "\n" + title
         full_title += new_title
 
