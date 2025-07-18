@@ -4,7 +4,8 @@ import argparse
 from datetime import datetime
 from collections import Counter
 import shutil
-from subprocess import run
+from subprocess import run, CalledProcessError
+import yaml
 
 import torch
 import numpy as np
@@ -39,16 +40,30 @@ import evaluate
 
 
 def parse_training_args():
-    parser = argparse.ArgumentParser()
+    # Step 1: Parse --config first to load defaults
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None, help="Path to YAML config file with default arguments")
+    known_args, _ = pre_parser.parse_known_args()
+
+    defaults = {}
+    if known_args.config:
+        if not os.path.isfile(known_args.config):
+            raise FileNotFoundError(f"Config file not found: {known_args.config}")
+        with open(known_args.config, "r") as f:
+            defaults = yaml.safe_load(f) or {}
+
+    # Step 2: Full parser with config defaults
+    parser = argparse.ArgumentParser(parents=[pre_parser])
+    parser.set_defaults(**defaults)
+
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="eli5",
-        help="Choose which dataset to use by specifying its absolute path."
+        help="Choose which dataset to use by specifying its absolute path. Default is eli5."
     )
-    parser.add_argument("--model_path", type=str, required=True, help="Full path to the local pretrained model directory")
+    parser.add_argument("--model_path", type=str, required=not defaults.get("model_path"), help="Full path to the local pretrained model directory")
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
     parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
     parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 training")
@@ -58,25 +73,24 @@ def parse_training_args():
         type=str, 
         help="""Resume training from this checkpoint directory. 
         Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
-        )
+    )
     parser.add_argument(
         "--truncation_len",
         type=int,
-        default=None,
         help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
     )
     parser.add_argument(
         "--chunking_len",
         type=int,
-        default=None,
         help="Optional. The length to which the sequences should be chunked in order to reduce sequence length for the model."
     )
-    
+
     args = parser.parse_args()
 
+    # --- Validation ---
     if args.truncation_len and args.chunking_len and args.truncation_len < args.chunking_len:
-        raise ValueError(f"truncation_len ({args.truncation_len}) cannot be large than chunking_len ({args.chunking_len})")
-    
+        raise ValueError(f"truncation_len ({args.truncation_len}) cannot be less than chunking_len ({args.chunking_len})")
+
     return args
 
 
@@ -143,26 +157,11 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, s
     Loads and splits a local JSONL dataset for causal LM training, evaluation, and final testing,
     or loads the Hugging Face ELI5 dataset if specified.
 
-    - Local datasets are mirrored under the same subpath as under the repo root,
-      then copied to SLURM tmpdir and always overwrite any existing file.
-    - ELI5 is loaded directly from the Hugging Face hub and split chronologically.
-
-    Args:
-        dataset_path (str or None): Absolute path to the local JSONL dataset,
-                                    or "eli5" to load the Hugging Face ELI5 dataset.
-        repo_path (str): Path to the root of the repository (used to compute the relative path).
-        slurm_tmpdir (str): Path prefix inside SLURM tmpdir to copy the dataset.
-        debug (bool, optional): If True, reduces the dataset size for faster experimentation. Default is False.
-        seed (int, optional): Random seed for shuffling the training dataset. Default is 42.
-
     Returns:
         DatasetDict: A dictionary with Hugging Face `Dataset` objects:
             - "train": Training split
             - "test": Evaluation split
             - "final_test": Held-out test split
-
-    Raises:
-        FileNotFoundError: If the specified local dataset file does not exist.
     """
 
     # Load ELI5 if needed
@@ -173,22 +172,26 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, s
             split="train[:7000]",
             trust_remote_code=True
         )
+
     else:
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-        # Compute full relative path under repo root
         dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
         dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-        os.makedirs(dest_dir, exist_ok=True)
-
         dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+        dataset_copy_path = dataset_path  # fallback if copy fails
 
-        # Always copy (overwrite)
-        run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-        print(f"✅ Copied {dataset_path} → {dest_file}")
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+            print(f"✅ Copied {dataset_path} → {dest_file}")
+            dataset_copy_path = dest_file
+        except (OSError, CalledProcessError) as e:
+            print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
+            print(f"🔄 Falling back to using original dataset path: {dataset_path}")
 
-        dataset = load_dataset("json", data_files=dest_file, split="train")
+        dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
 
     # Chronological split: 64% train, 16% eval, 20% final test
     n_total = len(dataset)
@@ -231,6 +234,7 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, s
         "test": eval_formatted,
         "final_test": test_formatted
     })
+
 
 
 def estimate_max_sequence_length(
@@ -342,8 +346,6 @@ def chunk_long_samples(
         })
 
     return chunked_dataset
-
-
 
 
 def compute_custom_metrics(eval_pred):
