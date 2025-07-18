@@ -17,33 +17,3 @@ dvc remote modify --local gdrive_remote gdrive_service_account_json_file_path "/
 dvc pull
 
 ```
-
-# Modules
-
-### bugzilla
-Scripts here deal with operations on bugs from the Mozilla bugzilla API
-
-### llama
-Fine-tuning llama models for defect prediction
-
-### conduit
-Mozilla Phabricator Conduit API which deals with code diffs and commits
-
-### datasets
-Includes all the resulting datasets created from various scripts. Can be fetched using dvc from Google Drive
-
-### mercurial
-hg cli scripts for dealing with diffs and commits
-
-### pushlog
-A limited Mozilla API that only deals with push information for the mercurial repos
-
-### simulation
-Simulating various changes to software engineering flows on historical data
-
-### treeherder
-Mozilla treeherder API for info related to their CI pipeline, i.e. Taskcluster. This API has info on tests and regressions
-
-
-### scripts
-various helper scripts

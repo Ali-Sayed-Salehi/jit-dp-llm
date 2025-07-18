@@ -3,7 +3,8 @@ import json
 import argparse
 from datetime import datetime
 from collections import Counter
-from subprocess import run
+from subprocess import run, CalledProcessError
+import yaml
 
 import torch
 import numpy as np
@@ -44,21 +45,35 @@ from attach_classification_head_llama4 import CustomLlama4ForSequenceClassificat
 
 
 def parse_training_args():
-    parser = argparse.ArgumentParser()
+    # First, parse only the config file argument
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None, help="Path to YAML config file with default arguments")
+    known_args, _ = pre_parser.parse_known_args()
+
+    # Load config file values
+    defaults = {}
+    if known_args.config:
+        if not os.path.isfile(known_args.config):
+            raise FileNotFoundError(f"Config file not found: {known_args.config}")
+        with open(known_args.config, "r") as f:
+            defaults = yaml.safe_load(f) or {}
+
+    # Full parser with defaults from config
+    parser = argparse.ArgumentParser(parents=[pre_parser])
+    parser.set_defaults(**defaults)
+
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="imdb",
-        help="Choose which dataset to use by specifying its absolute path."
+        help="Choose which dataset to use by specifying its absolute path. Default is imdb."
     )
-    parser.add_argument("--model_path", type=str, required=True, help="Full path to the local pretrained model directory")
+    parser.add_argument("--model_path", type=str, required=not defaults.get("model_path"), help="Full path to the local pretrained model directory")
     parser.add_argument(
         "--class_imbalance_fix",
         type=str,
         choices=["oversampling", "weighted_loss", "focal_loss", "none"],
-        default="none",
         help="Class imbalance handling method"
     )
     parser.add_argument(
@@ -75,30 +90,31 @@ def parse_training_args():
         type=str, 
         help="""Resume training from this checkpoint directory. 
         Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
-        )
+    )
     parser.add_argument(
         "--selection_metric",
         type=str,
-        default="recall@top_5%",
-        help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy"
+        help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy. Default is recall@top_5%"
     )
     parser.add_argument(
         "--truncation_len",
         type=int,
-        default=None,
         help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
     )
-    
+
     args = parser.parse_args()
-    
+
     # --- Validation Section ---
     if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
         raise ValueError("Threshold must be between 0 and 1 if specified")
-    
-    VALID_SELECTION_METRICS = {"recall@top_5%", "recall@top_10%", "recall@top_30%", "f1", "precision", "recall", "accuracy"}
+
+    VALID_SELECTION_METRICS = {
+        "recall@top_5%", "recall@top_10%", "recall@top_30%",
+        "f1", "precision", "recall", "accuracy"
+    }
     if args.selection_metric not in VALID_SELECTION_METRICS:
         raise ValueError(f"Unsupported selection_metric '{args.selection_metric}'. Must be one of {VALID_SELECTION_METRICS}")
-    
+
     return args
 
 
@@ -170,38 +186,9 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
 
 
 def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
-    """
-    Loads and splits a local JSONL dataset for training, evaluation, and final testing,
-    or loads the IMDb dataset from Hugging Face if specified.
-
-    If a local dataset is used, the function mirrors its path relative to the repo root,
-    copies it to SLURM tmpdir under that same relative structure, and splits it chronologically
-    (64% train, 16% eval, 20% test). If the IMDb dataset is requested, it splits the built-in
-    test set in half to create 'test' and 'final_test'.
-
-    Args:
-        dataset_path (str or None): Absolute path to the local JSONL dataset,
-                                    or "imdb" to load the Hugging Face IMDb dataset.
-        repo_path (str): Path to the root of the repository (used to find relative path).
-        slurm_tmpdir (str): Path prefix inside SLURM tmpdir to copy the dataset.
-        debug (bool, optional): If True, reduces the dataset size for faster experimentation.
-        seed (int, optional): Random seed for shuffling the training dataset.
-
-    Returns:
-        DatasetDict: A dictionary with Hugging Face `Dataset` objects with keys:
-            - "train": Training split, formatted
-            - "test": Evaluation split, formatted
-            - "final_test": Held-out test split, formatted
-
-    Raises:
-        FileNotFoundError: If the specified local dataset file does not exist.
-    """
-
-    # IMDb branch
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
         dataset = load_dataset("imdb")
-
         test_dataset = dataset["test"]
         n_test = len(test_dataset)
         n_eval = n_test // 2
@@ -209,31 +196,32 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, s
         eval_split = test_dataset.select(range(0, n_eval))
         final_test_split = test_dataset.select(range(n_eval, n_test))
 
-        imdb_ds = DatasetDict({
+        return DatasetDict({
             "train": dataset["train"],
             "test": eval_split,
             "final_test": final_test_split
         })
 
-        return imdb_ds
-
-    # Local dataset branch
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-    # Mirror the relatie path under slurm_tmdir
+    # Attempt to copy to SLURM tmpdir
     dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
     dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-    os.makedirs(dest_dir, exist_ok=True)
-
     dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+    dataset_copy_path = dataset_path  # fallback
 
-    # Always copy and overwrite
-    run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-    print(f"✅ Copied {dataset_path} → {dest_file}")
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+        print(f"✅ Copied {dataset_path} → {dest_file}")
+        dataset_copy_path = dest_file
+    except (OSError, CalledProcessError) as e:
+        print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
+        print(f"🔄 Falling back to using original dataset path: {dataset_path}")
 
     # Load dataset
-    dataset = load_dataset("json", data_files=dest_file, split="train")
+    dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
 
     # Chronological split
     n_total = len(dataset)
@@ -257,15 +245,12 @@ def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, s
             "label": int(example["response"])
         }
 
-    train_formatted = train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names)
-    eval_formatted  = eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names)
-    test_formatted  = test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
-
     return DatasetDict({
-        "train": train_formatted,
-        "test": eval_formatted,
-        "final_test": test_formatted
+        "train": train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names),
+        "test": eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names),
+        "final_test": test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
     })
+
 
 
 def apply_class_imbalance_strategy(
