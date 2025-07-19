@@ -167,9 +167,6 @@ def diff_to_structured_xml(diff_string):
     return "\n".join(output)
 
 
-def remove_bug_prefix(text):
-    # Matches "Bug " followed by digits, then optional " - "
-    return re.sub(r"^Bug\s\d+\s-\s*", "", text)
 
 
 def main():
