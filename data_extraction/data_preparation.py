@@ -8,7 +8,7 @@ import textwrap
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(REPO_PATH)
 
-from github_api import get_commit_message, get_commit_diff
+from github_api.fetch_commit_data import get_commit_message, get_commit_diff
 from utils import diff_to_structured_xml
 
 parser = argparse.ArgumentParser(description="Choose which dataset to load")
