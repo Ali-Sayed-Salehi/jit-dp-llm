@@ -12,7 +12,7 @@
 #SBATCH --constraint=gpu16
 
 echo "Preparing training environment"
-source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
+source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
 
 echo "Running the download script ..."
 # python /speed-scratch/a_s87063/repos/perf-pilot/llama/download_model.py --model_id meta-llama/Llama-3.1-8B --model_head causal-lm
@@ -20,6 +20,3 @@ echo "Running the download script ..."
 # python /speed-scratch/a_s87063/repos/perf-pilot/llama/attach_classification_head.py --base_lm_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Llama-3.1-8B --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/custom
 python /speed-scratch/a_s87063/repos/perf-pilot/llama/attach_classification_head_llama4.py --base_lm_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Llama-4-Scout-17B-16E --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/custom
 echo "training finished"
-
-echo "Cleaning up"
-source /speed-scratch/$USER/repos/perf-pilot/scripts/train_cleanup.csh

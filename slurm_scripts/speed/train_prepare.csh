@@ -6,7 +6,9 @@ module load cuda/11.8/default
 module list
 
 echo "setting env variables"
-source /speed-scratch/$USER/repos/perf-pilot/scripts/set_env.csh
+setenv HF_HOME /speed-scratch/$USER/huggingface/hf-home
+setenv HF_DATASETS_CACHE /speed-scratch/$USER/huggingface/hf-datasets
+setenv PIP_CACHE_DIR /speed-scratch/$USER/pip/pip-cache
 echo "HF_HOME: ${HF_HOME}"
 echo "PIP_CACHE_DIR: ${PIP_CACHE_DIR}"
 
