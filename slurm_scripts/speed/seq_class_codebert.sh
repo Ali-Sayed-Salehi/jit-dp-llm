@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=codebert-finetune
+#SBATCH --job-name=sedq-class-codebert-speed
 #SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --partition=pt,pg

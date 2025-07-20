@@ -10,4 +10,4 @@ bf16: true
 gradient_checkpointing: true
 continue_from_dir: null
 selection_metric: recall@top_30%
-truncation_len: 14000
+truncation_len: 40000

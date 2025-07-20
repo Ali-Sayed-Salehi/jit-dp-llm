@@ -8,11 +8,18 @@ __pychache__/
 # IDE files
 .vscode/
 .idea/
-/datasets
+
+# datasets
+/datasets/jit_dp/*
+/datasets/mozilla_perf/*
+
+# LLMs
+LLMs/**/*
+!LLMs/**/
+
+# other
 /secrets/*
 !secrets/.env.example
-/LLMs
 /slurm_jobs
-/llama/training
+/llama/training/*
 /data_extraction/github_api/github_repos/*
-/github_api/tools/*
