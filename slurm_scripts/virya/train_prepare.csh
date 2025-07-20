@@ -1,17 +1,15 @@
-#!/encs/bin/tcsh
+#!usr/bin/bash
 
 echo "loading modules"
-module load python/3.12.0/default
-module load cuda/11.8/default
+source /etc/profile.d/modules.sh
+module load python/3.11.6
+module load cuda/12.5.0
 module list
 
-echo "setting env variables"
-setenv HF_HOME /speed-scratch/$USER/huggingface/hf-home
-setenv HF_DATASETS_CACHE /speed-scratch/$USER/huggingface/hf-datasets
-setenv PIP_CACHE_DIR /speed-scratch/$USER/pip/pip-cache
+echo "env variables"
 echo "HF_HOME: ${HF_HOME}"
 echo "PIP_CACHE_DIR: ${PIP_CACHE_DIR}"
 
 echo "activating venv"
-source /speed-scratch/$USER/repos/perf-pilot/venv/bin/activate.csh
-# echo "Python interpreter: `which python`"
+source /home/$USER/repos/perf-pilot/venv/bin/activate
+# echo "Python interpreter: $(which python)"

@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=llama-finetune
+#SBATCH --job-name=seq-class-llama-speed
 #SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --partition=ps,pg,pt
