@@ -28,7 +28,6 @@ from causal_lm_utils import (
     setup_training_directories,
     login_to_huggingface,
     load_and_split_dataset,
-    estimate_max_sequence_length,
     SaveMetricsCallback,
     compute_custom_metrics,
     run_final_inference,
@@ -37,6 +36,10 @@ from causal_lm_utils import (
     save_training_config,
     setup_live_metrics,
     chunk_long_samples
+)
+
+from utils import (
+    determine_tokenizer_truncation
 )
 
 # ---------------------------- Parse Arguments and constants ----------------------------
@@ -93,7 +96,9 @@ config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_rem
 tokenizer.pad_token_id = tokenizer.eos_token_id
 tokenizer.pad_token = tokenizer.eos_token
 
-MAX_SEQ_LENGTH = estimate_max_sequence_length(
+should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
+    tokenizer=tokenizer,
+    config=config,
     truncation_len=args.truncation_len,
     chunking_len=args.chunking_len
 )
@@ -101,8 +106,8 @@ MAX_SEQ_LENGTH = estimate_max_sequence_length(
 def tokenize_data(examples):
     return tokenizer(
         examples["text"],
-        truncation=True if args.truncation_len else False,
-        max_length=args.truncation_len
+        truncation=should_truncate,
+        max_length=tokenizer_max_len
     )
 
 tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
@@ -227,7 +232,6 @@ save_training_config(
     run_timestamp=run_timestamp,
     args=args,
     training_args=training_args,
-    MAX_SEQ_LENGTH=MAX_SEQ_LENGTH,
     SEQ_LEN_PERCENTILE=SEQ_LEN_PERCENTILE,
     DEBUG=DEBUG,
     model_config=model.config.to_dict()

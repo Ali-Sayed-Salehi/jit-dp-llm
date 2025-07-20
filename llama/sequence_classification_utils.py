@@ -376,45 +376,6 @@ def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
     return distribution
 
 
-def estimate_max_sequence_length(
-    truncation_len=None,
-    chunking_len=None
-):
-    """
-    Determines the final maximum sequence length to use for tokenization and training,
-    based on whether truncation, chunking, or both are applied.
-
-    Args:
-        truncation_len (int, optional):
-            If set, this value is used to truncate each sequence during tokenization.
-            This means any input longer than this will be clipped to `truncation_len`.
-        
-        chunking_len (int, optional):
-            If set, this value defines the target length for splitting (chunking) long sequences
-            into multiple fixed-size sub-sequences. Chunking typically happens *after*
-            truncation during data preparation.
-
-    Returns:
-        int or None:
-            - If both `truncation_len` and `chunking_len` are provided, returns `chunking_len`.
-            - If only `truncation_len` is provided, returns `truncation_len`.
-            - If only `chunking_len` is provided, returns `chunking_len`.
-            - If neither is set, returns None.
-    """
-    if not truncation_len and not chunking_len:
-        print(f"✂️ No truncation or chunking used.")
-        return None
-    elif truncation_len and not chunking_len:
-        print(f"✂️ Tokenizer will truncate to {truncation_len} tokens. No chunking used")
-        return truncation_len
-    elif truncation_len and chunking_len:
-        print(f"✂️ Each sequence will be truncated to {truncation_len} tokens and further chunked into {chunking_len}-token samples.")
-        return chunking_len
-    elif not truncation_len and chunking_len:
-        print(f"✂️ Each sequence will be chunked into {chunking_len}-token samples. No truncation used.")
-        return chunking_len
-
-
 class FocalLoss(nn.Module):
     """
     Implementation of the Focal Loss function for classification tasks, 
@@ -993,7 +954,6 @@ def save_training_config(
     training_args,
     class_distribution,
     original_class_distribution,
-    MAX_SEQ_LENGTH,
     SEQ_LEN_PERCENTILE,
     DEBUG,
     dataset=None,
@@ -1016,7 +976,6 @@ def save_training_config(
         training_args (transformers.TrainingArguments): TrainingArguments used for this run.
         class_distribution (dict): Class distribution after any imbalance fix.
         original_class_distribution (dict): Original class distribution before any imbalance fix.
-        MAX_SEQ_LENGTH (int): Final max sequence length used.
         SEQ_LEN_PERCENTILE (float): Percentile used to determine max sequence length.
         DEBUG (bool): Whether debug mode was enabled.
         dataset (DatasetDict, optional): The full dataset object with splits. Should contain 'final_test'.
@@ -1080,7 +1039,6 @@ def save_training_config(
         "bf16": args.bf16,
         "gradient_checkpointing": args.gradient_checkpointing,
         "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-        "max_sequence_length": MAX_SEQ_LENGTH,
         "sequence_length_percentile": SEQ_LEN_PERCENTILE,
         "debug": DEBUG,
         "held_out_test_defect_rate": defect_rate,

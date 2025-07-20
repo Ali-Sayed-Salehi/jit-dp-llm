@@ -34,7 +34,6 @@ from sequence_classification_utils import (
     load_and_split_dataset,
     compute_class_distribution,
     apply_class_imbalance_strategy,
-    estimate_max_sequence_length,
     FocalLoss,
     CustomTrainer,
     SaveMetricsCallback,
@@ -50,6 +49,10 @@ from sequence_classification_utils import (
     copy_model_to_tmpdir,
     get_mixed_precision_policy
     )
+
+from utils import (
+    determine_tokenizer_truncation
+)
 
 def main():
     # ---------------------------- Parse Arguments ----------------------------
@@ -146,15 +149,17 @@ def main():
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenizer.pad_token = tokenizer.eos_token
 
-    MAX_SEQ_LENGTH = estimate_max_sequence_length(
+    should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
+        tokenizer=tokenizer,
+        config=config,
         truncation_len=args.truncation_len
     )
 
     def tokenize_data(examples):
         return tokenizer(
             examples["text"],
-            truncation=True if args.truncation_len else False,
-            max_length=args.truncation_len
+            truncation=should_truncate,
+            max_length=tokenizer_max_len
         )
 
     tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
@@ -281,7 +286,6 @@ def main():
         training_args=training_args,
         class_distribution=class_distribution,
         original_class_distribution=original_class_distribution,
-        MAX_SEQ_LENGTH=MAX_SEQ_LENGTH,
         SEQ_LEN_PERCENTILE=SEQ_LEN_PERCENTILE,
         DEBUG=DEBUG,
         dataset=dataset,

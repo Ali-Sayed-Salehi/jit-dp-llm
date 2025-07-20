@@ -7,5 +7,5 @@ lora: true
 bf16: true
 gradient_checkpointing: true
 continue_from_dir: null
-truncation_len: 75
-chunking_len: 65
+truncation_len: 65
+chunking_len: null
