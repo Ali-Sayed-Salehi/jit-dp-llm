@@ -15,7 +15,8 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/scripts/train_prepare.csh
 
 echo "running the training script"
-python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/microsoft/codebert-base --live_metrics --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small.jsonl --class_imbalance_fix oversampling --selection_metric recall@top_30%
+# python /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/microsoft/codebert-base --live_metrics --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small.jsonl --class_imbalance_fix oversampling --selection_metric recall@top_30%
+accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/$USER/repos/perf-pilot/llama/sequence_classification.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/sequence_classification_config_codebert.yaml
 echo "training finished"
 
 echo "Cleaning up"

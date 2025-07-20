@@ -14,7 +14,7 @@ from utils import diff_to_structured_xml
 parser = argparse.ArgumentParser(description="Choose which dataset to load")
 parser.add_argument(
     "--mode",
-    choices=["apachejit_llm", "apachejit_llm_struc", "apachejit_logreg", "mozilla_perf"],
+    choices=["apachejit_llm", "apachejit_llm_struc", "apachejit_logreg", "mozilla_perf_struc"],
     required=True,
     help="""choose which data operation to do.
     apachejit_llm: ApacheJIT defect prediction dataset for LLMs,
@@ -128,7 +128,7 @@ elif args.mode == "apachejit_logreg":
     sorted_new_jit_clean_df.to_csv(output_data_path, index=False)
     print(f"✅ Saved dataset to {output_data_path}")
 
-elif args.mode == "mozilla_perf":
+elif args.mode == "mozilla_perf_struc":
     input_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "perf_bugs_with_diff.jsonl")
     bugs_with_diff_df = pd.read_json(input_data_path, lines=True)
     bugs_list = bugs_with_diff_df.to_dict(orient='records')
@@ -140,7 +140,22 @@ elif args.mode == "mozilla_perf":
 
     for bug in bugs_list:
         raw_diff = bug.get('raw_diff')
-        prompt = diff_to_structured_xml(raw_diff)
+        diff = diff_to_structured_xml(raw_diff)
+        titles = bug.get('titles', "")
+        summaries = bug.get('summaries', "")
+
+        lines = [
+            "<TITLE>",
+            titles,
+            "</TITLE>",
+            "<SUMMARIES>",
+            summaries,
+            "</SUMMARIES>",
+            "<DIFF>",
+            diff,
+            "</DIFF>"
+        ]
+        prompt = "\n".join(lines)
 
         response = "1" if bug.get('bug_is_perf_regressor') else "0"
 
@@ -217,7 +232,6 @@ elif args.mode == "apachejit_llm_struc":
                 f"author_recent_experience: {author_recent_experience}",
                 f"author_subsystem_experience: {author_subsystem_experience}",
                 "</METADATA>",
-                "",
                 diff,
             ]
             prompt = "\n".join(lines)
