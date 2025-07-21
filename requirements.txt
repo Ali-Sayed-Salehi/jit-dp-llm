@@ -31,7 +31,6 @@ comm
 configobj
 contourpy
 cryptography
-cut-cross-entropy
 cycler
 datasets
 debugpy
