@@ -9,7 +9,7 @@
 #SBATCH --time=24:00:00
 
 echo "Preparing training environment"
-source /home/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.sh
+source /home/$USER/repos/perf-pilot/slurm_scripts/virya/train_prepare.sh
 
 echo "Running the download script ..."
 python /home/a_s87063/repos/perf-pilot/llama/download_model.py --model_id meta-llama/Llama-3.1-8B --model_head causal-lm
