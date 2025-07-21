@@ -2,8 +2,8 @@
 
 echo "loading modules"
 source /etc/profile.d/modules.sh
-module load python/3.11.6
-module load cuda/12.5.0
+module load python/default
+module load cuda/default
 module list
 
 echo "env variables"
