@@ -9,7 +9,7 @@
 #SBATCH --time=168:00:00
 
 echo "Preparing training environment"
-source /home/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
+source /home/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.sh
 
 echo "running the training script"
 # python /home/$USER/repos/perf-pilot/llama/sequence_classification.py --live_metrics --dataset_path /home/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl --model_path /home/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/custom/meta-llama/Meta-Llama-3-8B --class_imbalance_fix focal_loss --quant --lora --bf16 --gradient_checkpointing --selection_metric recall@top_30% --debug
