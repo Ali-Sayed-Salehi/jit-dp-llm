@@ -61,10 +61,10 @@ def main():
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
 
-    # accelerator = Accelerator()
+    accelerator = Accelerator()
 
-    # if not accelerator.is_main_process:
-    #     builtins.print = lambda *args, **kwargs: None
+    if not accelerator.is_main_process:
+        builtins.print = lambda *args, **kwargs: None
 
     # ---------------------------- handle directories  ----------------------------
 
