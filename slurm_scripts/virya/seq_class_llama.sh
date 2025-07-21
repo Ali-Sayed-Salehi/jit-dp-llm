@@ -1,4 +1,4 @@
-#!/encs/bin/tcsh
+#!/usr/bin/bash
 
 #SBATCH --job-name=seq-class-llama-virya
 #SBATCH --output=/home/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out

@@ -65,7 +65,6 @@ frozenlist
 fsspec
 funcy
 gitdb
-GitPython
 google-api-core
 google-api-python-client
 google-auth
@@ -206,7 +205,6 @@ tornado
 tqdm
 traitlets
 transformers
-tree_sitter
 treeherder-client
 triton
 trl
