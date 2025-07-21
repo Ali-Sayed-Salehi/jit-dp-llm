@@ -5,6 +5,8 @@ import sys
 import random
 import json
 from datetime import datetime
+from accelerate import Accelerator
+import builtins
 
 import torch
 import numpy as np
@@ -76,6 +78,11 @@ def main():
     local_rank = os.environ.get("LOCAL_RANK", 0)
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
+
+    accelerator = Accelerator()
+
+    if not accelerator.is_main_process:
+        builtins.print = lambda *args, **kwargs: None
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -275,7 +282,10 @@ def main():
         label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
-        gradient_checkpointing=args.gradient_checkpointing
+        gradient_checkpointing=args.gradient_checkpointing,
+        log_level="info",
+        log_level_replica="warning",
+        disable_tqdm=not accelerator.is_main_process
     )
 
     # ------------------------- Save Config to File -------------------------
