@@ -12,13 +12,11 @@ import numpy as np
 import pandas as pd
 from torch import nn
 from torch.nn import functional as F
-from dotenv import load_dotenv
 
 from datasets import load_dataset, Dataset, DatasetDict
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
-from huggingface_hub import login as huggingface_hub_login
 
 from transformers import (
     AutoTokenizer,
