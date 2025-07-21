@@ -4,6 +4,8 @@ import os
 import sys
 import argparse
 from datetime import datetime
+from accelerate import Accelerator
+import builtins
 
 import torch
 from datasets import load_dataset, DatasetDict
@@ -52,6 +54,12 @@ LONG_LLAMA = "long_llama" in args.model_path.lower()
 SEQ_LEN_PERCENTILE = 100
 trainer_callbacks = []
 SLURM_TMPDIR = "TMPDIR"
+
+
+accelerator = Accelerator()
+
+if not accelerator.is_main_process:
+    builtins.print = lambda *args, **kwargs: None
 
 # ---------------------------- handle directories  ----------------------------
 
@@ -220,7 +228,10 @@ training_args = TrainingArguments(
     label_names=["labels"],
     max_grad_norm=1.0,
     bf16=args.bf16,
-    gradient_checkpointing=args.gradient_checkpointing
+    gradient_checkpointing=args.gradient_checkpointing,
+    log_level="info",
+    log_level_replica="warning",
+    disable_tqdm=not accelerator.is_main_process
 )
 
 # ------------------------- Save Config to File -------------------------

@@ -1,5 +1,7 @@
 import os
 from dotenv import load_dotenv
+from accelerate import Accelerator
+import builtins
 
 from huggingface_hub import login as huggingface_hub_login
 
@@ -83,6 +85,8 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
         repo_path (str): Base path to your repository.
         env_path (str): Relative path to the .env file from the repo path.
     """
+    accelerator = Accelerator()
+
     dotenv_file = os.path.join(repo_path, env_path)
     load_dotenv(dotenv_path=dotenv_file)
     
@@ -90,5 +94,6 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     if not token:
         raise ValueError("🚫 HUGGING_FACE_TOKEN not found in environment variables")
     
-    huggingface_hub_login(token)
-    print("✅ Logged in to Hugging Face.")
+    if accelerator.is_main_process:
+        huggingface_hub_login(token)
+        print("✅ Logged in to Hugging Face.")
