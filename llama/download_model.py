@@ -9,6 +9,10 @@ from transformers import (
     AutoModelForSequenceClassification,
 )
 
+from utils import (
+    login_to_huggingface
+)
+
 # ----------------- Argument parser -----------------
 parser = argparse.ArgumentParser(
     description="Download and save a model + tokenizer (Causal LM or Sequence Classification)."
@@ -34,6 +38,9 @@ save_path = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_head, args.
 
 print(f"✅ REPO_PATH: {REPO_PATH}")
 print(f"✅ Model will be saved to: {save_path}")
+
+# ------------------------- HF login -------------------------
+login_to_huggingface(REPO_PATH)
 
 # ----------------- Tokenizer -----------------
 print("✨ Downloading tokenizer...")

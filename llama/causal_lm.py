@@ -26,7 +26,6 @@ from peft import (
 from causal_lm_utils import (
     parse_training_args,
     setup_training_directories,
-    login_to_huggingface,
     load_and_split_dataset,
     SaveMetricsCallback,
     compute_custom_metrics,
@@ -39,7 +38,8 @@ from causal_lm_utils import (
 )
 
 from utils import (
-    determine_tokenizer_truncation
+    determine_tokenizer_truncation,
+    login_to_huggingface
 )
 
 # ---------------------------- Parse Arguments and constants ----------------------------

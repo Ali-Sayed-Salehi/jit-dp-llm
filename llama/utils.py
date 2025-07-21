@@ -67,3 +67,22 @@ def determine_tokenizer_truncation(
             print(f"chunking_len ({chunking_len}) used. No truncation.")
     
     return should_truncate, tokenizer_max_len
+
+
+def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
+    """
+    Loads environment variables and logs into Hugging Face using the token in .env file.
+    
+    Args:
+        repo_path (str): Base path to your repository.
+        env_path (str): Relative path to the .env file from the repo path.
+    """
+    dotenv_file = os.path.join(repo_path, env_path)
+    load_dotenv(dotenv_path=dotenv_file)
+    
+    token = os.getenv("HUGGING_FACE_TOKEN")
+    if not token:
+        raise ValueError("🚫 HUGGING_FACE_TOKEN not found in environment variables")
+    
+    huggingface_hub_login(token)
+    print("✅ Logged in to Hugging Face.")
