@@ -1,7 +1,7 @@
 debug: true
 live_metrics: true
-dataset_path: /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl
-model_path: /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Llama-3.1-8B
+dataset_path: /home/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl
+model_path: /home/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Llama-3.1-8B
 quant: null
 lora: true
 bf16: true
