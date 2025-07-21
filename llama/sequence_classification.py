@@ -30,7 +30,6 @@ from peft import (
 from sequence_classification_utils import (
     parse_training_args,
     setup_training_directories,
-    login_to_huggingface,
     load_and_split_dataset,
     compute_class_distribution,
     apply_class_imbalance_strategy,
@@ -51,7 +50,8 @@ from sequence_classification_utils import (
     )
 
 from utils import (
-    determine_tokenizer_truncation
+    determine_tokenizer_truncation,
+    login_to_huggingface
 )
 
 def main():

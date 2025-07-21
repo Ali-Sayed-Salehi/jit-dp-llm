@@ -165,26 +165,6 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     }
 
 
-def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
-    """
-    Loads environment variables and logs into Hugging Face using the token in .env file.
-    
-    Args:
-        repo_path (str): Base path to your repository.
-        env_path (str): Relative path to the .env file from the repo path.
-    """
-    dotenv_file = os.path.join(repo_path, env_path)
-    load_dotenv(dotenv_path=dotenv_file)
-    
-    token = os.getenv("HUGGING_FACE_TOKEN")
-    if not token:
-        raise ValueError("🚫 HUGGING_FACE_TOKEN not found in environment variables")
-    
-    huggingface_hub_login(token)
-    print("✅ Logged in to Hugging Face.")
-
-
-
 def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
