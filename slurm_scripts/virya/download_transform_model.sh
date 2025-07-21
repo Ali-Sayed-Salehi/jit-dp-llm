@@ -1,15 +1,12 @@
-#!/encs/bin/tcsh
+#!/usr/bin/bash
 
-#SBATCH --job-name=download-model-speed
-#SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
-#SBATCH --mail-type=ALL
-#SBATCH --partition=ps,pg,pt
+#SBATCH --job-name=download-model-virya
+#SBATCH --output=/home/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
+#SBATCH --partition=migs
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
-#SBATCH --account=pcr
-#SBATCH --constraint=gpu16
 
 echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
