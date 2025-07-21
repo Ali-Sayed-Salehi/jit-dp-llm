@@ -9,7 +9,7 @@
 #SBATCH --time=168:00:00
 
 echo "Preparing training environment"
-source /home/$USER/repos/perf-pilot/slurm_scripts/virya/train_prepare.csh
+source /home/$USER/repos/perf-pilot/slurm_scripts/virya/train_prepare.sh
 
 echo "running the training script"
 # python /home/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset_path eli5 --model_path /home/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/distilbert/distilgpt2 --quant --lora --bf16 --gradient_checkpointing --truncation_len 128 --debug
