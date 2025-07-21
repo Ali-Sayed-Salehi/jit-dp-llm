@@ -53,9 +53,6 @@ SEQ_LEN_PERCENTILE = 100
 trainer_callbacks = []
 SLURM_TMPDIR = "TMPDIR"
 
-# ------------------------------ Unsloth Patch ------------------------------
-# patch_transformers()
-
 # ---------------------------- handle directories  ----------------------------
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
