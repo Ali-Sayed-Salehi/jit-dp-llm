@@ -932,7 +932,8 @@ def save_training_config(
     training_args,
     class_distribution,
     original_class_distribution,
-    SEQ_LEN_PERCENTILE,
+    truncation_len,
+    chunking_len,
     DEBUG,
     dataset=None,
     RECALL_AT_TOP_K_PERCENTAGES=None,
@@ -954,7 +955,8 @@ def save_training_config(
         training_args (transformers.TrainingArguments): TrainingArguments used for this run.
         class_distribution (dict): Class distribution after any imbalance fix.
         original_class_distribution (dict): Original class distribution before any imbalance fix.
-        SEQ_LEN_PERCENTILE (float): Percentile used to determine max sequence length.
+        truncation_len (float): Max sequence length to which every sequence will be truncated.
+        chunking_len (float): Max sequence length to which every sequence will be chunked.
         DEBUG (bool): Whether debug mode was enabled.
         dataset (DatasetDict, optional): The full dataset object with splits. Should contain 'final_test'.
         RECALL_AT_TOP_K_PERCENTAGES (List[float], optional): List of percentages for recall@top_k.
@@ -1017,7 +1019,8 @@ def save_training_config(
         "bf16": args.bf16,
         "gradient_checkpointing": args.gradient_checkpointing,
         "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-        "sequence_length_percentile": SEQ_LEN_PERCENTILE,
+        "truncation_len": truncation_len,
+        "chunking_len": chunking_len,
         "debug": DEBUG,
         "held_out_test_defect_rate": defect_rate,
         "max_possible_recall@top_k": max_recall_at_k

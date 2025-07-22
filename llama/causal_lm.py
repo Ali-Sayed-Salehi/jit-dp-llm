@@ -245,7 +245,8 @@ def main():
         run_timestamp=run_timestamp,
         args=args,
         training_args=training_args,
-        SEQ_LEN_PERCENTILE=SEQ_LEN_PERCENTILE,
+        truncation_len=tokenizer_max_len
+        chunking_len=args.chunking_len,
         DEBUG=DEBUG,
         model_config=model.config.to_dict()
     )

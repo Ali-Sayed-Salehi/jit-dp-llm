@@ -433,7 +433,8 @@ def save_training_config(
     run_timestamp,
     args,
     training_args,
-    SEQ_LEN_PERCENTILE,
+    truncation_len,
+    chunking_len,
     DEBUG,
     model_config=None
 ):
@@ -450,7 +451,8 @@ def save_training_config(
         run_timestamp (str): Timestamp of the training run.
         args (argparse.Namespace): Parsed CLI arguments.
         training_args (transformers.TrainingArguments): TrainingArguments used for this run.
-        SEQ_LEN_PERCENTILE (float): Percentile used to determine max sequence length.
+        truncation_len (float): Max length used to which each sequence will be truncated.
+        chunking_len (float): Max length used to which each sequence will be chunked.
         DEBUG (bool): Whether debug mode was enabled.
         model_config (dict, optional): Model config as a dict.
     """
@@ -470,7 +472,8 @@ def save_training_config(
         "bf16": args.bf16,
         "gradient_checkpointing": args.gradient_checkpointing,
         "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-        "sequence_length_percentile": SEQ_LEN_PERCENTILE,
+        "truncation_len":truncation_len,
+        "chunking_len":chunking_len,
         "debug": DEBUG
     }
 
