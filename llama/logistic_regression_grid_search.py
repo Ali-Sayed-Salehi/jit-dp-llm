@@ -4,10 +4,9 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, precision_score, f1_score, roc_auc_score, recall_score
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, f1_score, roc_auc_score, recall_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import resample
-from sklearn.model_selection import train_test_split
 import joblib
 from imblearn.over_sampling import SMOTE
 from itertools import product

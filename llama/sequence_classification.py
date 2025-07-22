@@ -1,18 +1,10 @@
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import sys
-import random
-import json
-from datetime import datetime
 from accelerate import Accelerator
 import builtins
 
 import torch
-import numpy as np
-from torch.nn import functional as F
-from dotenv import load_dotenv
-from datasets import DatasetDict, load_dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -37,18 +29,13 @@ from sequence_classification_utils import (
     apply_class_imbalance_strategy,
     FocalLoss,
     CustomTrainer,
-    SaveMetricsCallback,
     compute_custom_metrics,
-    recall_at_top_k,
     run_final_inference,
     evaluate_and_save_best_model,
     save_training_metrics,
     save_training_config,
     setup_live_metrics,
-    register_custom_llama4_if_needed,
-    calculate_custom_device_map,
-    copy_model_to_tmpdir,
-    get_mixed_precision_policy
+    register_custom_llama4_if_needed
     )
 
 from utils import (
@@ -105,12 +92,6 @@ def main():
     # ------------------------- Local model path -------------------------
     MODEL_PATH = args.model_path
     print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
-
-    # local_model_path = copy_model_to_tmpdir(
-    #     model_path=MODEL_PATH,
-    #     repo_root=REPO_PATH,
-    #     tmpdir_prefix=slurm_tmpdir
-    # )
 
     # ------------------------- HF login -------------------------
     login_to_huggingface(REPO_PATH)
