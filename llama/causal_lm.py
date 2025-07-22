@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 
 import os
-import sys
-import argparse
-from datetime import datetime
 from accelerate import Accelerator
 import builtins
 
 import torch
-from datasets import load_dataset, DatasetDict
 from transformers import (
     AutoTokenizer,
     AutoConfig,
@@ -29,7 +25,6 @@ from causal_lm_utils import (
     parse_training_args,
     setup_training_directories,
     load_and_split_dataset,
-    SaveMetricsCallback,
     compute_custom_metrics,
     run_final_inference,
     evaluate_and_save_best_model,

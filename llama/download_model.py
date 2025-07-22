@@ -4,7 +4,6 @@ import os
 import argparse
 from transformers import (
     AutoTokenizer,
-    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
 )

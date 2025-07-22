@@ -14,23 +14,13 @@ from torch.nn import functional as F
 
 from datasets import load_dataset, Dataset, DatasetDict
 from sklearn.metrics import roc_auc_score, average_precision_score
-from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
 
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
     AutoConfig,
-    TrainingArguments,
     TrainerCallback,
     Trainer
-)
-
-from peft import (
-    get_peft_model,
-    LoraConfig,
-    TaskType,
-    prepare_model_for_kbit_training
 )
 
 from accelerate import (
@@ -1131,9 +1121,6 @@ def copy_model_to_tmpdir(model_path, repo_root, tmpdir_prefix):
     print(f"✅ Copy complete: {dest_dir}")
 
     return dest_dir
-
-
-import torch
 
 def get_mixed_precision_policy():
     """

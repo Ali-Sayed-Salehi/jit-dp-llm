@@ -2,17 +2,11 @@
 
 import os
 import argparse
-import torch
-from torch import nn
-from functools import wraps
 
 from transformers import (
-    AutoConfig,
     AutoTokenizer,
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
-    LlamaForCausalLM,
-    LlamaForSequenceClassification
 )
 
 
