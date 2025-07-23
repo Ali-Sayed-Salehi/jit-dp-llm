@@ -7,9 +7,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=100G
 #SBATCH --time=0-04:00
+#SBATCH --account=def-pcr
 
 echo "Preparing training environment"
-source /home/alis/scratch/perf-pilot/slurm_scripts/virya/train_prepare.sh
+source /home/$USER/scratch/perf-pilot/slurm_scripts/virya/train_prepare.sh
 
 echo "Running the download script ..."
 python /home/alis/scratch/repos/perf-pilot/llama/download_model.py --model_id meta-llama/Llama-3.1-8B --model_head causal-lm
