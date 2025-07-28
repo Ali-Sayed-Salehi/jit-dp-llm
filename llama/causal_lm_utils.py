@@ -416,6 +416,7 @@ def save_training_config(
     truncation_len,
     chunking_len,
     DEBUG,
+    FSDP,
     model_config=None
 ):
     """
@@ -454,6 +455,7 @@ def save_training_config(
         "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
         "truncation_len":truncation_len,
         "chunking_len":chunking_len,
+        "FSDP": FSDP,
         "debug": DEBUG
     }
 
@@ -465,36 +467,6 @@ def save_training_config(
         json.dump(config_snapshot, f, indent=2)
 
     print(f"⚙️ Logged Causal LM config to: {config_path}")
-
-
-def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir, tokenizer=None):
-    """
-    Evaluates the best checkpointed model (if enabled), saves the eval metrics,
-    and saves ONLY the LoRA adapter weights + tokenizer to disk.
-    """
-    if training_args.load_best_model_at_end:
-        best_eval_metrics = trainer.evaluate()
-        best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
-        with open(best_model_metrics_path, "w") as f:
-            json.dump(best_eval_metrics, f, indent=4)
-        print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
-    else:
-        print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
-        best_eval_metrics = None
-
-    print(f"💾 Saving LoRA adapter to {adapter_dir}")
-    trainer.model.save_pretrained(adapter_dir)
-
-    if tokenizer is not None:
-        print(f"💾 Saving tokenizer to {tokenizer_dir}")
-        tokenizer.save_pretrained(tokenizer_dir)
-    else:
-        print("⚠️ No tokenizer provided; skipping save.")
-
-    print("⚡️ To use this later: load the same base model and attach the adapter with PeftModel.from_pretrained()")
-
-    return best_eval_metrics
-
 
 
 def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):

@@ -9,6 +9,7 @@ annotated-types
 antlr4-python3-runtime
 appdirs
 asttokens
+async-timeout
 asyncssh
 atpublic
 attrs
@@ -35,6 +36,7 @@ cycler
 datasets
 debugpy
 decorator
+deepspeed
 defusedxml
 Deprecated
 dictdiffer
@@ -53,11 +55,15 @@ dvc-objects
 dvc-render
 dvc-studio-client
 dvc-task
+einops
 entrypoints
+eval_type_backport
 evaluate
+exceptiongroup
 executing
 fastjsonschema
 filelock
+flash_attn
 flatten-dict
 flufl.lock
 fonttools
@@ -65,6 +71,7 @@ frozenlist
 fsspec
 funcy
 gitdb
+GitPython
 google-api-core
 google-api-python-client
 google-auth
@@ -75,6 +82,7 @@ grpcio
 gto
 hf-xet
 hf_transfer
+hjson
 httplib2
 huggingface-hub
 hydra-core
@@ -82,6 +90,7 @@ idna
 imbalanced-learn
 imblearn
 importlib_metadata
+importlib_resources
 ipykernel
 ipython
 ipython_pygments_lexers
@@ -105,6 +114,7 @@ matplotlib-inline
 mdurl
 mistune
 mpmath
+msgpack
 multidict
 multiprocess
 nbclient
@@ -112,6 +122,7 @@ nbconvert
 nbformat
 nest-asyncio
 networkx
+ninja
 numpy
 nvidia-cublas-cu12
 nvidia-cuda-cupti-cu12
@@ -119,13 +130,16 @@ nvidia-cuda-nvrtc-cu12
 nvidia-cuda-runtime-cu12
 nvidia-cudnn-cu12
 nvidia-cufft-cu12
+nvidia-cufile-cu12
 nvidia-curand-cu12
 nvidia-cusolver-cu12
 nvidia-cusparse-cu12
 nvidia-cusparselt-cu12
+nvidia-ml-py
 nvidia-nccl-cu12
 nvidia-nvjitlink-cu12
 nvidia-nvtx-cu12
+nvidia-pyindex
 oauth2client
 omegaconf
 orjson
@@ -146,6 +160,7 @@ protobuf
 psutil
 ptyprocess
 pure_eval
+py-cpuinfo
 pyarrow
 pyasn1
 pyasn1_modules
@@ -182,7 +197,6 @@ scmrepo
 seaborn
 semver
 sentencepiece
-setuptools
 shellingham
 shortuuid
 shtab
@@ -197,7 +211,9 @@ tabulate
 tensorboard
 tensorboard-data-server
 threadpoolctl
+tinycss2
 tokenizers
+tomli
 tomlkit
 torch
 torchvision
@@ -205,6 +221,7 @@ tornado
 tqdm
 traitlets
 transformers
+tree-sitter
 treeherder-client
 triton
 trl
@@ -222,7 +239,6 @@ voluptuous
 wcwidth
 webencodings
 Werkzeug
-wheel
 wrapt
 xformers
 xxhash

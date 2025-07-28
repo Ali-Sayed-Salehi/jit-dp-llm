@@ -346,33 +346,7 @@ def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
 
 class FocalLoss(nn.Module):
     """
-    Implementation of the Focal Loss function for classification tasks, 
-    commonly used to address class imbalance by down-weighting easy examples 
-    and focusing training on hard examples.
-
-    Args:
-        alpha (float or dict): Weighting factor for the classes. Can be:
-            - A float: same weight for all classes.
-            - A dict: class-specific weights (e.g., {"0": 0.25, "1": 0.75}).
-        gamma (float): Focusing parameter that adjusts the rate at which easy examples are down-weighted.
-                       A higher value increases focus on hard-to-classify examples. Default is 2.0.
-        reduction (str): Specifies the reduction to apply to the output:
-                         - 'mean': mean of the loss across the batch (default)
-                         - 'sum': sum of the loss across the batch
-                         - 'none': no reduction
-
-    Inputs:
-        logits (Tensor): Raw output from the model of shape (batch_size, num_classes).
-        targets (Tensor): Ground truth class indices of shape (batch_size,).
-
-    Returns:
-        Tensor: Scalar loss value if reduction is 'mean' or 'sum'; otherwise, a tensor of per-sample losses.
-
-    Example:
-        >>> loss_fn = FocalLoss(alpha=0.25, gamma=2.0)
-        >>> logits = torch.randn(8, 2)  # batch of 8, binary classification
-        >>> targets = torch.randint(0, 2, (8,))
-        >>> loss = loss_fn(logits, targets)
+    Implementation of the Focal Loss function for classification tasks.
     """
 
     def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
@@ -382,42 +356,42 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, logits, targets):
-        """
-        Computes the focal loss.
-
-        Args:
-            logits (Tensor): Predicted logits of shape (batch_size, num_classes).
-            targets (Tensor): True class indices of shape (batch_size,).
-
-        Returns:
-            Tensor: The focal loss (scalar or per-sample depending on reduction).
-        """
-
         num_classes = logits.size(-1)
+
+        # Match dtype/device of logits
+        dtype = logits.dtype
+        device = logits.device
+
         probs = torch.softmax(logits, dim=-1)
         log_probs = torch.log_softmax(logits, dim=-1)
 
-        # One-hot encode targets
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=num_classes).float().to(logits.device)
+        # One-hot encode targets in the same dtype/device as logits
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=num_classes).to(dtype=dtype, device=device)
 
         # Gather probabilities of the true class
         pt = (probs * targets_one_hot).sum(dim=1)
 
         # Handle alpha per class if it's a dict
         if isinstance(self.alpha, dict):
-            # Convert dict to tensor of shape (num_classes,) on the correct device
             alpha_tensor = torch.tensor(
                 [self.alpha.get(str(i), 1.0) for i in range(num_classes)],
-                dtype=torch.float32,
-                device=logits.device
+                dtype=dtype,   # 🔑 match dtype of logits
+                device=device  # 🔑 match device of logits
             )
-            alpha = (alpha_tensor * targets_one_hot).sum(dim=1)  # shape: (batch_size,)
+            alpha = (alpha_tensor * targets_one_hot).sum(dim=1)
         else:
-            alpha = self.alpha  # scalar
+            # Cast scalar alpha to same dtype/device
+            alpha = torch.tensor(self.alpha, dtype=dtype, device=device)
 
         focal_term = (1 - pt) ** self.gamma
         loss = -alpha * focal_term * log_probs.gather(dim=1, index=targets.unsqueeze(1)).squeeze(1)
-        return loss.mean()
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
 
 
 
@@ -635,67 +609,37 @@ class CustomTrainer(Trainer):
     """
     A custom extension of Hugging Face's `Trainer` class that supports
     class imbalance handling via class weights or focal loss.
-
-    This class overrides the default `compute_loss` method to apply either:
-    - Weighted CrossEntropyLoss using provided class weights
-    - Focal Loss using a provided `FocalLoss` object
-    - Standard CrossEntropyLoss (if no handling specified)
-
-    Args:
-        class_weights (list or torch.Tensor, optional): 
-            A list or tensor of weights for each class, used to correct for class imbalance.
-            If provided, passed as `weight=` to `torch.nn.functional.cross_entropy`.
-        focal_loss_fct (nn.Module, optional): 
-            A `FocalLoss` object to be used instead of standard cross entropy.
-
-    Example:
-        trainer = CustomTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            class_weights=[1.0, 2.5],
-        )
-
-    Methods:
-        compute_loss(): Computes the loss using the selected class imbalance strategy.
     """
 
     def __init__(self, *args, class_weights=None, focal_loss_fct=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Store in float32 initially; will recast during training
         self.class_weights = (
-            torch.tensor(class_weights, dtype=torch.float32).to(self.args.device)
+            torch.tensor(class_weights, dtype=torch.float32)
             if class_weights is not None else None
         )
         self.focal_loss_fct = focal_loss_fct
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        """
-        Computes the training loss using one of the following:
-            - Focal loss (if `focal_loss_fct` is provided)
-            - Weighted cross entropy loss (if `class_weights` is provided)
-            - Standard cross entropy loss (default)
-
-        Args:
-            model (PreTrainedModel): The model to compute loss for.
-            inputs (dict): Dictionary containing input tensors (e.g., input_ids, attention_mask, labels).
-            return_outputs (bool): If True, also returns model outputs.
-
-        Returns:
-            torch.Tensor or (torch.Tensor, dict): Loss value, and optionally model outputs.
-        """
         labels = inputs.pop("labels").long()
         outputs = model(**inputs)
-        logits = outputs.get('logits')
+        logits = outputs.get("logits")
 
         if self.focal_loss_fct:
-            loss = self.focal_loss_fct(logits, labels)
+            # ensure focal loss uses safe dtype
+            loss = self.focal_loss_fct(
+                logits.to(torch.float32),  # cast logits if focal loss expects float32
+                labels
+            )
         elif self.class_weights is not None:
-            loss = F.cross_entropy(logits, labels, weight=self.class_weights)
+            # Match class_weights to logits dtype and device
+            class_weights = self.class_weights.to(logits.device).to(logits.dtype)
+            loss = F.cross_entropy(logits, labels, weight=class_weights)
         else:
             loss = F.cross_entropy(logits, labels)
 
         return (loss, outputs) if return_outputs else loss
+
 
 def run_final_inference(
     trainer,

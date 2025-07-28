@@ -1,8 +1,11 @@
 import os
+import json
 from dotenv import load_dotenv
 from accelerate import Accelerator
+from peft import PeftModel
 
 from huggingface_hub import login as huggingface_hub_login
+from accelerate.utils import DistributedType
 
 
 def determine_tokenizer_truncation(
@@ -96,3 +99,60 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     if accelerator.is_main_process:
         huggingface_hub_login(token)
         print("✅ Logged in to Hugging Face.")
+
+
+
+def evaluate_and_save_best_model(
+    trainer,
+    training_args,
+    metrics_dir,
+    save_dir,
+    tokenizer_dir,
+    tokenizer=None
+):
+    """
+    Evaluates the best model and saves:
+    - LoRA adapter if using PEFT
+    - Full model if not using LoRA
+    - Handles FSDP automatically
+    - Saves tokenizer
+    """
+
+    # ---------------- Evaluate ----------------
+    if training_args.load_best_model_at_end:
+        best_eval_metrics = trainer.evaluate()
+        best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
+        with open(best_model_metrics_path, "w") as f:
+            json.dump(best_eval_metrics, f, indent=4)
+        print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
+    else:
+        print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
+        best_eval_metrics = None
+
+    # ---------------- Save ----------------
+    is_main_process = trainer.args.process_index == 0
+    model = trainer.model
+
+    if is_main_process:
+        if trainer.is_fsdp_enabled and not isinstance(model, PeftModel):
+            print(f"💾 Saving full model using FSDP to: {save_dir}")
+            trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+            trainer.save_model(save_dir)
+        elif isinstance(model, PeftModel):
+            print(f"💾 Saving LoRA adapter weights to: {save_dir}")
+            model.save_pretrained(save_dir, save_adapter=True)
+        else:
+            print(f"💾 Saving full model (non-FSDP) to: {save_dir}")
+            trainer.save_model(save_dir)
+
+        # Save tokenizer
+        if tokenizer is not None:
+            print(f"💾 Saving tokenizer to: {tokenizer_dir}")
+            tokenizer.save_pretrained(tokenizer_dir)
+        else:
+            print("⚠️ No tokenizer provided; skipping tokenizer save.")
+    else:
+        print("🧵 Not the main process; skipping save.")
+
+    return best_eval_metrics
+
