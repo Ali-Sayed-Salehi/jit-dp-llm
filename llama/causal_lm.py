@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import os
-from accelerate import Accelerator
 import builtins
 
 import torch
@@ -27,7 +26,6 @@ from causal_lm_utils import (
     load_and_split_dataset,
     compute_custom_metrics,
     run_final_inference,
-    evaluate_and_save_best_model,
     save_training_metrics,
     save_training_config,
     setup_live_metrics,
@@ -36,8 +34,15 @@ from causal_lm_utils import (
 
 from utils import (
     determine_tokenizer_truncation,
-    login_to_huggingface
+    login_to_huggingface,
+    evaluate_and_save_best_model
 )
+
+# from accelerate import Accelerator
+
+import logging
+logging.basicConfig(level=logging.INFO)
+
 
 def main():
     # ---------------------------- Parse Arguments and constants ----------------------------
@@ -56,10 +61,17 @@ def main():
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
 
-    accelerator = Accelerator()
+    # accelerator = Accelerator()
 
-    if not accelerator.is_main_process:
-        builtins.print = lambda *args, **kwargs: None
+    # if not accelerator.is_main_process:
+    #     builtins.print = lambda *args, **kwargs: None
+
+    # if accelerator.state.fsdp_plugin:
+    #     FSDP = True
+    #     print("🧩 Running with FSDP enabled!")
+    # else:
+    #     FSDP = False
+    #     print("⚠️ FSDP Not enabled!")
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -109,11 +121,13 @@ def main():
     )
 
     def tokenize_data(examples):
-        return tokenizer(
+        outputs = tokenizer(
             examples["text"],
             truncation=should_truncate,
             max_length=tokenizer_max_len
         )
+        outputs["labels"] = outputs["input_ids"].copy()
+        return outputs
 
     tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
     final_dataset = tokenized_dataset
@@ -159,8 +173,9 @@ def main():
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            llm_int8_enable_fp32_cpu_offload=True
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_storage=torch.bfloat16,
+            # llm_int8_enable_fp32_cpu_offload=True
         )
         optional_kwargs["quantization_config"] = quant_config
     else:
@@ -173,9 +188,9 @@ def main():
         MODEL_PATH,
         local_files_only=True,
         trust_remote_code=True,
-        device_map="auto",
-        offload_folder=offload_dir,
-        offload_state_dict=True,
+        # device_map={"": torch.cuda.current_device()}, #if args.quant else None,
+        # device_map= int(os.environ.get("LOCAL_RANK", -1)) if torch.distributed.is_available() and torch.distributed.is_initialized() else "auto",
+        torch_dtype=torch.bfloat16,
         **optional_kwargs
     )
 
@@ -184,8 +199,8 @@ def main():
     if LLAMA:
         model.config.pretraining_tp = 1
 
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+    # if args.gradient_checkpointing:
+    #     model.gradient_checkpointing_enable()
 
     # ------------------------- LORA -------------------------
 
@@ -203,6 +218,9 @@ def main():
         )
         model = prepare_model_for_kbit_training(model)
         model = get_peft_model(model, lora_config)
+
+        # model = model.to(torch.bfloat16)
+
         model.print_trainable_parameters()
 
     # ------------------------- Training arguments -------------------------
@@ -228,11 +246,21 @@ def main():
         label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
-        gradient_checkpointing=args.gradient_checkpointing,
+        # gradient_checkpointing=args.gradient_checkpointing,
         log_level="info",
         log_level_replica="warning",
-        disable_tqdm=not accelerator.is_main_process
+        # disable_tqdm=not accelerator.is_main_process,
+        remove_unused_columns=False,
+        optim="paged_adamw_8bit",
+        # lr_scheduler_type="cosine",
+        # warmup_steps=500,
+        # fsdp=["full_shard", "auto_wrap"]
     )
+
+    if training_args.gradient_checkpointing:
+        training_args.gradient_checkpointing_kwargs = {
+            "use_reentrant": False
+        }
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
@@ -240,9 +268,10 @@ def main():
         run_timestamp=run_timestamp,
         args=args,
         training_args=training_args,
-        truncation_len=tokenizer_max_len
+        truncation_len=tokenizer_max_len,
         chunking_len=args.chunking_len,
         DEBUG=DEBUG,
+        FSDP = False,
         model_config=model.config.to_dict()
     )
 
@@ -254,10 +283,29 @@ def main():
         eval_dataset=final_dataset["test"],
         data_collator=data_collator,
         compute_metrics=custom_metrics,
-        callbacks=trainer_callbacks,
+        callbacks=trainer_callbacks
     )
 
-    torch.cuda.empty_cache()
+    #handle PEFT+FSDP case
+    if getattr(trainer.accelerator.state, "fsdp_plugin", None) and args.lora:
+        from peft.utils.other import fsdp_auto_wrap_policy
+
+        fsdp_plugin = trainer.accelerator.state.fsdp_plugin
+        fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(trainer.model)
+
+    # ---------------------------- Model Setup Checks ----------------------------
+    # print("🛑 Verifications:")
+    # print(trainer.accelerator.state)
+
+    # # The actual wrapped model
+    # wrapped_model = trainer.model_wrapped
+    # print(f"🔍 Model type: {type(wrapped_model)}")
+
+    # trainer.accelerator.print(f"{trainer.model}")
+
+    # # print(next(model.parameters()).dtype)
+
+    # # torch.cuda.empty_cache()
 
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
@@ -266,7 +314,7 @@ def main():
         trainer=trainer,
         training_args=training_args,
         metrics_dir=metrics_dir,
-        adapter_dir=finetuned_model_dir,
+        save_dir=finetuned_model_dir,
         tokenizer_dir=finetuned_tokenizer_dir,
         tokenizer=tokenizer
     )

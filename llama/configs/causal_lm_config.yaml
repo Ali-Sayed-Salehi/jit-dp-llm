@@ -6,6 +6,6 @@ quant: true
 lora: true
 bf16: true
 gradient_checkpointing: true
-continue_from_dir: null
-truncation_len: 75
-chunking_len: 65
+continue_from_dir: false
+truncation_len: 300
+chunking_len: 200

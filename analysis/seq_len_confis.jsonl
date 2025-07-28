@@ -1,0 +1,3 @@
+{"num_gpus": 1, "gpu_memory": 24, "qlora": true, "deepspeed": false, "model_size": "7b", "llama_model": "LLaMA-2-7B", "max_seq_len": 500}
+{"num_gpus": 2, "gpu_memory": 40, "qlora": true, "deepspeed": true, "model_size": "13b", "llama_model": "LLaMA-2-13B"}
+{"num_gpus": 4, "gpu_memory": 80, "qlora": false, "deepspeed": true, "model_size": "70b", "llama_model": "LLaMA-2-70B", "max_seq_len": 64000}

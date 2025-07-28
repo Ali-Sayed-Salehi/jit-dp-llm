@@ -1,7 +1,7 @@
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-from accelerate import Accelerator
+# from accelerate import Accelerator
 import builtins
 
 import torch
@@ -31,7 +31,6 @@ from sequence_classification_utils import (
     CustomTrainer,
     compute_custom_metrics,
     run_final_inference,
-    evaluate_and_save_best_model,
     save_training_metrics,
     save_training_config,
     setup_live_metrics,
@@ -40,7 +39,8 @@ from sequence_classification_utils import (
 
 from utils import (
     determine_tokenizer_truncation,
-    login_to_huggingface
+    login_to_huggingface,
+    evaluate_and_save_best_model
 )
 
 def main():
@@ -66,10 +66,10 @@ def main():
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
 
-    accelerator = Accelerator()
+    # accelerator = Accelerator()
 
-    if not accelerator.is_main_process:
-        builtins.print = lambda *args, **kwargs: None
+    # if not accelerator.is_main_process:
+    #     builtins.print = lambda *args, **kwargs: None
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -194,8 +194,9 @@ def main():
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            llm_int8_enable_fp32_cpu_offload=True
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_storage=torch.bfloat16,
+            # llm_int8_enable_fp32_cpu_offload=True
         )
         optional_kwargs["quantization_config"] = quant_config
     else:
@@ -211,9 +212,10 @@ def main():
         label2id=label2id,
         local_files_only=True,
         trust_remote_code=True,
-        device_map="auto",
-        offload_folder=offload_dir,
-        offload_state_dict=True,
+        # device_map="auto",
+        torch_dtype=torch.bfloat16,
+        # offload_folder=offload_dir,
+        # offload_state_dict=True,
         **optional_kwargs
     )
 
@@ -266,8 +268,15 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing,
         log_level="info",
         log_level_replica="warning",
-        disable_tqdm=not accelerator.is_main_process
+        # disable_tqdm=not accelerator.is_main_process,
+        remove_unused_columns=False,
+        optim="paged_adamw_8bit",
     )
+
+    if training_args.gradient_checkpointing:
+        training_args.gradient_checkpointing_kwargs = {
+            "use_reentrant": False
+        }
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
@@ -299,6 +308,13 @@ def main():
         class_weights=class_weights if args.class_imbalance_fix == "weighted_loss" else None,
         focal_loss_fct=focal_loss_fct if args.class_imbalance_fix == "focal_loss" else None
     )
+
+    #handle PEFT+FSDP case
+    if getattr(trainer.accelerator.state, "fsdp_plugin", None) and args.lora:
+        from peft.utils.other import fsdp_auto_wrap_policy
+
+        fsdp_plugin = trainer.accelerator.state.fsdp_plugin
+        fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(trainer.model)
 
     # torch.cuda.empty_cache()
 
