@@ -1,8 +1,8 @@
-debug: true
+debug: null
 live_metrics: true
-dataset_path: /home/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl
-model_path: /home/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-8B
-class_imbalance_fix: weighted_loss
+dataset_path: /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl
+model_path: /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-8B
+class_imbalance_fix: oversampling
 threshold: null
 quant: true
 lora: true
