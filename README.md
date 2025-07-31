@@ -5,9 +5,10 @@ git clone git@github.com:Ali-Sayed-Salehi/perf-pilot.git
 
 python -m venv venv
 
-source my-venv/Scripts/activate
+source venv/Scripts/activate
 
 pip install -r requirements.txt
+pip install flash-attn --no-build-isolation
 
 # create a Google Cloud service account and enable accesss to Google Drive. Store its key as a json file
 # then contact repo owners and provide your service account email to gain access to data files. Then run:
