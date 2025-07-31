@@ -214,6 +214,7 @@ def main():
         trust_remote_code=True,
         # device_map="auto",
         torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention",
         # offload_folder=offload_dir,
         # offload_state_dict=True,
         **optional_kwargs

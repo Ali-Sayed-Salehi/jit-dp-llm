@@ -607,15 +607,14 @@ class SaveMetricsCallback(TrainerCallback):
 
 class CustomTrainer(Trainer):
     """
-    A custom extension of Hugging Face's `Trainer` class that supports
-    class imbalance handling via class weights or focal loss.
+    Custom Trainer with class imbalance handling (bf16-only).
     """
 
     def __init__(self, *args, class_weights=None, focal_loss_fct=None, **kwargs):
         super().__init__(*args, **kwargs)
-        # Store in float32 initially; will recast during training
+        # Store class weights directly in bf16
         self.class_weights = (
-            torch.tensor(class_weights, dtype=torch.float32)
+            torch.tensor(class_weights, dtype=torch.bfloat16)
             if class_weights is not None else None
         )
         self.focal_loss_fct = focal_loss_fct
@@ -626,19 +625,19 @@ class CustomTrainer(Trainer):
         logits = outputs.get("logits")
 
         if self.focal_loss_fct:
-            # ensure focal loss uses safe dtype
-            loss = self.focal_loss_fct(
-                logits.to(torch.float32),  # cast logits if focal loss expects float32
-                labels
-            )
+            # labels = labels.to(device=logits.device)
+            loss = self.focal_loss_fct(logits, labels)
+
         elif self.class_weights is not None:
-            # Match class_weights to logits dtype and device
-            class_weights = self.class_weights.to(logits.device).to(logits.dtype)
+            # Just move to device, dtype already bf16
+            class_weights = self.class_weights.to(device=logits.device)
             loss = F.cross_entropy(logits, labels, weight=class_weights)
+
         else:
             loss = F.cross_entropy(logits, labels)
 
         return (loss, outputs) if return_outputs else loss
+
 
 
 def run_final_inference(

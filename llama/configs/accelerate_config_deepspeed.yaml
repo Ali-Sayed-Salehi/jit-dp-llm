@@ -1,7 +1,7 @@
 compute_environment: LOCAL_MACHINE
 debug: true
 distributed_type: DEEPSPEED
-mixed_precision: bf16  # good for QLoRA
+mixed_precision: bf16
 downcast_bf16: 'no'
 num_processes: 2
 num_machines: 1

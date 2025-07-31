@@ -52,9 +52,19 @@ print(f"✨ Downloading {args.model_head} model...")
 # config = AutoConfig.from_pretrained(args.model_id, trust_remote_code=True)
 
 if args.model_head == "causal-lm":
-    model = AutoModelForCausalLM.from_pretrained(args.model_id, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_id, 
+        trust_remote_code=True, 
+        attn_implementation="flash_attention", 
+        torch_dtype=torch.bfloat16
+    )
 else:
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_id, trust_remote_code=True)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.model_id, 
+        trust_remote_code=True, 
+        attn_implementation="flash_attention", 
+        torch_dtype=torch.bfloat16
+    )
 
 os.makedirs(save_path, exist_ok=True)
 model.save_pretrained(save_path)
