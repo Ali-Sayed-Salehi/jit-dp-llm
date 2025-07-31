@@ -190,7 +190,7 @@ def main():
         trust_remote_code=True,
         # device_map={"": torch.cuda.current_device()}, #if args.quant else None,
         # device_map= int(os.environ.get("LOCAL_RANK", -1)) if torch.distributed.is_available() and torch.distributed.is_initialized() else "auto",
-        attn_implementation="flash_attention",
+        # attn_implementation="flash_attention",
         torch_dtype=torch.bfloat16,
         **optional_kwargs
     )
