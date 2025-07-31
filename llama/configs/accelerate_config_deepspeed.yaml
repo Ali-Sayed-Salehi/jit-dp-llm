@@ -12,19 +12,8 @@ use_cpu: false
 main_training_function: main
 deepspeed_config:
   deepspeed_multinode_launcher: standard
-  zero_stage: 2
+  offload_optimizer_device: none
+  offload_param_device: none
   zero3_init_flag: true
   zero3_save_16bit_model: true
-  offload_optimizer_device: none     # enables CPU offloading for optimizer state
-  offload_param_device: none         # enables CPU offloading for model parameters
-  offload_optimizer_pin_memory: true
-  offload_param_pin_memory: true
-  stage3_gather_fp16_weights_on_model_save: true
-  stage3_max_live_parameters: 1e9
-  stage3_max_reuse_distance: 1e9
-  stage3_prefetch_bucket_size: 5e7
-  stage3_param_persistence_threshold: 1e4
-  overlap_comm: true
-  contiguous_gradients: true
-  load_full_weights: true
-  find_unused_parameters: false
+  zero_stage: 3
