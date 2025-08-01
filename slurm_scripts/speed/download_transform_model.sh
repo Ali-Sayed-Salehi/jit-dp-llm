@@ -12,7 +12,7 @@
 #SBATCH --constraint=gpu16
 
 echo "Preparing training environment"
-source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
+source /speed-scratch/a_s87063/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
 
 echo "Running the download script ..."
 python /speed-scratch/a_s87063/repos/perf-pilot/llama/download_model.py --model_id meta-llama/Llama-3.1-8B --model_head causal-lm
