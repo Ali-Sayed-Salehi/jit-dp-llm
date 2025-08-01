@@ -2,10 +2,12 @@
 
 import os
 import argparse
+import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    BitsAndBytesConfig
 )
 
 from utils import (
@@ -51,19 +53,32 @@ print("✅ Tokenizer saved.")
 print(f"✨ Downloading {args.model_head} model...")
 # config = AutoConfig.from_pretrained(args.model_id, trust_remote_code=True)
 
+print("🔢 Using 4-bit quantization...")
+quant_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_quant_storage=torch.bfloat16,
+)
+
 if args.model_head == "causal-lm":
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
         attn_implementation="flash_attention", 
-        torch_dtype=torch.bfloat16
+        torch_dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        quantization_config=quant_config
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
         attn_implementation="flash_attention", 
-        torch_dtype=torch.bfloat16
+        torch_dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        quantization_config=quant_config
     )
 
 os.makedirs(save_path, exist_ok=True)

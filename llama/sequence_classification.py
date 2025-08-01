@@ -198,14 +198,13 @@ def main():
         trust_remote_code=True,
         # device_map="auto",
         torch_dtype=torch.bfloat16,
-        # attn_implementation="flash_attention",
+        attn_implementation="sdpa",
         # offload_folder=offload_dir,
         # offload_state_dict=True,
         **optional_kwargs
     )
 
     model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.use_cache = False
     if LLAMA:
         model.config.pretraining_tp = 1
 

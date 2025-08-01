@@ -185,7 +185,6 @@ def main():
     )
 
     model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.use_cache = False
     if LLAMA:
         model.config.pretraining_tp = 1
 
@@ -203,8 +202,6 @@ def main():
         )
         model = prepare_model_for_kbit_training(model)
         model = get_peft_model(model, lora_config)
-
-        # model = model.to(torch.bfloat16)
 
         model.print_trainable_parameters()
 
