@@ -6,7 +6,7 @@ class_imbalance_fix: focal_loss
 threshold: null
 quant: null
 lora: null
-bf16: true
+bf16: true # should always be true
 gradient_checkpointing: true
 continue_from_dir: null
 selection_metric: recall@top_30%

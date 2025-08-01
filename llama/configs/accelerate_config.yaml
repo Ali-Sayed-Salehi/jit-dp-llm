@@ -1,6 +1,6 @@
 compute_environment: LOCAL_MACHINE
 distributed_type: NO
-mixed_precision: bf16
+mixed_precision: bf16 # should always be true
 num_machines: 1
 machine_rank: 0
 num_processes: 1

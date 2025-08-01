@@ -745,35 +745,6 @@ def run_final_inference(
     print(json.dumps(final_metrics, indent=4))
 
 
-def evaluate_and_save_best_model(trainer, training_args, metrics_dir, adapter_dir, tokenizer_dir, tokenizer=None):
-    """
-    Evaluates the best checkpointed model (if enabled), saves the eval metrics,
-    and saves ONLY the LoRA adapter weights + tokenizer to disk.
-    """
-    if training_args.load_best_model_at_end:
-        best_eval_metrics = trainer.evaluate()
-        best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
-        with open(best_model_metrics_path, "w") as f:
-            json.dump(best_eval_metrics, f, indent=4)
-        print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
-    else:
-        print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
-        best_eval_metrics = None
-
-    print(f"💾 Saving LoRA adapter to {adapter_dir}")
-    trainer.model.save_pretrained(adapter_dir)
-
-    if tokenizer is not None:
-        print(f"💾 Saving tokenizer to {tokenizer_dir}")
-        tokenizer.save_pretrained(tokenizer_dir)
-    else:
-        print("⚠️ No tokenizer provided; skipping save.")
-
-    print("⚡️ To use this later: load the same base model and attach the adapter with PeftModel.from_pretrained()")
-
-    return best_eval_metrics
-
-
 def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
     """
     Sets up Trainer callbacks for live metrics logging.
@@ -1002,40 +973,6 @@ def register_custom_llama4_if_needed(model_path: str):
         print(f"✅ Registered custom LLaMA: model_type={model_type}, architectures={architectures}")
     else:
         print(f"ℹ️ Skipped custom registration: model_type={model_type}")
-
-
-def calculate_custom_device_map(
-    model_path: str,
-    max_memory: dict,
-    no_split_module_classes: list = ["LlamaDecoderLayer"]
-):
-    """
-    Calculates a custom device map for a large model to balance GPU/CPU/disk.
-
-    Args:
-        model_path (str): Path to the local model.
-        max_memory (dict): Max memory per device. E.g., {0: "2GB", "cpu": "48GB", "disk": "200GB"}
-        no_split_module_classes (list): Blocks that shouldn’t be split.
-
-    Returns:
-        dict: The calculated device map.
-    """
-    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-
-    with init_empty_weights():
-        model = AutoModelForSequenceClassification.from_config(config)
-
-    device_map = infer_auto_device_map(
-        model,
-        max_memory=max_memory,
-        no_split_module_classes=no_split_module_classes
-    )
-
-    print("\n📐 Custom device map:")
-    for module, device in device_map.items():
-        print(f"  {module:<40} => {device}")
-
-    return device_map
 
 
 def copy_model_to_tmpdir(model_path, repo_root, tmpdir_prefix):
