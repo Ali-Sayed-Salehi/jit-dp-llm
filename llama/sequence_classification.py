@@ -9,7 +9,8 @@ from transformers import (
     AutoConfig,
     TrainingArguments,
     DataCollatorWithPadding,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
+    set_seed
 )
 
 from peft import (
@@ -56,6 +57,7 @@ def main():
     RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
+    set_seed(42)
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)

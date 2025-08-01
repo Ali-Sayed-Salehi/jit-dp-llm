@@ -10,7 +10,8 @@ from transformers import (
     DataCollatorForLanguageModeling,
     Trainer,
     AutoModelForCausalLM,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
+    set_seed
 )
 from peft import (
     get_peft_model,
@@ -49,6 +50,7 @@ def main():
     SEQ_LEN_PERCENTILE = 100
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
+    set_seed(42)
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)

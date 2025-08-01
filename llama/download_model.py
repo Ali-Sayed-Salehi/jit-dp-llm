@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import os
 import argparse
 import torch
@@ -66,7 +64,6 @@ if args.model_head == "causal-lm":
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
-        attn_implementation="flash_attention", 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
         quantization_config=quant_config
@@ -75,7 +72,6 @@ else:
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
-        attn_implementation="flash_attention", 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
         quantization_config=quant_config
