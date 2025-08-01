@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
-
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import builtins
 
 import torch
@@ -35,14 +34,9 @@ from causal_lm_utils import (
 from utils import (
     determine_tokenizer_truncation,
     login_to_huggingface,
-    evaluate_and_save_best_model
+    evaluate_and_save_best_model,
+    handle_gradient_checkpointing
 )
-
-# from accelerate import Accelerator
-
-import logging
-logging.basicConfig(level=logging.INFO)
-
 
 def main():
     # ---------------------------- Parse Arguments and constants ----------------------------
@@ -65,13 +59,6 @@ def main():
 
     # if not accelerator.is_main_process:
     #     builtins.print = lambda *args, **kwargs: None
-
-    # if accelerator.state.fsdp_plugin:
-    #     FSDP = True
-    #     print("🧩 Running with FSDP enabled!")
-    # else:
-    #     FSDP = False
-    #     print("⚠️ FSDP Not enabled!")
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -190,8 +177,10 @@ def main():
         trust_remote_code=True,
         # device_map={"": torch.cuda.current_device()}, #if args.quant else None,
         # device_map= int(os.environ.get("LOCAL_RANK", -1)) if torch.distributed.is_available() and torch.distributed.is_initialized() else "auto",
-        # attn_implementation="flash_attention",
+        attn_implementation="sdpa",
         torch_dtype=torch.bfloat16,
+        # offload_folder=offload_dir,
+        # offload_state_dict=True,
         **optional_kwargs
     )
 
@@ -200,19 +189,14 @@ def main():
     if LLAMA:
         model.config.pretraining_tp = 1
 
-    # if args.gradient_checkpointing:
-    #     model.gradient_checkpointing_enable()
-
     # ------------------------- LORA -------------------------
-
-    # print([name for name, _ in model.named_modules() if "attn" in name])
-
     if args.lora:
         print("✨ Applying LoRA...")
         lora_config = LoraConfig(
             r=16,
             lora_alpha=8,
-            target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ['c_attn', 'c_proj'],
+            target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
+            # target_modules="all-linear",
             lora_dropout=0.05,
             bias="none",
             task_type=TaskType.CAUSAL_LM,
@@ -247,21 +231,15 @@ def main():
         label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
-        # gradient_checkpointing=args.gradient_checkpointing,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
-        optim="paged_adamw_8bit",
+        # optim="paged_adamw_8bit",
         # lr_scheduler_type="cosine",
         # warmup_steps=500,
         # fsdp=["full_shard", "auto_wrap"]
     )
-
-    if training_args.gradient_checkpointing:
-        training_args.gradient_checkpointing_kwargs = {
-            "use_reentrant": False
-        }
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
@@ -294,20 +272,10 @@ def main():
         fsdp_plugin = trainer.accelerator.state.fsdp_plugin
         fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(trainer.model)
 
-    # ---------------------------- Model Setup Checks ----------------------------
-    # print("🛑 Verifications:")
-    # print(trainer.accelerator.state)
+    # ------------------------- Gradient Checkpointing -------------------------
+    handle_gradient_checkpointing(args, model, training_args, trainer)
 
-    # # The actual wrapped model
-    # wrapped_model = trainer.model_wrapped
-    # print(f"🔍 Model type: {type(wrapped_model)}")
-
-    # trainer.accelerator.print(f"{trainer.model}")
-
-    # # print(next(model.parameters()).dtype)
-
-    # # torch.cuda.empty_cache()
-
+    # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
     # ---------------------------- Evaluate Best Model and Save ----------------------------

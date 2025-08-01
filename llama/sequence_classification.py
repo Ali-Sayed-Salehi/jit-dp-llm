@@ -1,7 +1,5 @@
 import os
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-# from accelerate import Accelerator
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import builtins
 
 import torch
@@ -40,7 +38,8 @@ from sequence_classification_utils import (
 from utils import (
     determine_tokenizer_truncation,
     login_to_huggingface,
-    evaluate_and_save_best_model
+    evaluate_and_save_best_model,
+    handle_gradient_checkpointing
 )
 
 def main():
@@ -57,9 +56,6 @@ def main():
     RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
-
-    # policy = get_mixed_precision_policy()
-    # print(f"Recommended mixed precision policy: {policy}")
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
@@ -170,18 +166,6 @@ def main():
         setup_live_metrics(args.live_metrics, live_metrics_path)
     )
 
-    # ------------------------- Custom device map -------------------------
-    # max_memory = {
-    #     0: "20GB",
-    #     "cpu": "200GB",
-    #     "disk": "200GB"
-    # }
-
-    # device_map = calculate_custom_device_map(
-    #     model_path=MODEL_PATH,
-    #     max_memory=max_memory
-    # )
-
     # ------------------------- Load model and quantization-------------------------
     id2label = {0: "NEGATIVE", 1: "POSITIVE"}
     label2id = {"NEGATIVE": 0, "POSITIVE": 1}
@@ -225,16 +209,14 @@ def main():
     if LLAMA:
         model.config.pretraining_tp = 1
 
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
-
     # ------------------------- LORA -------------------------
     if args.lora:
         print("✨ Applying LoRA...")
         lora_config = LoraConfig(
             r=16,
             lora_alpha=8,
-            target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
+            # target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
+            target_modules="all-linear",
             lora_dropout=0.05,
             bias="none",
             task_type=TaskType.SEQ_CLS,
@@ -266,18 +248,12 @@ def main():
         label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
-        gradient_checkpointing=args.gradient_checkpointing,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
         optim="paged_adamw_8bit",
     )
-
-    if training_args.gradient_checkpointing:
-        training_args.gradient_checkpointing_kwargs = {
-            "use_reentrant": False
-        }
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
@@ -319,6 +295,10 @@ def main():
 
     # torch.cuda.empty_cache()
 
+    # ------------------------- Gradient Checkpointing -------------------------
+    handle_gradient_checkpointing(args, model, training_args, trainer)
+
+    # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
     # ---------------------------- Evaluate Best Model and Save ----------------------------
@@ -326,7 +306,7 @@ def main():
         trainer=trainer,
         training_args=training_args,
         metrics_dir=metrics_dir,
-        adapter_dir=finetuned_model_dir,
+        save_dir=finetuned_model_dir,
         tokenizer_dir=finetuned_tokenizer_dir,
         tokenizer=tokenizer
     )
