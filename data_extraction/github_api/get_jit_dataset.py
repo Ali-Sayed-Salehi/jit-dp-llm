@@ -15,6 +15,8 @@ parser.add_argument("--debug", action="store_true", help="Run in debug mode with
 parser.add_argument("--struc", action="store_true", help="get structred diffs")
 parser.add_argument("--ast", action="store_true", help="get structred diffs with ast paths in each change block")
 parser.add_argument("--small", action="store_true", help="Use the apachejit small dataset instead of the complete dataset.")
+parser.add_argument("--small", action="store_true", help="Use the apachejit small dataset instead of the complete dataset.")
+parser.add_argument("--dataset_name", type=str, help="name of the dataset, either apachejit or jit_defects4j.")
 args = parser.parse_args()
 
 if args.ast and not args.struc:
@@ -23,19 +25,25 @@ if args.ast and not args.struc:
 size = "small" if args.small else "total"
 DEBUG = args.debug
 
+if args.dataset_name == "apachejit":
+    dataset_name = "apachejit"
+elif args.dataset_name == "jit_defects4j":
+    dataset_name = "apacjit_defects4jhejit"
+
+
 # ---------------------------- Setup Paths ----------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
-csv_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}.csv")
+csv_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}.csv")
 
 if args.ast:
-    success_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_with_struc_ast_diff.jsonl")
-    fail_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_failed_struc_ast.csv")
+    success_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_with_struc_ast_diff.jsonl")
+    fail_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_failed_struc_ast.csv")
 elif args.struc:
-    success_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_with_struc_diff.jsonl")
-    fail_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_failed_struc.csv")
+    success_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_with_struc_diff.jsonl")
+    fail_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_failed_struc.csv")
 else:
-    success_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_with_diff.jsonl")
-    fail_path = os.path.join(script_dir, "..", "..", "datasets", "jit_dp", f"apachejit_{size}_failed.csv")
+    success_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_with_diff.jsonl")
+    fail_path = os.path.join(script_dir, "..", "..", "datasets", dataset_name, f"{dataset_name}_{size}_failed.csv")
 
 apachejit_df = pd.read_csv(csv_path)
 apachejit_list = apachejit_df.to_dict(orient='records')

@@ -21,9 +21,6 @@ from peft import (
 )
 
 from sequence_classification_utils import (
-    parse_training_args,
-    setup_training_directories,
-    load_and_split_dataset,
     compute_class_distribution,
     apply_class_imbalance_strategy,
     FocalLoss,
@@ -32,7 +29,6 @@ from sequence_classification_utils import (
     run_final_inference,
     save_training_metrics,
     save_training_config,
-    setup_live_metrics,
     register_custom_llama4_if_needed
     )
 
@@ -40,7 +36,11 @@ from utils import (
     determine_tokenizer_truncation,
     login_to_huggingface,
     evaluate_and_save_best_model,
-    handle_gradient_checkpointing
+    handle_gradient_checkpointing,
+    parse_training_args,
+    setup_training_directories,
+    setup_live_metrics,
+    load_and_split_dataset
 )
 
 def main():
@@ -98,12 +98,18 @@ def main():
     register_custom_llama4_if_needed(MODEL_PATH)
 
     # ------------------------- Load dataset and fix class imbalance -------------------------
+    def format_for_classification(example):
+        return {
+            "text": example['prompt'],
+            "labels": int(example["response"])
+        }
 
     dataset = load_and_split_dataset(
         dataset_path=args.dataset_path,
         repo_path=REPO_PATH,
         slurm_tmpdir=slurm_tmpdir,
-        debug=DEBUG
+        debug=DEBUG,
+        format_fn=format_for_classification
     )
 
     imbalance_fix = args.class_imbalance_fix
@@ -216,8 +222,7 @@ def main():
         lora_config = LoraConfig(
             r=16,
             lora_alpha=8,
-            # target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
-            target_modules="all-linear",
+            target_modules="all-linear" if LLAMA else ["query", "value"],
             lora_dropout=0.05,
             bias="none",
             task_type=TaskType.SEQ_CLS,
@@ -246,14 +251,14 @@ def main():
         load_best_model_at_end= True,
         metric_for_best_model=args.selection_metric,
         greater_is_better=True,
-        label_names=["labels"],
+        # label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
-        optim="paged_adamw_8bit",
+        # optim="paged_adamw_8bit",
     )
 
     # ------------------------- Save Config to File -------------------------

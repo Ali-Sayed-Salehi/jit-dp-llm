@@ -19,7 +19,6 @@ from imblearn.over_sampling import RandomOverSampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoConfig,
-    TrainerCallback,
     Trainer
 )
 
@@ -32,192 +31,71 @@ import evaluate
 from attach_classification_head_llama4 import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
-def parse_training_args():
-    # First, parse only the config file argument
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--config", type=str, default=None, help="Path to YAML config file with default arguments")
-    known_args, _ = pre_parser.parse_known_args()
+# def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
+#     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
+#         print("🎬 Loading IMDb dataset from Hugging Face...")
+#         dataset = load_dataset("imdb")
+#         test_dataset = dataset["test"]
+#         n_test = len(test_dataset)
+#         n_eval = n_test // 2
 
-    # Load config file values
-    defaults = {}
-    if known_args.config:
-        if not os.path.isfile(known_args.config):
-            raise FileNotFoundError(f"Config file not found: {known_args.config}")
-        with open(known_args.config, "r") as f:
-            defaults = yaml.safe_load(f) or {}
+#         eval_split = test_dataset.select(range(0, n_eval))
+#         final_test_split = test_dataset.select(range(n_eval, n_test))
 
-    # Full parser with defaults from config
-    parser = argparse.ArgumentParser(parents=[pre_parser])
-    parser.set_defaults(**defaults)
+#         return DatasetDict({
+#             "train": dataset["train"],
+#             "test": eval_split,
+#             "final_test": final_test_split
+#         })
 
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--live_metrics", action="store_true", help="Enable saving evaluation metrics after each eval step")
-    parser.add_argument(
-        "--dataset_path",
-        type=str,
-        help="Choose which dataset to use by specifying its absolute path. Default is imdb."
-    )
-    parser.add_argument("--model_path", type=str, required=not defaults.get("model_path"), help="Full path to the local pretrained model directory")
-    parser.add_argument(
-        "--class_imbalance_fix",
-        type=str,
-        choices=["oversampling", "weighted_loss", "focal_loss", "none"],
-        help="Class imbalance handling method"
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        help="Optional decision threshold for classifying as class 1 (between 0 and 1). If not set, uses argmax."
-    )
-    parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
-    parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
-    parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 training")
-    parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")
-    parser.add_argument(
-        "--continue_from_dir", 
-        type=str, 
-        help="""Resume training from this checkpoint directory. 
-        Example: '--continue_from_dir /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-06-10_20-42-03/output'"""
-    )
-    parser.add_argument(
-        "--selection_metric",
-        type=str,
-        help="Metric to select the best model: recall@top_5%, recall@top_10%, recall@top_30%, f1, precision, recall, accuracy. Default is recall@top_5%"
-    )
-    parser.add_argument(
-        "--truncation_len",
-        type=int,
-        help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
-    )
+#     if not os.path.exists(dataset_path):
+#         raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-    args = parser.parse_args()
+#     # Attempt to copy to SLURM tmpdir
+#     dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
+#     dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
+#     dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+#     dataset_copy_path = dataset_path  # fallback
 
-    # --- Validation Section ---
-    if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
-        raise ValueError("Threshold must be between 0 and 1 if specified")
+#     try:
+#         os.makedirs(dest_dir, exist_ok=True)
+#         run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+#         print(f"✅ Copied {dataset_path} → {dest_file}")
+#         dataset_copy_path = dest_file
+#     except (OSError, CalledProcessError) as e:
+#         print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
+#         print(f"🔄 Falling back to using original dataset path: {dataset_path}")
 
-    VALID_SELECTION_METRICS = {
-        "recall@top_5%", "recall@top_10%", "recall@top_30%",
-        "f1", "precision", "recall", "accuracy"
-    }
-    if args.selection_metric not in VALID_SELECTION_METRICS:
-        raise ValueError(f"Unsupported selection_metric '{args.selection_metric}'. Must be one of {VALID_SELECTION_METRICS}")
+#     # Load dataset
+#     dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
 
-    return args
+#     # Chronological split
+#     n_total = len(dataset)
+#     n_train = int(n_total * 0.64)
+#     n_eval  = int(n_total * 0.16)
 
+#     train_dataset = dataset.select(range(0, n_train))
+#     eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
+#     test_dataset  = dataset.select(range(n_train + n_eval, n_total))
 
+#     if debug:
+#         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
+#         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
+#         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
 
-def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
-    """
-    Sets up output, metrics, tensorboard, and model/tokenizer directories.
+#     train_dataset = train_dataset.shuffle(seed=seed)
 
-    Returns:
-        dict with keys: output_dir, run_timestamp, metrics_dir, tensorboard_dir,
-        config_path, live_metrics_path, model_dir, tokenizer_dir, all_dirs (list of paths created)
-    """
-    if continue_from_dir:
-        output_dir = continue_from_dir
-        run_timestamp = os.path.basename(os.path.dirname(output_dir)).split("_", 1)[-1]
-        print(f"🔁 Resuming from checkpoint in: {output_dir}")
-    else:
-        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
+    # def format_for_classification(example):
+    #     return {
+    #         "text": example['prompt'],
+    #         "labels": int(example["response"])
+    #     }
 
-    offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
-    slurm_tmpdir = os.environ[slurm_tmpdir]
-
-    base_run_dir = os.path.dirname(output_dir)
-    tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
-    metrics_dir = os.path.join(base_run_dir, "metrics")
-    model_dir = os.path.join(base_run_dir, "model")
-    tokenizer_dir = os.path.join(base_run_dir, "tokenizer")
-    config_path = os.path.join(metrics_dir, "config.json")
-    live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
-
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir]
-    for d in dirs_to_create:
-        os.makedirs(d, exist_ok=True)
-
-    return {
-        "output_dir": output_dir,
-        "run_timestamp": run_timestamp,
-        "tensorboard_dir": tensorboard_dir,
-        "metrics_dir": metrics_dir,
-        "config_path": config_path,
-        "live_metrics_path": live_metrics_path,
-        "model_dir": model_dir,
-        "tokenizer_dir": tokenizer_dir,
-        "all_dirs": dirs_to_create,
-        "offload_dir": offload_dir,
-        "slurm_tmpdir": slurm_tmpdir
-    }
-
-
-def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
-    if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
-        print("🎬 Loading IMDb dataset from Hugging Face...")
-        dataset = load_dataset("imdb")
-        test_dataset = dataset["test"]
-        n_test = len(test_dataset)
-        n_eval = n_test // 2
-
-        eval_split = test_dataset.select(range(0, n_eval))
-        final_test_split = test_dataset.select(range(n_eval, n_test))
-
-        return DatasetDict({
-            "train": dataset["train"],
-            "test": eval_split,
-            "final_test": final_test_split
-        })
-
-    if not os.path.exists(dataset_path):
-        raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
-
-    # Attempt to copy to SLURM tmpdir
-    dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
-    dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-    dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
-    dataset_copy_path = dataset_path  # fallback
-
-    try:
-        os.makedirs(dest_dir, exist_ok=True)
-        run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-        print(f"✅ Copied {dataset_path} → {dest_file}")
-        dataset_copy_path = dest_file
-    except (OSError, CalledProcessError) as e:
-        print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
-        print(f"🔄 Falling back to using original dataset path: {dataset_path}")
-
-    # Load dataset
-    dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
-
-    # Chronological split
-    n_total = len(dataset)
-    n_train = int(n_total * 0.64)
-    n_eval  = int(n_total * 0.16)
-
-    train_dataset = dataset.select(range(0, n_train))
-    eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
-    test_dataset  = dataset.select(range(n_train + n_eval, n_total))
-
-    if debug:
-        train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
-        eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
-        test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
-
-    train_dataset = train_dataset.shuffle(seed=seed)
-
-    def format_for_classification(example):
-        return {
-            "text": example['prompt'],
-            "label": int(example["response"])
-        }
-
-    return DatasetDict({
-        "train": train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names),
-        "test": eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names),
-        "final_test": test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
-    })
+#     return DatasetDict({
+#         "train": train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names),
+#         "test": eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names),
+#         "final_test": test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
+#     })
 
 
 
@@ -258,7 +136,7 @@ def apply_class_imbalance_strategy(
 
     if strategy == "focal_loss":
         print("🔥 Using Focal Loss for class imbalance.")
-        label_counts = Counter(train_dataset["label"])
+        label_counts = Counter(train_dataset["labels"])
         alpha_dict = {k: alpha for k in label_counts.keys()}
         return DatasetDict({
             "train": train_dataset,
@@ -268,7 +146,7 @@ def apply_class_imbalance_strategy(
 
     elif strategy == "weighted_loss":
         print("🔄 Using Weighted Cross Entropy Loss.")
-        label_counts = Counter(train_dataset["label"])
+        label_counts = Counter(train_dataset["labels"])
         total = sum(label_counts.values())
         weights = [total / label_counts[i] for i in sorted(label_counts)]
         for i, weight in enumerate(weights):
@@ -282,12 +160,12 @@ def apply_class_imbalance_strategy(
     elif strategy == "oversampling":
         print("📈 Applying random oversampling to balance dataset.")
         df = pd.DataFrame(train_dataset)
-        X = df.drop(columns=["label"])
-        y = df["label"]
+        X = df.drop(columns=["labels"])
+        y = df["labels"]
         ros = RandomOverSampler(random_state=seed)
         X_resampled, y_resampled = ros.fit_resample(X, y)
         resampled_df = X_resampled.copy()
-        resampled_df["label"] = y_resampled
+        resampled_df["labels"] = y_resampled
         train_dataset_balanced = Dataset.from_pandas(resampled_df)
         return DatasetDict({
             "train": train_dataset_balanced,
@@ -315,7 +193,7 @@ def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
 
     Args:
         dataset_dict (DatasetDict): A Hugging Face DatasetDict with splits.
-            Each split must contain a 'label' column.
+            Each split must contain a 'labels' column.
 
     Returns:
         dict: A nested dictionary where each split name maps to:
@@ -325,7 +203,7 @@ def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
     distribution = {}
 
     for split_name, split_dataset in dataset_dict.items():
-        labels = split_dataset["label"]
+        labels = split_dataset["labels"]
         label_counts = Counter(labels)
         total = sum(label_counts.values())
         pos_count = label_counts.get(1, 0)
@@ -522,89 +400,6 @@ def compute_custom_metrics(eval_pred, threshold=None, percentages=None):
     return metrics
 
 
-class SaveMetricsCallback(TrainerCallback):
-    """
-    A custom Hugging Face `TrainerCallback` for saving training and evaluation metrics to disk
-    after each logging or evaluation step. Metrics are appended to a JSON Lines (JSONL) file,
-    enabling later visualization or analysis (e.g., plotting loss/accuracy curves).
-
-    Args:
-        output_path (str): Path to the output `.jsonl` file where metrics will be saved.
-                           The directory will be created if it does not exist.
-
-    Example JSONL structure:
-        {
-            "step": 100,
-            "type": "train",
-            "metrics": {
-                "loss": 0.543,
-                "learning_rate": 5e-5
-            }
-        }
-
-        {
-            "step": 200,
-            "type": "eval",
-            "metrics": {
-                "eval_accuracy": 0.88,
-                "eval_loss": 0.42
-            }
-        }
-
-    Methods:
-        on_log(): Called after each log event (e.g., loss during training).
-        on_evaluate(): Called after each evaluation step (e.g., validation metrics).
-    """
-
-    def __init__(self, output_path):
-        self.output_path = output_path
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    def _write_metrics(self, state, metrics, metric_type):
-        """
-        Appends a single metric record to the JSONL file.
-
-        Args:
-            state (TrainerState): The current training state object.
-            metrics (dict): Dictionary of metric values.
-            metric_type (str): One of "train" or "eval" to identify the source.
-        """
-        if metrics is not None:
-            with open(self.output_path, "a") as f:
-                json.dump({
-                    "step": state.global_step,
-                    "type": metric_type,
-                    "metrics": metrics
-                }, f)
-                f.write("\n")
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        """
-        Called after logging training metrics. Saves training metrics to file if present.
-
-        Args:
-            args (TrainingArguments): The training arguments.
-            state (TrainerState): Current state of training.
-            control (TrainerControl): Control flow handler.
-            logs (dict, optional): Dictionary of logged training metrics.
-        """
-        if logs and not any(k.startswith("eval_") for k in logs):
-            self._write_metrics(state, logs, "train")
-
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """
-        Called after evaluation. Saves evaluation metrics to file.
-
-        Args:
-            args (TrainingArguments): The training arguments.
-            state (TrainerState): Current state of training.
-            control (TrainerControl): Control flow handler.
-            metrics (dict, optional): Evaluation metrics dictionary.
-        """
-        self._write_metrics(state, metrics, "eval")
-
-
-
 class CustomTrainer(Trainer):
     """
     Custom Trainer with class imbalance handling (bf16-only).
@@ -745,29 +540,6 @@ def run_final_inference(
     print(json.dumps(final_metrics, indent=4))
 
 
-def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
-    """
-    Sets up Trainer callbacks for live metrics logging.
-
-    Args:
-        live_metrics_enabled (bool): Whether to enable live metrics logging.
-        live_metrics_path (str): Path to save live metrics JSONL file if enabled.
-
-    Returns:
-        list: A list of TrainerCallback instances.
-    """
-    callbacks = []
-
-    if live_metrics_enabled:
-        callbacks.append(SaveMetricsCallback(live_metrics_path))
-        print(f"📊 Live metrics will be saved to: {live_metrics_path}")
-    else:
-        print("📊 Live metrics logging disabled.")
-
-    return callbacks
-
-
-
 def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
     """
     Saves the full training and evaluation metric history from a Hugging Face Trainer to a JSON file.
@@ -891,7 +663,7 @@ def save_training_config(
 
     if dataset is not None:
         if "final_test" in dataset:
-            true_labels_test_set = np.array(dataset["final_test"]["label"])
+            true_labels_test_set = np.array(dataset["final_test"]["labels"])
             
             defect_rate = compute_defect_rate(true_labels_test_set)
 

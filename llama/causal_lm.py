@@ -21,14 +21,10 @@ from peft import (
 )
 
 from causal_lm_utils import (
-    parse_training_args,
-    setup_training_directories,
-    load_and_split_dataset,
     compute_custom_metrics,
     run_final_inference,
     save_training_metrics,
     save_training_config,
-    setup_live_metrics,
     chunk_long_samples
 )
 
@@ -36,7 +32,11 @@ from utils import (
     determine_tokenizer_truncation,
     login_to_huggingface,
     evaluate_and_save_best_model,
-    handle_gradient_checkpointing
+    handle_gradient_checkpointing,
+    parse_training_args,
+    setup_training_directories,
+    setup_live_metrics,
+    load_and_split_dataset
 )
 
 def main():
@@ -88,11 +88,19 @@ def main():
     login_to_huggingface(REPO_PATH)
 
     # ------------------------- Load dataset -------------------------
+    def format_for_lm(example):
+        if "text" in example: # imdb dataset
+            return {"text": example["text"]}
+        if "prompt" in example: # jit dataset
+            return {"text": example["prompt"]}
+        return {"text": ""}
+
     dataset = load_and_split_dataset(
         dataset_path=args.dataset_path,
         repo_path=REPO_PATH,
         slurm_tmpdir=slurm_tmpdir,
-        debug=DEBUG
+        debug=DEBUG,
+        format_fn=format_for_lm
     )
 
     # ------------------------- tokenize -------------------------
@@ -115,7 +123,7 @@ def main():
             truncation=should_truncate,
             max_length=tokenizer_max_len
         )
-        outputs["labels"] = outputs["input_ids"].copy()
+        # outputs["labels"] = outputs["input_ids"].copy()
         return outputs
 
     tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
@@ -227,7 +235,7 @@ def main():
         load_best_model_at_end= True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        label_names=["labels"],
+        # label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
         log_level="info",
