@@ -1,7 +1,7 @@
 debug: null
 live_metrics: true
-dataset_path: /speed-scratch/a_s87063/repos/perf-pilot/datasets/mozilla_perf/perf_llm_struc.jsonl
-model_path: /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/microsoft/codebert-base
+dataset_path: datasets/mozilla_perf/perf_llm_struc.jsonl
+model_path: LLMs/pretrained/sequence-classification/microsoft/codebert-base
 class_imbalance_fix: focal_loss
 threshold: null
 quant: null
