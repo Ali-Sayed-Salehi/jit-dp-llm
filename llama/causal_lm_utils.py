@@ -17,91 +17,6 @@ from transformers import (
 )
 
 
-
-# def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
-#     """
-#     Loads and splits a local JSONL dataset for causal LM training, evaluation, and final testing,
-#     or loads the Hugging Face ELI5 dataset if specified.
-
-#     Returns:
-#         DatasetDict: A dictionary with Hugging Face `Dataset` objects:
-#             - "train": Training split
-#             - "test": Evaluation split
-#             - "final_test": Held-out test split
-#     """
-
-#     # Load ELI5 if needed
-#     if dataset_path is None or str(dataset_path).strip().lower() == "eli5":
-#         print("📚 Loading ELI5 dataset from Hugging Face...")
-#         dataset = load_dataset(
-#             "eli5_category",
-#             split="train[:7000]",
-#             trust_remote_code=True
-#         )
-
-#     else:
-#         if not os.path.exists(dataset_path):
-#             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
-
-#         dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
-#         dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-#         dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
-#         dataset_copy_path = dataset_path  # fallback if copy fails
-
-#         try:
-#             os.makedirs(dest_dir, exist_ok=True)
-#             run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-#             print(f"✅ Copied {dataset_path} → {dest_file}")
-#             dataset_copy_path = dest_file
-#         except (OSError, CalledProcessError) as e:
-#             print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
-#             print(f"🔄 Falling back to using original dataset path: {dataset_path}")
-
-#         dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
-
-#     # Chronological split: 64% train, 16% eval, 20% final test
-#     n_total = len(dataset)
-#     n_train = int(n_total * 0.64)
-#     n_eval  = int(n_total * 0.16)
-
-#     train_dataset = dataset.select(range(0, n_train))
-#     eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
-#     test_dataset  = dataset.select(range(n_train + n_eval, n_total))
-
-#     if debug:
-#         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
-#         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
-#         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
-
-#     train_dataset = train_dataset.shuffle(seed=seed)
-
-#     # Format for causal LM
-#     def format_for_lm(example):
-#         if dataset_path is None or str(dataset_path).strip().lower() == "eli5":
-#             answers = example.get("answers", {})
-#             if isinstance(answers, dict):
-#                 texts = answers.get("text", [])
-#                 if isinstance(texts, list):
-#                     return {"text": " ".join(texts)}
-#                 return {"text": str(texts)}
-#             return {"text": ""}
-#         if "prompt" in example:
-#             return {"text": example["prompt"]}
-#         if "text" in example:
-#             return {"text": example["text"]}
-#         return {"text": ""}
-
-#     train_formatted = train_dataset.map(format_for_lm, remove_columns=train_dataset.column_names)
-#     eval_formatted  = eval_dataset.map(format_for_lm, remove_columns=eval_dataset.column_names)
-#     test_formatted  = test_dataset.map(format_for_lm, remove_columns=test_dataset.column_names)
-
-#     return DatasetDict({
-#         "train": train_formatted,
-#         "test": eval_formatted,
-#         "final_test": test_formatted
-#     })
-
-
 def chunk_long_samples(
     dataset_dict,
     max_seq_length,
@@ -326,6 +241,14 @@ def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
     print(f"✅ Saved metrics to {metrics_save_path}")
     return metrics_save_path
 
+def safe_predict(trainer, dataset, accum_steps=1):
+    orig_eval_accum = trainer.args.eval_accumulation_steps
+    try:
+        trainer.args.eval_accumulation_steps = accum_steps
+        return trainer.predict(dataset)
+    finally:
+        trainer.args.eval_accumulation_steps = orig_eval_accum
+
 
 def run_final_inference(
     trainer,
@@ -358,7 +281,7 @@ def run_final_inference(
 
     print("\n🧪 Running final inference on held-out test set...")
 
-    test_results = trainer.predict(test_dataset)
+    test_results = safe_predict(trainer, test_dataset, accum_steps=2)
     logits, labels = test_results.predictions, test_results.label_ids
 
     # Some Trainer versions log 'test_loss', some 'eval_loss'

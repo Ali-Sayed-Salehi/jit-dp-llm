@@ -43,6 +43,11 @@ def combine_and_sort(pkl_files):
     }
     combined_df = combined_df.rename(columns=rename_map)
 
+    # Convert buggy column from 0/1 to boolean
+    if "buggy" in combined_df.columns:
+        combined_df["buggy"] = combined_df["buggy"].astype(int).astype(bool)
+        print("✅ Converted 'buggy' column to boolean values (True/False).")
+
 
     # Add GitHub project mapping
     project_to_repo = {

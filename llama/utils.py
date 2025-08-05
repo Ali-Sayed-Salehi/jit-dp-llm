@@ -127,12 +127,16 @@ def evaluate_and_save_best_model(
     - Saves tokenizer
     """
 
-    # ---------------- Evaluate ----------------
+# ---------------- Evaluate ----------------
     if training_args.load_best_model_at_end:
         best_eval_metrics = trainer.evaluate()
+
+        best_eval_metrics["best_model_checkpoint"] = trainer.state.best_model_checkpoint
+
         best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
         with open(best_model_metrics_path, "w") as f:
             json.dump(best_eval_metrics, f, indent=4)
+
         print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
     else:
         print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
@@ -227,8 +231,8 @@ def parse_training_args():
     parser.add_argument(
         "--class_imbalance_fix",
         type=str,
-        choices=["oversampling", "weighted_loss", "focal_loss", "none"],
-        help="Class imbalance handling method"
+        choices=["oversampling", "weighted_loss", "focal_loss", "undersampling" ,"none"],
+        help="Class imbalance handling method. Options: oversampling, weighted_loss, focal_loss, undersampling ,none"
     )
     parser.add_argument(
         "--threshold",
@@ -269,7 +273,7 @@ def parse_training_args():
 
     for key in ["dataset_path", "model_path", "continue_from_dir"]:
         path_val = getattr(args, key, None)
-        if path_val:
+        if path_val and path_val != "imdb":
             if os.path.isabs(path_val):
                 # Leave absolute paths untouched
                 abs_path = path_val
@@ -468,13 +472,12 @@ def load_and_split_dataset(
         dataset = load_dataset("imdb")
         full_dataset = concatenate_datasets([dataset["train"], dataset["test"]])
 
-
         # Add length field using raw text length
         full_dataset = full_dataset.map(lambda ex: {"length": len(ex["text"])})
 
         # Sort and take top 7000
         full_dataset = full_dataset.sort("length", reverse=True)
-        top_dataset = full_dataset.select(range(min(7000, len(full_dataset))))
+        final_dataset = full_dataset.select(range(min(7000, len(full_dataset))))
     else:
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
@@ -493,27 +496,17 @@ def load_and_split_dataset(
             print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
             print(f"🔄 Falling back to using original dataset path: {dataset_path}")
 
-        top_dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
-        # Compute length for JSON dataset as well
-        top_dataset = top_dataset.map(lambda ex: {"length": len(ex.get("text", ex.get("prompt", "")))})
+        final_dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
 
-    # 🔍 Print length distribution
-    lengths = [ex["length"] for ex in top_dataset]
-    print(f"📊 Dataset length stats (chars):")
-    print(f"   Min: {np.min(lengths)}")
-    print(f"   Max: {np.max(lengths)}")
-    print(f"   Avg: {np.mean(lengths):.2f}")
-    print(f"   Median: {np.median(lengths)}")
-    print(f"   90th percentile: {np.percentile(lengths, 90)}")
 
     # Split 64% train, 16% eval, 20% test
-    n_total = len(top_dataset)
+    n_total = len(final_dataset)
     n_train = int(n_total * 0.64)
     n_eval  = int(n_total * 0.16)
 
-    train_dataset = top_dataset.select(range(0, n_train))
-    eval_dataset  = top_dataset.select(range(n_train, n_train + n_eval))
-    test_dataset  = top_dataset.select(range(n_train + n_eval, n_total))
+    train_dataset = final_dataset.select(range(0, n_train))
+    eval_dataset  = final_dataset.select(range(n_train, n_train + n_eval))
+    test_dataset  = final_dataset.select(range(n_train + n_eval, n_total))
 
     if debug:
         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))

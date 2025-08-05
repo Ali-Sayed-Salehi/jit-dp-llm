@@ -111,6 +111,7 @@ def main():
     org_name = path_parts[-2]
 
     SAVE_PATH = os.path.join(args.save_path, org_name, model_name)
+    # offload_dir = os.path.join(os.environ["TMPDIR"], "offload", org_name, model_name)
 
     # ✅ Register the custom config + model class
     AutoConfig.register(CustomLlama4TextConfig.model_type, CustomLlama4TextConfig)
