@@ -99,10 +99,14 @@ def main():
 
     # ------------------------- Load dataset and fix class imbalance -------------------------
     def format_for_classification(example):
-        return {
-            "text": example['prompt'],
-            "labels": int(example["response"])
-        }
+        if "text" in example and "label" in example:
+            # IMDb case
+            return {"text": example["text"], "labels": int(example["label"])}
+        elif "prompt" in example and "response" in example:
+            # Custom dataset case
+            return {"text": example["prompt"], "labels": int(example["response"])}
+        else:
+            raise KeyError(f"Unrecognized example keys: {list(example.keys())}")
 
     dataset = load_and_split_dataset(
         dataset_path=args.dataset_path,
@@ -112,14 +116,9 @@ def main():
         format_fn=format_for_classification
     )
 
-    imbalance_fix = args.class_imbalance_fix
-
-    # Compute class distribution before imbalance fix
-    original_class_distribution = compute_class_distribution(dataset)
-
-    dataset, class_weights, focal_loss_dict = apply_class_imbalance_strategy(
+    dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
         dataset=dataset,
-        strategy=imbalance_fix,
+        strategy=args.class_imbalance_fix,
         seed=42,
         alpha=FL_ALPHA,
         gamma=FL_GAMMA
@@ -127,11 +126,8 @@ def main():
 
     # Prepare loss function if needed
     focal_loss_fct = None
-    if imbalance_fix == "focal_loss":
+    if args.class_imbalance_fix == "focal_loss":
         focal_loss_fct = FocalLoss(**focal_loss_dict)
-
-    # Compute class distribution after imbalance fix
-    class_distribution = compute_class_distribution(dataset)
 
     # ------------------------- tokenize -------------------------
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
@@ -239,7 +235,7 @@ def main():
         per_device_eval_batch_size=1 if DEBUG else 1,
         gradient_accumulation_steps=16,
         num_train_epochs=1 if DEBUG else 3,
-        max_steps=2 if DEBUG else -1,
+        max_steps=1 if DEBUG else -1,
         weight_decay=0.01,
         logging_strategy="steps",
         logging_steps=1 if DEBUG else 25,
@@ -251,13 +247,14 @@ def main():
         load_best_model_at_end= True,
         metric_for_best_model=args.selection_metric,
         greater_is_better=True,
-        # label_names=["labels"],
+        label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
+        # eval_accumulation_steps=16,
         # optim="paged_adamw_8bit",
     )
 

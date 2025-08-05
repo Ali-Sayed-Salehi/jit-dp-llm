@@ -18,6 +18,6 @@ nvidia-smi
 
 echo "running the training script"
 # python /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset_path eli5 --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/distilbert/distilgpt2 --quant --lora --bf16 --gradient_checkpointing --truncation_len 128 --debug
-python /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Meta-Llama-3-8B --quant --lora --bf16 --gradient_checkpointing --truncation_len 50 --chunking_len 50 --debug
+# python /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --live_metrics --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_dp/apachejit_llm_small_struc.jsonl --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/meta-llama/Meta-Llama-3-8B --quant --lora --bf16 --gradient_checkpointing --truncation_len 50 --chunking_len 50 --debug
 accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/causal_lm_config.yaml
 echo "training finished"

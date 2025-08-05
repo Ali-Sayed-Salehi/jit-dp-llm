@@ -223,7 +223,7 @@ def main():
         per_device_eval_batch_size=1 if DEBUG else 1,
         gradient_accumulation_steps=16,
         num_train_epochs=1 if DEBUG else 3,
-        max_steps=2 if DEBUG else -1,
+        max_steps=1 if DEBUG else -1,
         weight_decay=0.01,
         logging_strategy="steps",
         logging_steps=1 if DEBUG else 25,
@@ -235,13 +235,14 @@ def main():
         load_best_model_at_end= True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        # label_names=["labels"],
+        label_names=["labels"],
         max_grad_norm=1.0,
         bf16=args.bf16,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
+        eval_accumulation_steps=16,
         # optim="paged_adamw_8bit",
         # lr_scheduler_type="cosine",
         # warmup_steps=500,
@@ -268,7 +269,7 @@ def main():
         train_dataset=final_dataset["train"],
         eval_dataset=final_dataset["test"],
         data_collator=data_collator,
-        compute_metrics=custom_metrics,
+        # compute_metrics=custom_metrics,
         callbacks=trainer_callbacks
     )
 

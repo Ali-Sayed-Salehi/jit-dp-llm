@@ -15,6 +15,7 @@ from torch.nn import functional as F
 from datasets import load_dataset, Dataset, DatasetDict
 from sklearn.metrics import roc_auc_score, average_precision_score
 from imblearn.over_sampling import RandomOverSampler
+from imblearn.under_sampling import RandomUnderSampler
 
 from transformers import (
     AutoModelForSequenceClassification,
@@ -31,174 +32,10 @@ import evaluate
 from attach_classification_head_llama4 import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
-# def load_and_split_dataset(dataset_path, repo_path, slurm_tmpdir, debug=False, seed=42):
-#     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
-#         print("🎬 Loading IMDb dataset from Hugging Face...")
-#         dataset = load_dataset("imdb")
-#         test_dataset = dataset["test"]
-#         n_test = len(test_dataset)
-#         n_eval = n_test // 2
-
-#         eval_split = test_dataset.select(range(0, n_eval))
-#         final_test_split = test_dataset.select(range(n_eval, n_test))
-
-#         return DatasetDict({
-#             "train": dataset["train"],
-#             "test": eval_split,
-#             "final_test": final_test_split
-#         })
-
-#     if not os.path.exists(dataset_path):
-#         raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
-
-#     # Attempt to copy to SLURM tmpdir
-#     dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
-#     dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-#     dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
-#     dataset_copy_path = dataset_path  # fallback
-
-#     try:
-#         os.makedirs(dest_dir, exist_ok=True)
-#         run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-#         print(f"✅ Copied {dataset_path} → {dest_file}")
-#         dataset_copy_path = dest_file
-#     except (OSError, CalledProcessError) as e:
-#         print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
-#         print(f"🔄 Falling back to using original dataset path: {dataset_path}")
-
-#     # Load dataset
-#     dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
-
-#     # Chronological split
-#     n_total = len(dataset)
-#     n_train = int(n_total * 0.64)
-#     n_eval  = int(n_total * 0.16)
-
-#     train_dataset = dataset.select(range(0, n_train))
-#     eval_dataset  = dataset.select(range(n_train, n_train + n_eval))
-#     test_dataset  = dataset.select(range(n_train + n_eval, n_total))
-
-#     if debug:
-#         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
-#         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
-#         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
-
-#     train_dataset = train_dataset.shuffle(seed=seed)
-
-    # def format_for_classification(example):
-    #     return {
-    #         "text": example['prompt'],
-    #         "labels": int(example["response"])
-    #     }
-
-#     return DatasetDict({
-#         "train": train_dataset.map(format_for_classification, remove_columns=train_dataset.column_names),
-#         "test": eval_dataset.map(format_for_classification, remove_columns=eval_dataset.column_names),
-#         "final_test": test_dataset.map(format_for_classification, remove_columns=test_dataset.column_names)
-#     })
-
-
-
-def apply_class_imbalance_strategy(
-    dataset,
-    strategy="none",
-    seed=42,
-    alpha=0.25,
-    gamma=2.0
-):
-    """
-    Applies a class imbalance correction strategy to the training dataset,
-    while keeping the evaluation and final test datasets unchanged.
-
-    Args:
-        dataset (datasets.DatasetDict): A DatasetDict with keys "train", "test", and "final_test".
-        strategy (str): The class imbalance strategy to apply. Supported values:
-            - "focal_loss": Computes alpha and gamma for focal loss, no resampling is performed.
-            - "weighted_loss": Computes weights for weighted cross-entropy.
-            - "oversampling": Uses RandomOverSampler to balance class distribution.
-            - "none": No class imbalance fix is applied.
-        seed (int): Random seed for reproducibility.
-        alpha (float): Alpha value for focal loss.
-        gamma (float): Gamma value for focal loss.
-
-    Returns:
-        tuple:
-            - datasets.DatasetDict: Updated dataset with possibly balanced training split.
-            - list or None: Class weights (if "weighted_loss" is used).
-            - dict or None: Focal loss params if "focal_loss" is used.
-
-    Raises:
-        ValueError: If the strategy is unsupported.
-    """
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["test"]
-    test_dataset = dataset["final_test"]
-
-    if strategy == "focal_loss":
-        print("🔥 Using Focal Loss for class imbalance.")
-        label_counts = Counter(train_dataset["labels"])
-        alpha_dict = {k: alpha for k in label_counts.keys()}
-        return DatasetDict({
-            "train": train_dataset,
-            "test": eval_dataset,
-            "final_test": test_dataset
-        }), None, {"alpha": alpha_dict, "gamma": gamma}
-
-    elif strategy == "weighted_loss":
-        print("🔄 Using Weighted Cross Entropy Loss.")
-        label_counts = Counter(train_dataset["labels"])
-        total = sum(label_counts.values())
-        weights = [total / label_counts[i] for i in sorted(label_counts)]
-        for i, weight in enumerate(weights):
-            print(f"  Class {i} weight: {weight:.4f}")
-        return DatasetDict({
-            "train": train_dataset,
-            "test": eval_dataset,
-            "final_test": test_dataset
-        }), weights, None
-
-    elif strategy == "oversampling":
-        print("📈 Applying random oversampling to balance dataset.")
-        df = pd.DataFrame(train_dataset)
-        X = df.drop(columns=["labels"])
-        y = df["labels"]
-        ros = RandomOverSampler(random_state=seed)
-        X_resampled, y_resampled = ros.fit_resample(X, y)
-        resampled_df = X_resampled.copy()
-        resampled_df["labels"] = y_resampled
-        train_dataset_balanced = Dataset.from_pandas(resampled_df)
-        return DatasetDict({
-            "train": train_dataset_balanced,
-            "test": eval_dataset,
-            "final_test": test_dataset
-        }), None, None
-
-    elif strategy == "none":
-        print("🟢 No class imbalance fix applied.")
-        return DatasetDict({
-            "train": train_dataset,
-            "test": eval_dataset,
-            "final_test": test_dataset
-        }), None, None
-
-    else:
-        raise ValueError(f"Unsupported class imbalance strategy: {strategy}")
-
-
-
 def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
     """
     Compute class distribution for each split in a DatasetDict,
     and the percentage of the positive class ('1').
-
-    Args:
-        dataset_dict (DatasetDict): A Hugging Face DatasetDict with splits.
-            Each split must contain a 'labels' column.
-
-    Returns:
-        dict: A nested dictionary where each split name maps to:
-              - 'counts': class counts {class_label: count}
-              - 'positive_percentage': percentage of class '1'
     """
     distribution = {}
 
@@ -220,6 +57,98 @@ def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
         }
 
     return distribution
+
+
+def apply_class_imbalance_strategy(
+    dataset,
+    strategy="none",
+    seed=42,
+    alpha=0.25,
+    gamma=2.0
+):
+    """
+    Applies a class imbalance correction strategy to the training dataset,
+    while keeping the evaluation and final test datasets unchanged.
+    Returns distributions before and after balancing (if applied).
+    """
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
+    test_dataset = dataset["final_test"]
+
+    before_dist = compute_class_distribution(dataset)
+    print("📊 Class distribution before balancing:")
+    for split, stats in before_dist.items():
+        print(f"  {split}: {stats}")
+
+    if strategy == "focal_loss":
+        print("🔥 Using Focal Loss for class imbalance.")
+        label_counts = Counter(train_dataset["labels"])
+        alpha_dict = {k: alpha for k in label_counts.keys()}
+        return dataset, None, {"alpha": alpha_dict, "gamma": gamma}, before_dist, before_dist
+
+    elif strategy == "weighted_loss":
+        print("🔄 Using Weighted Cross Entropy Loss.")
+        label_counts = Counter(train_dataset["labels"])
+        total = sum(label_counts.values())
+        weights = [total / label_counts[i] for i in sorted(label_counts)]
+        for i, weight in enumerate(weights):
+            print(f"  Class {i} weight: {weight:.4f}")
+        return dataset, weights, None, before_dist, before_dist
+
+    elif strategy == "oversampling":
+        print("📈 Applying random oversampling to balance dataset.")
+        df = pd.DataFrame(train_dataset)
+        X = df.drop(columns=["labels"])
+        y = df["labels"]
+        ros = RandomOverSampler(random_state=seed)
+        X_resampled, y_resampled = ros.fit_resample(X, y)
+        resampled_df = X_resampled.copy()
+        resampled_df["labels"] = y_resampled
+        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
+
+        balanced_dataset = DatasetDict({
+            "train": train_dataset_balanced,
+            "test": eval_dataset,
+            "final_test": test_dataset
+        })
+
+        after_dist = compute_class_distribution(balanced_dataset)
+        print("📊 Class distribution after oversampling:")
+        for split, stats in after_dist.items():
+            print(f"  {split}: {stats}")
+
+        return balanced_dataset, None, None, before_dist, after_dist
+
+    elif strategy == "undersampling":
+        print("📉 Applying random undersampling to balance dataset.")
+        df = pd.DataFrame(train_dataset)
+        X = df.drop(columns=["labels"])
+        y = df["labels"]
+        rus = RandomUnderSampler(random_state=seed)
+        X_resampled, y_resampled = rus.fit_resample(X, y)
+        resampled_df = X_resampled.copy()
+        resampled_df["labels"] = y_resampled
+        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
+
+        balanced_dataset = DatasetDict({
+            "train": train_dataset_balanced,
+            "test": eval_dataset,
+            "final_test": test_dataset
+        })
+
+        after_dist = compute_class_distribution(balanced_dataset)
+        print("📊 Class distribution after undersampling:")
+        for split, stats in after_dist.items():
+            print(f"  {split}: {stats}")
+
+        return balanced_dataset, None, None, before_dist, after_dist
+
+    elif strategy == "none":
+        print("🟢 No class imbalance fix applied.")
+        return dataset, None, None, before_dist, before_dist
+
+    else:
+        raise ValueError(f"Unsupported class imbalance strategy: {strategy}")
 
 
 class FocalLoss(nn.Module):

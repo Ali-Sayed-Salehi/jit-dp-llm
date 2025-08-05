@@ -15,7 +15,6 @@ parser.add_argument("--debug", action="store_true", help="Run in debug mode with
 parser.add_argument("--struc", action="store_true", help="get structred diffs")
 parser.add_argument("--ast", action="store_true", help="get structred diffs with ast paths in each change block")
 parser.add_argument("--small", action="store_true", help="Use the apachejit small dataset instead of the complete dataset.")
-parser.add_argument("--small", action="store_true", help="Use the apachejit small dataset instead of the complete dataset.")
 parser.add_argument("--dataset_name", type=str, help="name of the dataset, either apachejit or jit_defects4j.")
 args = parser.parse_args()
 
@@ -28,7 +27,7 @@ DEBUG = args.debug
 if args.dataset_name == "apachejit":
     dataset_name = "apachejit"
 elif args.dataset_name == "jit_defects4j":
-    dataset_name = "apacjit_defects4jhejit"
+    dataset_name = "jit_defects4j"
 
 
 # ---------------------------- Setup Paths ----------------------------

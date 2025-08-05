@@ -14,20 +14,24 @@ from utils import diff_to_structured_xml
 parser = argparse.ArgumentParser(description="Choose which dataset to load")
 parser.add_argument(
     "--mode",
-    choices=["apachejit_llm", "apachejit_llm_struc", "apachejit_logreg", "mozilla_perf_struc"],
+    choices=["jit_llm", "jit_llm_struc", "jit_logreg", "mozilla_perf_struc"],
     required=True,
     help="""choose which data operation to do.
-    apachejit_llm: ApacheJIT defect prediction dataset for LLMs,
-    apachejit_logreg: ApacheJIT defect prediction dataset for logistic regression,
+    jit_llm: JIT defect prediction dataset for LLMs,
+    jit_logreg: JIT defect prediction dataset for logistic regression,
     mozilla_perf: Mozilla Performance regression dataset,
-    apachejit_llm_struc: ApacheJIT defect prediction dataset for LLMs with structured commits
+    jit_llm_struc: JIT defect prediction dataset for LLMs with structured commits
     """
 )
 parser.add_argument("--debug", action="store_true", help="Process only a small portion of the data")
 parser.add_argument("--include_metadata", action="store_true", help="Inlcude other commit features in buckets instead ofnumerical values.")
+parser.add_argument("--dataset_name", type=str, help="apachejit or jit_defects4j.")
+parser.add_argument("--dataset_size", type=str, help="small or total.")
 
 args = parser.parse_args()
 DEBUG = args.debug
+DATASET_NAME = args.dataset_name
+DATASET_SIZE = args.dataset_size
 
 # Normalize and bucketize
 def normalize_and_bucketize(value, min_val, max_val):
@@ -50,20 +54,20 @@ def normalize_and_bucketize(value, min_val, max_val):
 
 print(f"preparing data for {args.mode} {'(debug mode)' if DEBUG else ''}")
 
-if args.mode == "apachejit_llm":
-    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_with_diff.jsonl")
-    apachejit_with_diff_df = pd.read_json(input_data_path, lines=True)
-    apachejit_list = apachejit_with_diff_df.to_dict(orient='records')
+if args.mode == "jit_llm":
+    input_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_with_diff.jsonl")
+    jit_with_diff_df = pd.read_json(input_data_path, lines=True)
+    jit_list = jit_with_diff_df.to_dict(orient='records')
 
     if DEBUG:
-        apachejit_list = apachejit_list[:10]
+        jit_list = jit_list[:10]
 
-    sorted_apachejit_list = sorted(apachejit_list, key=lambda x: x['author_date'])
+    sorted_jit_list = sorted(jit_list, key=lambda x: x['author_date'])
 
     new_jit_list = []
     OWNER = "apache"
 
-    for commit in sorted_apachejit_list:
+    for commit in sorted_jit_list:
         project = commit.get('project')
         project_parts = project.split("/")
         repo = project_parts[1]
@@ -86,21 +90,21 @@ if args.mode == "apachejit_llm":
         new_jit_list.append({'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
 
-elif args.mode == "apachejit_logreg":
-    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_total.csv")
-    apachejit_df = pd.read_csv(input_data_path)
-    apachejit_list = apachejit_df.to_dict(orient='records')
+elif args.mode == "jit_logreg":
+    input_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}.csv")
+    jit_df = pd.read_csv(input_data_path)
+    jit_list = jit_df.to_dict(orient='records')
 
     if DEBUG:
-        apachejit_list = apachejit_list[:10]
+        jit_list = jit_list[:10]
 
     new_jit_list = []
 
-    for commit in apachejit_list:
+    for commit in jit_list:
         new_commit = {
             'date_created': commit.get('author_date'),
             'num_lines_added': commit.get('la'),
@@ -124,7 +128,7 @@ elif args.mode == "apachejit_logreg":
     sorted_new_jit_df.replace(["", "null", "N/A", "--"], pd.NA, inplace=True)
     sorted_new_jit_clean_df = sorted_new_jit_df.dropna()
 
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_logreg.csv")
+    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_logreg.csv")
     sorted_new_jit_clean_df.to_csv(output_data_path, index=False)
     print(f"✅ Saved dataset to {output_data_path}")
 
@@ -166,35 +170,35 @@ elif args.mode == "mozilla_perf_struc":
     dataset_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
 
-elif args.mode == "apachejit_llm_struc":
-    input_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_small_with_struc_diff.jsonl")
-    apachejit_with_diff_df = pd.read_json(input_data_path, lines=True)
+elif args.mode == "jit_llm_struc":
+    input_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_with_struc_diff.jsonl")
+    jit_with_diff_df = pd.read_json(input_data_path, lines=True)
     
     if args.include_metadata:
         metadata_cols = ["la","ld","nf","nd","ns","ent","ndev","age","nuc","aexp","arexp","asexp"]
         # Exclude outliers using 5th and 95th percentiles
         min_max_stats = {
-            col: tuple(apachejit_with_diff_df[col].clip(lower=apachejit_with_diff_df[col].quantile(0.05),
-                                                        upper=apachejit_with_diff_df[col].quantile(0.95)).agg(['min', 'max']))
+            col: tuple(jit_with_diff_df[col].clip(lower=jit_with_diff_df[col].quantile(0.05),
+                                                        upper=jit_with_diff_df[col].quantile(0.95)).agg(['min', 'max']))
             for col in metadata_cols
         }
 
         for col in metadata_cols:
             min_val, max_val = min_max_stats[col]
-            apachejit_with_diff_df[f"{col}_bucketized"] = apachejit_with_diff_df[col].apply(lambda x: normalize_and_bucketize(x, min_val, max_val))
+            jit_with_diff_df[f"{col}_bucketized"] = jit_with_diff_df[col].apply(lambda x: normalize_and_bucketize(x, min_val, max_val))
 
 
-    apachejit_list = apachejit_with_diff_df.to_dict(orient='records')
+    jit_list = jit_with_diff_df.to_dict(orient='records')
 
     if DEBUG:
-        apachejit_list = apachejit_list[:10]
+        jit_list = jit_list[:10]
 
-    sorted_apachejit_list = sorted(apachejit_list, key=lambda x: x['author_date'])
+    sorted_jit_list = sorted(jit_list, key=lambda x: x['author_date'])
 
     new_jit_list = []
     OWNER = "apache"
 
-    for commit in sorted_apachejit_list:
+    for commit in sorted_jit_list:
         project = commit.get('project')
         project_parts = project.split("/")
         repo = project_parts[1]
@@ -241,6 +245,6 @@ elif args.mode == "apachejit_llm_struc":
         new_jit_list.append({'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "jit_dp", "apachejit_llm_small_struc.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")

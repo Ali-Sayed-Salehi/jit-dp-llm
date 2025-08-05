@@ -66,7 +66,7 @@ if args.model_head == "causal-lm":
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
-        quantization_config=quant_config
+        # quantization_config=quant_config
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -74,7 +74,7 @@ else:
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
-        quantization_config=quant_config
+        # quantization_config=quant_config
     )
 
 os.makedirs(save_path, exist_ok=True)
