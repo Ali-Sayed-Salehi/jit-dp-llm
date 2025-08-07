@@ -29,7 +29,7 @@ from accelerate import (
 )
 
 import evaluate
-from attach_classification_head_llama4 import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
+from attach_classification_head import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
 def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
@@ -675,33 +675,6 @@ def register_custom_llama4_if_needed(model_path: str):
     else:
         print(f"ℹ️ Skipped custom registration: model_type={model_type}")
 
-
-def copy_model_to_tmpdir(model_path, repo_root, tmpdir_prefix):
-    """
-    Copies a model directory (which also contains tokenizer files) to local scratch (e.g., $SLURM_TMPDIR),
-    preserving its relative structure under repo_root.
-
-    Args:
-        model_path (str): Absolute path to the model directory to copy.
-        repo_root (str): The root of your repo (used to compute relative paths).
-        tmpdir_prefix (str): Path prefix for local scratch, e.g., $SLURM_TMPDIR.
-
-    Returns:
-        str: Path to the copied model directory inside tmpdir.
-    """
-
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"❌ Source directory does not exist: {model_path}")
-
-    rel_path = os.path.relpath(model_path, start=repo_root)
-    dest_dir = os.path.join(tmpdir_prefix, rel_path)
-    os.makedirs(dest_dir, exist_ok=True)
-
-    print(f"📂 Copying {model_path} → {dest_dir} ...")
-    run(["rsync", "-a", "--delete", model_path.rstrip("/") + "/", dest_dir], check=True)
-    print(f"✅ Copy complete: {dest_dir}")
-
-    return dest_dir
 
 def get_mixed_precision_policy():
     """

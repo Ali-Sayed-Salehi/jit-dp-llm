@@ -38,6 +38,9 @@ save_path = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_head, args.
 print(f"✅ REPO_PATH: {REPO_PATH}")
 print(f"✅ Model will be saved to: {save_path}")
 
+offload_dir = os.path.join(os.environ["TMPDIR"], "offload", args.model_id)
+os.makedirs(offload_dir, exist_ok=True)
+
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
 
@@ -51,14 +54,6 @@ print("✅ Tokenizer saved.")
 print(f"✨ Downloading {args.model_head} model...")
 # config = AutoConfig.from_pretrained(args.model_id, trust_remote_code=True)
 
-print("🔢 Using 4-bit quantization...")
-quant_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_quant_storage=torch.bfloat16,
-)
 
 if args.model_head == "causal-lm":
     model = AutoModelForCausalLM.from_pretrained(
@@ -66,7 +61,9 @@ if args.model_head == "causal-lm":
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
-        # quantization_config=quant_config
+        # device_map="auto", 
+        # offload_folder=offload_dir,
+        # offload_state_dict=True,
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -74,9 +71,12 @@ else:
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
-        # quantization_config=quant_config
+        # device_map="auto", 
+        # offload_folder=offload_dir,
+        # offload_state_dict=True,
     )
 
+print(f"Saving model ...")
 os.makedirs(save_path, exist_ok=True)
 model.save_pretrained(save_path)
 print(f"✅ Model saved to {save_path}")
