@@ -1,7 +1,7 @@
 debug: true
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_llm_small_struc.jsonl
-model_path: LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-8B
+model_path: LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-70B
 class_imbalance_fix: oversampling
 threshold: null
 quant: true
