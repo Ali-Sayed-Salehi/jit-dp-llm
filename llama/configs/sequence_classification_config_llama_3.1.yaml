@@ -1,7 +1,7 @@
-debug: true
+debug: false
 live_metrics: true
-dataset_path: datasets/apachejit/apachejit_llm_small_struc.jsonl
-model_path: LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-70B
+dataset_path: datasets/jit_defects4j/jit_defects4j_total_llm_struc.jsonl
+model_path: LLMs/pretrained/sequence-classification/meta-llama/Llama-3.1-8B
 class_imbalance_fix: oversampling
 threshold: null
 quant: true
@@ -9,6 +9,6 @@ lora: true
 bf16: true # should always be true
 gradient_checkpointing: true
 continue_from_dir: false
-selection_metric: recall@top_30%
+selection_metric: f1  # recall@top_30%
 truncation_len: 20000
 chunking_len: null
