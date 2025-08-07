@@ -28,12 +28,19 @@ parser.add_argument(
     default="causal-lm",
     help="Which model head to download: 'causal-lm' or 'sequence-classification'",
 )
+parser.add_argument(
+    "--save_path",
+    type=str,
+    default=None,
+    help="Optional: Override the default path to save the model and tokenizer",
+)
 
 args = parser.parse_args()
 
 # ----------------- Paths -----------------
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-save_path = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_head, args.model_id)
+default_save_path = os.path.join(REPO_PATH, "LLMs", "pretrained", args.model_head, args.model_id)
+save_path = args.save_path if args.save_path else default_save_path
 
 print(f"✅ REPO_PATH: {REPO_PATH}")
 print(f"✅ Model will be saved to: {save_path}")

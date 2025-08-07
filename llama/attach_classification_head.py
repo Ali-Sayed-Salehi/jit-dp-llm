@@ -135,7 +135,7 @@ def main():
     model_id = f"{org_name}/{model_name}"
     Pretrained_seq_class_model_path = os.path.join(REPO_PATH, "LLMs", "pretrained", "sequence-classification", org_name, model_name)
 
-    print(f"Loading base Causal LM onfig: {args.base_lm_path}")
+    print(f"Creating new classification model from config: {args.base_lm_path}")
     if args.llama4:
         config = CustomLlama4TextConfig.from_pretrained(
             args.base_lm_path,

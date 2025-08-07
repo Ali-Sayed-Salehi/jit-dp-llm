@@ -202,11 +202,11 @@ def main():
     if args.lora:
         print("✨ Applying LoRA...")
         lora_config = LoraConfig(
-            r=16,
-            lora_alpha=8,
-            target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
-            # target_modules="all-linear",
-            lora_dropout=0.05,
+            r=8,
+            lora_alpha=16,
+            # target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
+            target_modules="all-linear" if LLAMA else ["query", "value"],
+            lora_dropout=0.1,
             bias="none",
             task_type=TaskType.CAUSAL_LM,
         )
