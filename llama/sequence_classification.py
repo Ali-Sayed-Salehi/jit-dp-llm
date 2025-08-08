@@ -157,7 +157,7 @@ def main():
     print(tokenized_dataset['train'].features)
 
     # ------------------------------ final dataset ------------------------------
-    final_dataset.set_format("torch")
+    # final_dataset.set_format("torch")
 
     # ------------------------------ Data Collator ------------------------------
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
