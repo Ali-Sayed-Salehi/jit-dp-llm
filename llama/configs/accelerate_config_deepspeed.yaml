@@ -1,29 +1,17 @@
 compute_environment: LOCAL_MACHINE
 debug: true
+deepspeed_config:
+  deepspeed_config_file: "/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/deepspeed_config.json"
+  zero3_init_flag: true
 distributed_type: DEEPSPEED
-mixed_precision: bf16        # should always be true
 downcast_bf16: 'no'
-num_processes: 1             # use 1 since you only have 1 GPU
-num_machines: 1
 machine_rank: 0
+main_training_function: main
+num_machines: 1
+num_processes: 1
 rdzv_backend: static
 same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
 use_cpu: false
-main_training_function: main
-
-deepspeed_config:
-  deepspeed_multinode_launcher: standard
-
-  zero_stage: 3
-  zero3_init_flag: true
-  zero3_save_16bit_model: true
-
-  offload_optimizer_device: cpu   # move optimizer states to CPU RAM
-  offload_param_device: cpu       # move model weights not in use to CPU RAM
-
-  activation_checkpointing:
-    partition_activations: true
-    contiguous_memory_optimization: true
-    cpu_checkpointing: false
-    synchronize_checkpoint_boundary: false
-    profile: false
