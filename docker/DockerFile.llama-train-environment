@@ -1,0 +1,24 @@
+# ---- Base: CUDA 12.9 + cuDNN + dev tools (Ubuntu 24.04) ----
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
+
+# ---- Env ----
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1
+
+# ---- System deps ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    git git-lfs curl ca-certificates build-essential \
+ && rm -rf /var/lib/apt/lists/* \
+ && git lfs install
+
+# ---- Workspace & caches ----
+WORKDIR /workspace
+
+# ---- install deps from requirements.txt  ----
+COPY requirements.txt /workspace/requirements.txt
+RUN if [ -f requirements.txt ]; then python3 -m pip install -U --upgrade-strategy eager -r requirements.txt; fi
+
+# ---- Default entry ----
+ENTRYPOINT ["/bin/bash"]

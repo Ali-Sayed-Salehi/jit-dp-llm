@@ -1,0 +1,5 @@
+# Keep the build context tiny
+**
+!requirements.txt
+!docker/Dockerfile
+!docker/docker-compose.yml

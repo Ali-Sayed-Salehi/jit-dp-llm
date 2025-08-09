@@ -1,0 +1,13 @@
+services:
+  llama-train-environment:
+    build:
+      context: ..                 # build context = repo root
+      dockerfile: docker/Dockerfile.train
+    image: llama-train-environment:latest
+    working_dir: /workspace
+    user: "${UID:-$(id -u)}:${GID:-$(id -g)}"
+    environment:
+      - HOME=/workspace
+    volumes:
+      - ../:/workspace            # mount repo root to workspace inside container
+    command: bash -lc "bash ./docker/download_model.sh"
