@@ -5,9 +5,12 @@ services:
       dockerfile: docker/Dockerfile.train
     image: llama-train-environment:latest
     working_dir: /workspace
-    user: "${UID:-$(id -u)}:${GID:-$(id -g)}"
-    environment:
-      - HOME=/workspace
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - ../:/workspace            # mount repo root to workspace inside container
-    command: bash -lc "bash ./docker/download_model.sh"
+      - ./:/workspace
+    command: bash -lc "./download_model.sh"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
