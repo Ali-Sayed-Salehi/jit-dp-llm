@@ -25,3 +25,8 @@ LLMs/**/*
 /llama/training/*
 /data_extraction/github_api/github_repos/*
 /analysis/output/*
+/docker_jobs
+
+# cache
+.cache
+.nv

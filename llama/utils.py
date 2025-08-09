@@ -4,7 +4,6 @@ import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 import yaml
-from accelerate import Accelerator
 from peft import PeftModel
 
 from huggingface_hub import login as huggingface_hub_login
@@ -96,7 +95,6 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
         repo_path (str): Base path to your repository.
         env_path (str): Relative path to the .env file from the repo path.
     """
-    accelerator = Accelerator()
 
     dotenv_file = os.path.join(repo_path, env_path)
     load_dotenv(dotenv_path=dotenv_file)
@@ -105,9 +103,8 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     if not token:
         raise ValueError("🚫 HUGGING_FACE_TOKEN not found in environment variables")
     
-    if accelerator.is_main_process:
-        huggingface_hub_login(token)
-        print("✅ Logged in to Hugging Face.")
+    huggingface_hub_login(token)
+    print("✅ Logged in to Hugging Face.")
 
 
 
@@ -308,7 +305,8 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
 
     Returns:
         dict with keys: output_dir, run_timestamp, metrics_dir, tensorboard_dir,
-        config_path, live_metrics_path, model_dir, tokenizer_dir, all_dirs (list of paths created)
+        config_path, live_metrics_path, model_dir, tokenizer_dir, all_dirs (list of paths created),
+        offload_dir, slurm_tmpdir
     """
     if continue_from_dir:
         output_dir = continue_from_dir
@@ -318,8 +316,14 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_dir = os.path.join(repo_root, "llama", "training", f"run_{run_timestamp}", "output")
 
-    offload_dir = os.path.join(os.environ[slurm_tmpdir], "offload") 
-    slurm_tmpdir = os.environ[slurm_tmpdir]
+    # Handle SLURM_TMPDIR env variable
+    if slurm_tmpdir in os.environ and os.environ[slurm_tmpdir].strip():
+        slurm_tmpdir_path = os.environ[slurm_tmpdir]
+        offload_dir = os.path.join(slurm_tmpdir_path, "offload")
+    else:
+        print(f"⚠️ Environment variable '{slurm_tmpdir}' not set.")
+        slurm_tmpdir_path = None
+        offload_dir = None
 
     base_run_dir = os.path.dirname(output_dir)
     tensorboard_dir = os.path.join(base_run_dir, "tensorboard")
@@ -329,7 +333,12 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
     config_path = os.path.join(metrics_dir, "config.json")
     live_metrics_path = os.path.join(metrics_dir, "live_metrics.jsonl")
 
-    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir, offload_dir, slurm_tmpdir]
+    dirs_to_create = [output_dir, tensorboard_dir, metrics_dir, model_dir, tokenizer_dir]
+    if offload_dir:
+        dirs_to_create.append(offload_dir)
+    if slurm_tmpdir_path:
+        dirs_to_create.append(slurm_tmpdir_path)
+
     for d in dirs_to_create:
         os.makedirs(d, exist_ok=True)
 
@@ -344,7 +353,7 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
         "tokenizer_dir": tokenizer_dir,
         "all_dirs": dirs_to_create,
         "offload_dir": offload_dir,
-        "slurm_tmpdir": slurm_tmpdir
+        "slurm_tmpdir": slurm_tmpdir_path
     }
 
 
@@ -478,26 +487,31 @@ def load_and_split_dataset(
         # Sort and take top 7000
         full_dataset = full_dataset.sort("length", reverse=True)
         final_dataset = full_dataset.select(range(min(7000, len(full_dataset))))
+
     else:
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
 
-        dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
-        dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-        dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
-        dataset_copy_path = dataset_path
+        dataset_copy_path = dataset_path  # default to original path
 
-        try:
-            os.makedirs(dest_dir, exist_ok=True)
-            run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-            print(f"✅ Copied {dataset_path} → {dest_file}")
-            dataset_copy_path = dest_file
-        except (OSError, CalledProcessError) as e:
-            print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
-            print(f"🔄 Falling back to using original dataset path: {dataset_path}")
+        # Only copy if slurm_tmpdir is provided
+        if slurm_tmpdir and slurm_tmpdir.strip():
+            dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
+            dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
+            dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
+                print(f"✅ Copied {dataset_path} → {dest_file}")
+                dataset_copy_path = dest_file
+            except (OSError, CalledProcessError) as e:
+                print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
+                print(f"🔄 Falling back to using original dataset path: {dataset_path}")
+        else:
+            print("⚠️ No SLURM tmpdir provided — using dataset in place.")
 
         final_dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
-
 
     # Split 80% train, 10% eval, 10% test
     n_total = len(final_dataset)

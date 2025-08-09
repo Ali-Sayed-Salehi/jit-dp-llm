@@ -45,8 +45,6 @@ save_path = args.save_path if args.save_path else default_save_path
 print(f"✅ REPO_PATH: {REPO_PATH}")
 print(f"✅ Model will be saved to: {save_path}")
 
-offload_dir = os.path.join(os.environ["TMPDIR"], "offload", args.model_id)
-os.makedirs(offload_dir, exist_ok=True)
 
 # ------------------------- HF login -------------------------
 login_to_huggingface(REPO_PATH)
@@ -67,20 +65,14 @@ if args.model_head == "causal-lm":
         args.model_id, 
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-        # device_map="auto", 
-        # offload_folder=offload_dir,
-        # offload_state_dict=True,
+        attn_implementation="sdpa"
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
         torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-        # device_map="auto", 
-        # offload_folder=offload_dir,
-        # offload_state_dict=True,
+        attn_implementation="sdpa"
     )
 
 print(f"Saving model ...")

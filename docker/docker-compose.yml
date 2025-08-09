@@ -1,13 +1,17 @@
 services:
   llama-train-environment:
     build:
-      context: ..                 # build context = repo root
+      context: ..
       dockerfile: docker/Dockerfile.llama-train-environment
     image: llama-train-environment:latest
     working_dir: /workspace
-    user: "${UID:-$(id -u)}:${GID:-$(id -g)}"
+    user: "${UID}:${GID}"
     environment:
       - HOME=/workspace
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
-      - ../:/workspace            # mount repo root
-    command: bash -lc "bash ./docker/download_model.sh"
+      - ../:/workspace
+    runtime: nvidia
+    command: ["./docker/run_with_logs.sh"]
+
