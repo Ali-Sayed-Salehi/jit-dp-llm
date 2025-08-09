@@ -1,4 +1,4 @@
-debug: false
+debug: true
 live_metrics: true
 dataset_path: datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/pretrained/causal-lm/meta-llama/Llama-3.1-8B
