@@ -162,6 +162,41 @@ def main():
         setup_live_metrics(args.live_metrics, live_metrics_path)
     )
 
+    # ------------------------- Training arguments -------------------------
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        learning_rate=2e-5,
+        per_device_train_batch_size=1 if DEBUG else 1,
+        per_device_eval_batch_size=1 if DEBUG else 1,
+        gradient_accumulation_steps=16,
+        num_train_epochs=1 if DEBUG else 3,
+        max_steps=1 if DEBUG else -1,
+        weight_decay=0.01,
+        logging_strategy="steps",
+        logging_steps=1 if DEBUG else 25,
+        save_strategy="steps",
+        eval_strategy="steps",
+        eval_steps=1 if DEBUG else 25,
+        save_steps=1 if DEBUG else 25,
+        save_total_limit=2,
+        load_best_model_at_end= True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        label_names=["labels"],
+        max_grad_norm=1.0,
+        bf16=USE_BF16,
+        fp16=USE_FP16,
+        log_level="info",
+        log_level_replica="warning",
+        # disable_tqdm=not accelerator.is_main_process,
+        remove_unused_columns=False,
+        eval_accumulation_steps=16,
+        # optim="paged_adamw_8bit",
+        # lr_scheduler_type="cosine",
+        # warmup_steps=500,
+        # fsdp=["full_shard", "auto_wrap"]
+    )
+
     # ------------------------- Load model and quantization-------------------------
     optional_kwargs = {}
 
@@ -200,6 +235,9 @@ def main():
     if LLAMA:
         model.config.pretraining_tp = 1
 
+    # ------------------------- Gradient Checkpointing -------------------------
+    handle_gradient_checkpointing(args, model, training_args)
+
     # ------------------------- LORA -------------------------
     if args.lora:
         print("✨ Applying LoRA...")
@@ -216,41 +254,6 @@ def main():
         model = get_peft_model(model, lora_config)
 
         model.print_trainable_parameters()
-
-    # ------------------------- Training arguments -------------------------
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        learning_rate=2e-5,
-        per_device_train_batch_size=1 if DEBUG else 1,
-        per_device_eval_batch_size=1 if DEBUG else 1,
-        gradient_accumulation_steps=16,
-        num_train_epochs=1 if DEBUG else 3,
-        max_steps=1 if DEBUG else -1,
-        weight_decay=0.01,
-        logging_strategy="steps",
-        logging_steps=1 if DEBUG else 25,
-        save_strategy="steps",
-        eval_strategy="steps",
-        eval_steps=1 if DEBUG else 25,
-        save_steps=1 if DEBUG else 25,
-        save_total_limit=2,
-        load_best_model_at_end= True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        label_names=["labels"],
-        max_grad_norm=1.0,
-        bf16=USE_BF16,
-        fp16=USE_FP16,
-        log_level="info",
-        log_level_replica="warning",
-        # disable_tqdm=not accelerator.is_main_process,
-        remove_unused_columns=False,
-        eval_accumulation_steps=16,
-        # optim="paged_adamw_8bit",
-        # lr_scheduler_type="cosine",
-        # warmup_steps=500,
-        # fsdp=["full_shard", "auto_wrap"]
-    )
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
@@ -283,9 +286,6 @@ def main():
 
         fsdp_plugin = trainer.accelerator.state.fsdp_plugin
         fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(trainer.model)
-
-    # ------------------------- Gradient Checkpointing -------------------------
-    handle_gradient_checkpointing(args, model, training_args, trainer)
 
     # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)

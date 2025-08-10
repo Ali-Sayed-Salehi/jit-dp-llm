@@ -172,32 +172,36 @@ def handle_gradient_checkpointing(args, model, training_args, trainer=None):
     """
     Handles gradient checkpointing configuration for DeepSpeed, FSDP, or vanilla HF Trainer.
     """
+    training_args.gradient_checkpointing = True
+    model.config.use_cache = False
+    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    if args.gradient_checkpointing:
-        if trainer and getattr(trainer.accelerator.state, "deepspeed_plugin", None):
-            # ⚡ Using DeepSpeed
-            print("⚡ DeepSpeed activation checkpointing enabled via config.")
-            model.config.use_cache = False
-            training_args.gradient_checkpointing = False  # avoid double checkpointing
 
-        elif trainer and getattr(trainer.accelerator.state, "fsdp_plugin", None):
-            # ⚡ Using FSDP
-            print("⚡ FSDP with Hugging Face gradient checkpointing.")
-            model.gradient_checkpointing_enable()
-            model.config.use_cache = False
-            training_args.gradient_checkpointing = True
-            training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
+    # if args.gradient_checkpointing:
+    #     if trainer and getattr(trainer.accelerator.state, "deepspeed_plugin", None):
+    #         # ⚡ Using DeepSpeed
+    #         print("⚡ DeepSpeed activation checkpointing enabled via config.")
+    #         model.config.use_cache = False
+    #         training_args.gradient_checkpointing = False  # avoid double checkpointing
 
-        else:
-            # ⚡ Using Hugging Face Trainer (no DS/FSDP)
-            print("⚡ Hugging Face gradient checkpointing enabled in script.")
-            model.gradient_checkpointing_enable()
-            model.config.use_cache = False
-            training_args.gradient_checkpointing = True
-            training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
-    else:
-        print("ℹ️ Gradient checkpointing disabled.")
-        training_args.gradient_checkpointing = False
+    #     elif trainer and getattr(trainer.accelerator.state, "fsdp_plugin", None):
+    #         # ⚡ Using FSDP
+    #         print("⚡ FSDP with Hugging Face gradient checkpointing.")
+    #         model.gradient_checkpointing_enable()
+    #         model.config.use_cache = False
+    #         training_args.gradient_checkpointing = True
+    #         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
+
+    #     else:
+    #         # ⚡ Using Hugging Face Trainer (no DS/FSDP)
+    #         print("⚡ Hugging Face gradient checkpointing enabled in script.")
+    #         model.gradient_checkpointing_enable()
+    #         model.config.use_cache = False
+    #         training_args.gradient_checkpointing = True
+    #         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
+    # else:
+    #     print("ℹ️ Gradient checkpointing disabled.")
+    #     training_args.gradient_checkpointing = False
 
 
 def parse_training_args():
