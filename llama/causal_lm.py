@@ -36,7 +36,8 @@ from utils import (
     parse_training_args,
     setup_training_directories,
     setup_live_metrics,
-    load_and_split_dataset
+    load_and_split_dataset,
+    get_mixed_precision_dtype
 )
 
 def main():
@@ -52,15 +53,15 @@ def main():
     SLURM_TMPDIR = "TMPDIR"
     set_seed(42)
 
+    DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
+
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
 
-    # accelerator = Accelerator()
-
-    # if not accelerator.is_main_process:
-    #     builtins.print = lambda *args, **kwargs: None
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -170,8 +171,8 @@ def main():
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_storage=torch.bfloat16,
+            bnb_4bit_compute_dtype=DTYPE,
+            bnb_4bit_quant_storage=DTYPE,
             # llm_int8_enable_fp32_cpu_offload=True
         )
         optional_kwargs["quantization_config"] = quant_config
@@ -187,8 +188,9 @@ def main():
         trust_remote_code=True,
         # device_map={"": torch.cuda.current_device()}, #if args.quant else None,
         # device_map= int(os.environ.get("LOCAL_RANK", -1)) if torch.distributed.is_available() and torch.distributed.is_initialized() else "auto",
+        # device_map={"": local_rank},
         attn_implementation="sdpa",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=DTYPE,
         # offload_folder=offload_dir,
         # offload_state_dict=True,
         **optional_kwargs
@@ -237,7 +239,8 @@ def main():
         greater_is_better=False,
         label_names=["labels"],
         max_grad_norm=1.0,
-        bf16=args.bf16,
+        bf16=USE_BF16,
+        fp16=USE_FP16,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
@@ -257,6 +260,7 @@ def main():
         training_args=training_args,
         truncation_len=tokenizer_max_len,
         chunking_len=args.chunking_len,
+        dtype=DTYPE,
         DEBUG=DEBUG,
         FSDP = False,
         model_config=model.config.to_dict()

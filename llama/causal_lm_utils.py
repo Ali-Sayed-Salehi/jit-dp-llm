@@ -144,6 +144,7 @@ def save_training_config(
     training_args,
     truncation_len,
     chunking_len,
+    dtype,
     DEBUG,
     FSDP,
     model_config=None
@@ -179,7 +180,7 @@ def save_training_config(
         "metric_for_best_model": training_args.metric_for_best_model,
         "quantized": args.quant,
         "lora_enabled": args.lora,
-        "bf16": args.bf16,
+        "dtype": str(dtype),
         "gradient_checkpointing": args.gradient_checkpointing,
         "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
         "truncation_len":truncation_len,

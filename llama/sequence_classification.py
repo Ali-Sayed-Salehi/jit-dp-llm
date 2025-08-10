@@ -40,7 +40,8 @@ from utils import (
     parse_training_args,
     setup_training_directories,
     setup_live_metrics,
-    load_and_split_dataset
+    load_and_split_dataset,
+    get_mixed_precision_dtype
 )
 
 def main():
@@ -58,6 +59,8 @@ def main():
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
     set_seed(42)
+
+    DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
@@ -182,8 +185,8 @@ def main():
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_storage=torch.bfloat16,
+            bnb_4bit_compute_dtype=DTYPE,
+            bnb_4bit_quant_storage=DTYPE,
             # llm_int8_enable_fp32_cpu_offload=True
         )
         optional_kwargs["quantization_config"] = quant_config
@@ -201,7 +204,7 @@ def main():
         local_files_only=True,
         trust_remote_code=True,
         # device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=DTYPE,
         attn_implementation="sdpa",
         # offload_folder=offload_dir,
         # offload_state_dict=True,
@@ -249,7 +252,8 @@ def main():
         greater_is_better=True,
         label_names=["labels"],
         max_grad_norm=1.0,
-        bf16=args.bf16,
+        bf16=USE_BF16,
+        fp16=USE_FP16,
         log_level="info",
         log_level_replica="warning",
         # disable_tqdm=not accelerator.is_main_process,
@@ -268,6 +272,7 @@ def main():
         original_class_distribution=original_class_distribution,
         truncation_len=tokenizer_max_len,
         chunking_len=None,
+        dtype=DTYPE,
         DEBUG=DEBUG,
         dataset=dataset,
         RECALL_AT_TOP_K_PERCENTAGES=RECALL_AT_TOP_K_PERCENTAGES,

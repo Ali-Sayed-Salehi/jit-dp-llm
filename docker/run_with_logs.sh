@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ====== CONFIGURATION ======
-SCRIPT_NAME="download_model.sh"  # Name of the script to run (inside ./docker/)
+SCRIPT_NAME="causal_lm_llama.sh"  # Name of the script to run (inside ./docker/)
 # ===========================
 
 LOG_DIR="/workspace/docker_jobs"
