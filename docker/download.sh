@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+nvidia-smi
+
+python llama/download_model.py --model_id meta-llama/Llama-3.1-70B --model_head causal-lm

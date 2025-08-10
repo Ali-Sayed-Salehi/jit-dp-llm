@@ -65,7 +65,9 @@ if args.model_head == "causal-lm":
         args.model_id, 
         trust_remote_code=True, 
         # torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa"
+        attn_implementation="sdpa",
+        offload_folder="offload_folder",
+        offload_state_dict=True,
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
