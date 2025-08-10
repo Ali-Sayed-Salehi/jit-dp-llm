@@ -6,7 +6,7 @@ class_imbalance_fix: oversampling
 threshold: null
 quant: true
 lora: true
-bf16: true # should always be true
+mixed_precision: true # should always be true
 gradient_checkpointing: true
 continue_from_dir: false
 selection_metric: f1  # recall@top_30%

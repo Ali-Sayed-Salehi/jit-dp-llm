@@ -1,14 +1,14 @@
 compute_environment: LOCAL_MACHINE
 debug: true
 deepspeed_config:
-  deepspeed_config_file: "/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/deepspeed_config.json"
+  deepspeed_config_file: "llama/configs/deepspeed_config_fp16.json"
   zero3_init_flag: true
 distributed_type: DEEPSPEED
 downcast_bf16: 'no'
 machine_rank: 0
 main_training_function: main
 num_machines: 1
-num_processes: 1
+num_processes: 4
 rdzv_backend: static
 same_network: true
 tpu_env: []

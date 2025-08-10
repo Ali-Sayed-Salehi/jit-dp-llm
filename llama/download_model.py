@@ -64,14 +64,14 @@ if args.model_head == "causal-lm":
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
-        torch_dtype=torch.bfloat16,
+        # torch_dtype=torch.bfloat16,
         attn_implementation="sdpa"
     )
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id, 
         trust_remote_code=True, 
-        torch_dtype=torch.bfloat16,
+        # torch_dtype=torch.bfloat16,
         attn_implementation="sdpa"
     )
 

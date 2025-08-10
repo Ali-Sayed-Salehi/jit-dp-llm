@@ -14,6 +14,7 @@ from transformers import TrainerCallback
 from datasets import load_dataset, DatasetDict, concatenate_datasets
 from subprocess import run, CalledProcessError
 import numpy as np
+import torch
 
 
 def determine_tokenizer_truncation(
@@ -238,7 +239,7 @@ def parse_training_args():
     )
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
     parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
-    parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 training")
+    parser.add_argument("--mixed_precision", action="store_true", help="Enable bf16 or fp16 training")
     parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")
     parser.add_argument(
         "--continue_from_dir", 
@@ -540,3 +541,32 @@ def load_and_split_dataset(
         "test": eval_dataset,
         "final_test": test_dataset
     })
+
+
+def get_mixed_precision_dtype(use_mixed_precision=True):
+    """
+    Returns torch.bfloat16 if GPU supports BF16, else torch.float16.
+    """
+    if not use_mixed_precision:
+        return torch.float32, False, False
+
+    try:
+        if torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+    except AttributeError:
+        # Fallback: check GPU architecture
+        major, _ = torch.cuda.get_device_capability()
+        if major >= 8:  # Ampere or newer
+            dtype = torch.bfloat16
+
+    dtype = torch.float16
+
+    if dtype == torch.float16:
+        use_fp16 = True
+        use_bf16 = False
+    elif dtype == torch.bfloat16:
+        use_fp16 = False
+        use_bf16 = True
+
+    print(f"Using dtype: {dtype}")
+    return dtype, use_bf16, use_fp16

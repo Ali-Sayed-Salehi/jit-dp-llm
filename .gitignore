@@ -30,3 +30,4 @@ LLMs/**/*
 # cache
 .cache
 .nv
+.triton
