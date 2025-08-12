@@ -40,6 +40,10 @@ from utils import (
     get_mixed_precision_dtype
 )
 
+from trl import SFTTrainer, SFTConfig
+
+from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
+
 def main():
     # ---------------------------- Parse Arguments and constants ----------------------------
     args = parse_training_args()
@@ -53,15 +57,18 @@ def main():
     SLURM_TMPDIR = "TMPDIR"
     set_seed(42)
 
-    DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
+    # DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
+    DTYPE = torch.bfloat16
+    USE_BF16 = True
+    USE_FP16 = False
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
     world_size = os.environ.get("WORLD_SIZE", 1)
     print(f"🚀 Local rank: {local_rank} | World size: {world_size}")
 
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(local_rank)
+    # local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    # torch.cuda.set_device(local_rank)
 
     # ---------------------------- handle directories  ----------------------------
 
@@ -106,53 +113,56 @@ def main():
 
     # ------------------------- tokenize -------------------------
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
-    config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
+    # config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
 
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.pad_token = tokenizer.eos_token
 
-    should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
-        tokenizer=tokenizer,
-        config=config,
-        truncation_len=args.truncation_len,
-        chunking_len=args.chunking_len
-    )
+    # should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
+    #     tokenizer=tokenizer,
+    #     config=config,
+    #     truncation_len=args.truncation_len,
+    #     chunking_len=args.chunking_len
+    # )
 
-    def tokenize_data(examples):
-        outputs = tokenizer(
-            examples["text"],
-            truncation=should_truncate,
-            max_length=tokenizer_max_len
-        )
-        # outputs["labels"] = outputs["input_ids"].copy()
-        return outputs
+    packing_enabled = bool(args.chunking_len)
+    max_seq_length = args.chunking_len if packing_enabled else tokenizer_max_len
 
-    tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
-    final_dataset = tokenized_dataset
+    # def tokenize_data(examples):
+    #     outputs = tokenizer(
+    #         examples["text"],
+    #         truncation=should_truncate,
+    #         max_length=tokenizer_max_len
+    #     )
+    #     # outputs["labels"] = outputs["input_ids"].copy()
+    #     return outputs
 
-    print("Tokenized dataset features:")
-    print(tokenized_dataset['train'].features)
+    # tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
+    # final_dataset = tokenized_dataset
 
-    # ------------------------------ Chunk commits ------------------------------
-    if args.chunking_len:
-        chunked_dataset = chunk_long_samples(
-            tokenized_dataset,
-            max_seq_length=args.chunking_len,
-            overlap_pct=0
-        )
-        final_dataset = chunked_dataset
+    # print("Tokenized dataset features:")
+    # print(tokenized_dataset['train'].features)
 
-        print("✅ Chunked dataset features:")
-        print(chunked_dataset['train'].features)
+    # # ------------------------------ Chunk commits ------------------------------
+    # if args.chunking_len:
+    #     chunked_dataset = chunk_long_samples(
+    #         tokenized_dataset,
+    #         max_seq_length=args.chunking_len,
+    #         overlap_pct=0
+    #     )
+    #     final_dataset = chunked_dataset
+
+    #     print("✅ Chunked dataset features:")
+    #     print(chunked_dataset['train'].features)
 
     # ------------------------------ final dataset ------------------------------
     # final_dataset.set_format("torch")
 
     # ------------------------------ Data Collator ------------------------------
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-    )
+    # data_collator = DataCollatorForLanguageModeling(
+    #     tokenizer=tokenizer,
+    #     mlm=False,
+    # )
 
     # ------------------------- define metrics -------------------------
     def custom_metrics(eval_pred):
@@ -163,9 +173,9 @@ def main():
     )
 
     # ------------------------- Training arguments -------------------------
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=output_dir,
-        learning_rate=2e-5,
+        learning_rate=1e-4,
         per_device_train_batch_size=1 if DEBUG else 1,
         per_device_eval_batch_size=1 if DEBUG else 1,
         gradient_accumulation_steps=16,
@@ -188,13 +198,12 @@ def main():
         fp16=USE_FP16,
         log_level="info",
         log_level_replica="warning",
-        # disable_tqdm=not accelerator.is_main_process,
         remove_unused_columns=False,
         eval_accumulation_steps=16,
-        # optim="paged_adamw_8bit",
-        # lr_scheduler_type="cosine",
-        # warmup_steps=500,
-        # fsdp=["full_shard", "auto_wrap"]
+        dataset_text_field="text",
+        max_length=max_seq_length,
+        packing=packing_enabled,
+        dataset_kwargs={"append_concat_token": True, "add_special_tokens": False}
     )
 
     # ------------------------- Load model and quantization-------------------------
@@ -218,17 +227,12 @@ def main():
         optional_kwargs["mem_attention_grouping"] = (1, 2048)
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        local_files_only=True,
+        "meta-llama/Llama-4-Scout-17B-16E",
+        # local_files_only=True,
         trust_remote_code=True,
-        # device_map={"": torch.cuda.current_device()}, #if args.quant else None,
-        # device_map= int(os.environ.get("LOCAL_RANK", -1)) if torch.distributed.is_available() and torch.distributed.is_initialized() else "auto",
-        # device_map={"": local_rank},
         attn_implementation="sdpa",
         torch_dtype=DTYPE,
-        # offload_folder=offload_dir,
-        # offload_state_dict=True,
-        **optional_kwargs
+        quantization_config = quant_config    
     )
 
     model.config.pad_token_id = tokenizer.pad_token_id
@@ -250,42 +254,42 @@ def main():
             bias="none",
             task_type=TaskType.CAUSAL_LM,
         )
-        model = prepare_model_for_kbit_training(model)
-        model = get_peft_model(model, lora_config)
+        # model = prepare_model_for_kbit_training(model)
+        # model = get_peft_model(model, lora_config)
 
-        model.print_trainable_parameters()
+        # model.print_trainable_parameters()
 
     # ------------------------- Save Config to File -------------------------
-    save_training_config(
-        config_path=config_path,
-        run_timestamp=run_timestamp,
-        args=args,
-        training_args=training_args,
-        truncation_len=tokenizer_max_len,
-        chunking_len=args.chunking_len,
-        dtype=DTYPE,
-        DEBUG=DEBUG,
-        FSDP = False,
-        model_config=model.config.to_dict()
-    )
+    # save_training_config(
+    #     config_path=config_path,
+    #     run_timestamp=run_timestamp,
+    #     args=args,
+    #     training_args=training_args,
+    #     truncation_len=tokenizer_max_len,
+    #     chunking_len=args.chunking_len,
+    #     dtype=DTYPE,
+    #     DEBUG=DEBUG,
+    #     FSDP = False,
+    #     model_config=model.config.to_dict()
+    # )
 
     # ------------------------- Trainer -------------------------
-    trainer = Trainer(
+    trainer = SFTTrainer(
         model=model,
+        processing_class=tokenizer,
         args=training_args,
-        train_dataset=final_dataset["train"],
-        eval_dataset=final_dataset["test"],
-        data_collator=data_collator,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
+        peft_config=lora_config,
         # compute_metrics=custom_metrics,
-        callbacks=trainer_callbacks
+        callbacks=trainer_callbacks,
+
     )
 
-    #handle PEFT+FSDP case
-    if getattr(trainer.accelerator.state, "fsdp_plugin", None) and args.lora:
-        from peft.utils.other import fsdp_auto_wrap_policy
+    print("🛑🛑🛑🛑")
+    print(estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=1, num_nodes=1))
 
-        fsdp_plugin = trainer.accelerator.state.fsdp_plugin
-        fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(trainer.model)
+    trainer.accelerator.print(f"{trainer.model}")
 
     # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
@@ -306,7 +310,7 @@ def main():
     # ---------------------------- Run inference on held-out test set ----------------------------
     run_final_inference(
         trainer=trainer,
-        test_dataset=final_dataset["final_test"],
+        test_dataset=dataset["final_test"],
         metrics_dir=metrics_dir,
     )
 

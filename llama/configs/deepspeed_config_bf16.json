@@ -18,14 +18,6 @@
       }
     },
   
-    "activation_checkpointing": {
-      "partition_activations": true,
-      "contiguous_memory_optimization": true,
-      "cpu_checkpointing": true,
-      "synchronize_checkpoint_boundary": false,
-      "profile": false
-    },
-  
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_accumulation_steps": "auto",
     "gradient_clipping": 1.0,
