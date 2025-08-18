@@ -3,9 +3,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.llama-train-environment
+      args:
+        UID: ${UID}
+        GID: ${GID}
+        USERNAME: app
     image: llama-train-environment:latest
     working_dir: /workspace
-    user: "${UID}:${GID}"
     environment:
       - HOME=/workspace
       - NVIDIA_VISIBLE_DEVICES=all
@@ -14,4 +17,3 @@ services:
       - ../:/workspace
     runtime: nvidia
     command: ["./docker/run_with_logs.sh"]
-

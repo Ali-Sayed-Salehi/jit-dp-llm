@@ -145,13 +145,23 @@ def evaluate_and_save_best_model(
     model = trainer.model
 
     if is_main_process:
-        if trainer.is_fsdp_enabled and not isinstance(model, PeftModel):
-            print(f"💾 Saving full model using FSDP to: {save_dir}")
-            trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
-            trainer.save_model(save_dir)
-        elif isinstance(model, PeftModel):
+        # if trainer.is_fsdp_enabled and not isinstance(model, PeftModel):
+        #     print(f"💾 Saving full model using FSDP to: {save_dir}")
+        #     trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+        #     trainer.save_model(save_dir)
+            
+        if isinstance(model, PeftModel):
+            # verify adapter tensors are non-empty
+            sd = model.state_dict()
+            lora_tensors = {k: v for k, v in sd.items() if "lora_" in k}
+            if not lora_tensors:
+                raise RuntimeError("No LoRA tensors found in state_dict — refusing to save an empty adapter.")
+            if any(t.numel() == 0 for t in lora_tensors.values()):
+                bad = [k for k, v in lora_tensors.items() if v.numel() == 0][:5]
+                raise RuntimeError(f"Found zero-sized LoRA tensors (e.g. {bad}). Check target_modules / PEFT version.")
             print(f"💾 Saving LoRA adapter weights to: {save_dir}")
-            model.save_pretrained(save_dir, save_adapter=True)
+            model.save_pretrained(save_dir, save_adapter=True, save_config=True)
+
         else:
             print(f"💾 Saving full model (non-FSDP) to: {save_dir}")
             trainer.save_model(save_dir)
