@@ -8,4 +8,4 @@ mixed_precision: true # should always be true
 gradient_checkpointing: true
 continue_from_dir: false
 truncation_len: 20000
-chunking_len: 5000
+chunking_len: 500
