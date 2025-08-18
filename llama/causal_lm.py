@@ -58,9 +58,9 @@ def main():
     set_seed(42)
 
     # DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
-    DTYPE = torch.bfloat16
-    USE_BF16 = True
-    USE_FP16 = False
+    DTYPE = torch.float16
+    USE_BF16 = False
+    USE_FP16 = True
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
@@ -208,6 +208,7 @@ def main():
 
     # ------------------------- Load model and quantization-------------------------
     optional_kwargs = {}
+    bnb_4bit_quant_storage_dtype = DTYPE if DTYPE == torch.bfloat16 else torch.float32
 
     if args.quant and LLAMA:
         print("🔢 Using 4-bit quantization...")
@@ -216,7 +217,7 @@ def main():
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=DTYPE,
-            bnb_4bit_quant_storage=DTYPE,
+            bnb_4bit_quant_storage=bnb_4bit_quant_storage_dtype,
             # llm_int8_enable_fp32_cpu_offload=True
         )
         optional_kwargs["quantization_config"] = quant_config
@@ -231,7 +232,7 @@ def main():
         # local_files_only=True,
         trust_remote_code=True,
         attn_implementation="sdpa",
-        torch_dtype=DTYPE,
+        torch_dtype=bnb_4bit_quant_storage_dtype,
         quantization_config = quant_config    
     )
 
@@ -288,8 +289,8 @@ def main():
         callbacks=trainer_callbacks,
     )
 
-    print("🛑🛑🛑🛑")
-    print(estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=4, num_nodes=1))
+    # print("🛑🛑🛑🛑")
+    # print(estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=4, num_nodes=1))
 
     trainer.accelerator.print(f"{trainer.model}")
 
