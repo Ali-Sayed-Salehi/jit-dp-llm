@@ -203,7 +203,8 @@ def main():
         dataset_text_field="text",
         max_length=max_seq_length,
         packing=packing_enabled,
-        dataset_kwargs={"append_concat_token": True, "add_special_tokens": False}
+        dataset_kwargs={"append_concat_token": True, "add_special_tokens": False},
+        optim="adamw_bnb_8bit"
     )
 
     # ------------------------- Load model and quantization-------------------------
