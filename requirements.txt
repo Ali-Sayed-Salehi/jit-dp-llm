@@ -15,6 +15,7 @@ bitsandbytes
 xformers
 triton
 imblearn
+trl
 # pip install flash-attn --no-build-isolation
 
 # Data / metrics

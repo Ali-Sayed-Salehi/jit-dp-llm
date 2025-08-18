@@ -93,7 +93,7 @@ def main():
     print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
     # ------------------------- HF login -------------------------
-    login_to_huggingface(REPO_PATH)
+    # login_to_huggingface(REPO_PATH)
 
     # ------------------------- Load dataset -------------------------
     def format_for_lm(example):
@@ -227,7 +227,7 @@ def main():
         optional_kwargs["mem_attention_grouping"] = (1, 2048)
 
     model = AutoModelForCausalLM.from_pretrained(
-        "meta-llama/Llama-4-Scout-17B-16E",
+        MODEL_PATH,
         # local_files_only=True,
         trust_remote_code=True,
         attn_implementation="sdpa",
@@ -259,6 +259,9 @@ def main():
 
         # model.print_trainable_parameters()
 
+    # sanity: ensure LoRA actually attached
+
+
     # ------------------------- Save Config to File -------------------------
     # save_training_config(
     #     config_path=config_path,
@@ -283,11 +286,10 @@ def main():
         peft_config=lora_config,
         # compute_metrics=custom_metrics,
         callbacks=trainer_callbacks,
-
     )
 
     print("🛑🛑🛑🛑")
-    print(estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=1, num_nodes=1))
+    print(estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=4, num_nodes=1))
 
     trainer.accelerator.print(f"{trainer.model}")
 
@@ -308,11 +310,11 @@ def main():
     save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 
     # ---------------------------- Run inference on held-out test set ----------------------------
-    run_final_inference(
-        trainer=trainer,
-        test_dataset=dataset["final_test"],
-        metrics_dir=metrics_dir,
-    )
+    # run_final_inference(
+    #     trainer=trainer,
+    #     test_dataset=dataset["final_test"],
+    #     metrics_dir=metrics_dir,
+    # )
 
     pass
 
