@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 from torch import nn
 from torch.nn import functional as F
+import pprint
 
 from huggingface_hub import login as huggingface_hub_login
 
@@ -217,6 +218,11 @@ def parse_training_args():
 
     if args.truncation_len and args.chunking_len and args.truncation_len < args.chunking_len:
         raise ValueError(f"truncation_len ({args.truncation_len}) cannot be less than chunking_len ({args.chunking_len})")
+
+    # --- Print effective args ---
+    print("\n===== Effective Training Arguments =====")
+    pprint.pprint(vars(args), sort_dicts=False)
+    print("=======================================\n")
 
     return args
 
