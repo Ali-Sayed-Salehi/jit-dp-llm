@@ -32,17 +32,14 @@ from utils import (
     determine_tokenizer_truncation,
     login_to_huggingface,
     evaluate_and_save_best_model,
-    handle_gradient_checkpointing,
     parse_training_args,
     setup_training_directories,
     setup_live_metrics,
-    load_and_split_dataset,
-    get_mixed_precision_dtype
+    load_and_split_dataset
 )
 
 from trl import SFTTrainer, SFTConfig
 
-from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 
 def main():
     # ---------------------------- Parse Arguments and constants ----------------------------
@@ -58,9 +55,9 @@ def main():
     set_seed(42)
 
     # DTYPE, USE_BF16, USE_FP16 = get_mixed_precision_dtype(args.mixed_precision)
-    DTYPE = torch.float16
+    DTYPE = torch.float32
     USE_BF16 = False
-    USE_FP16 = True
+    USE_FP16 = False
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
@@ -202,9 +199,10 @@ def main():
         eval_accumulation_steps=16,
         dataset_text_field="text",
         max_length=max_seq_length,
-        packing=packing_enabled,
         dataset_kwargs={"append_concat_token": True, "add_special_tokens": False},
-        optim="adamw_bnb_8bit"
+        # optim="adamw_torch_8bit",
+        padding_free=False,
+        packing=False
     )
 
     # ------------------------- Load model and quantization-------------------------
@@ -232,7 +230,7 @@ def main():
         MODEL_PATH,
         # local_files_only=True,
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        # attn_implementation="sdpa",
         torch_dtype=bnb_4bit_quant_storage_dtype,
         quantization_config = quant_config    
     )
@@ -242,7 +240,9 @@ def main():
         model.config.pretraining_tp = 1
 
     # ------------------------- Gradient Checkpointing -------------------------
-    handle_gradient_checkpointing(args, model, training_args)
+    training_args.gradient_checkpointing = True
+    model.config.use_cache = False
+    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # ------------------------- LORA -------------------------
     if args.lora:
@@ -250,7 +250,6 @@ def main():
         lora_config = LoraConfig(
             r=8,
             lora_alpha=16,
-            # target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'] if LLAMA else ["query", "value"],
             target_modules="all-linear" if LLAMA else ["query", "value"],
             lora_dropout=0.1,
             bias="none",
