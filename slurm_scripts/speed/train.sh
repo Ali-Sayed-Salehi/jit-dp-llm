@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=causal-lm-llama-speed
+#SBATCH --job-name=train-speed
 #SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
@@ -14,7 +14,8 @@ echo "Preparing training environment"
 source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
 
 nvidia-smi
+free -h
 
 echo "running the training script"
-accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_fsdp.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/causal_lm.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/causal_lm_config.yaml
+accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_fsdp.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
 echo "training finished"
