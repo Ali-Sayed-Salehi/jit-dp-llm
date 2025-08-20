@@ -24,7 +24,7 @@ RUN groupadd -g ${GID} ${USERNAME} \
 WORKDIR /workspace
 
 # Caches to avoid username lookups + be writable
-RUN mkdir -p ${HF_HOME} ${TRANSFORMERS_CACHE} ${TORCHINDUCTOR_CACHE_DIR} \
+RUN mkdir -p ${HF_HOME} ${TORCHINDUCTOR_CACHE_DIR} \
  && chown -R ${USERNAME}:${GID} /workspace
 
 # Copy deps

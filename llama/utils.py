@@ -4,28 +4,46 @@ import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 import yaml
+from collections import Counter
+import numpy as np
+import pandas as pd
+import torch
+from torch import nn
+from torch.nn import functional as F
 
 from huggingface_hub import login as huggingface_hub_login
 
-from transformers import TrainerCallback
-
-from datasets import load_dataset, DatasetDict, concatenate_datasets
+from datasets import load_dataset, DatasetDict, concatenate_datasets, Dataset
 from subprocess import run, CalledProcessError
-import torch
 
 import dataclasses
 from typing import Optional
 
-import torch
 from accelerate.utils import is_peft_model
 from packaging import version
-from transformers import PreTrainedModel, TrainingArguments
 from transformers.utils import is_peft_available
-
 
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+from sklearn.metrics import roc_auc_score, average_precision_score
+from imblearn.over_sampling import RandomOverSampler
+from imblearn.under_sampling import RandomUnderSampler
+
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoConfig,
+    Trainer,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
+    TrainerCallback,
+    PreTrainedModel,
+    TrainingArguments
+)
+
+import evaluate
+from attach_classification_head import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
 def determine_tokenizer_truncation(
@@ -34,29 +52,6 @@ def determine_tokenizer_truncation(
     truncation_len=None,
     chunking_len=None
 ):
-
-    """
-    Determines whether tokenizer truncation should be enabled, and what max_length
-    should be passed to the tokenizer.
-
-    This function considers the user-specified `truncation_len` and `chunking_len`, and
-    compares them with the model's maximum supported input length.
-
-    Args:
-        tokenizer (PreTrainedTokenizer): 
-            Hugging Face tokenizer object, used to fetch `model_max_length`.
-        config (PretrainedConfig): 
-            Model config with `max_position_embeddings`.
-        truncation_len (int, optional): 
-            If provided, this is the length to truncate each input sequence to.
-        chunking_len (int, optional): 
-            If provided, this is the length to chunk long inputs into fixed-size parts.
-
-    Returns:
-        tuple:
-            - should_truncate (bool): Whether truncation should be applied in tokenizer().
-            - tokenizer_max_len (int or None): Value to use for `max_length`. Can be None if no truncation needed.
-    """
 
     should_truncate = False
     tokenizer_max_len = None
@@ -119,112 +114,6 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
-
-def evaluate_and_save_best_model(
-    trainer,
-    training_args,
-    metrics_dir,
-    save_dir,
-    tokenizer_dir,
-    tokenizer=None
-):
-    """
-    Evaluates the best model and saves:
-    - LoRA adapter if using PEFT
-    - Full model if not using LoRA
-    - Handles FSDP automatically
-    - Saves tokenizer
-    """
-
-# ---------------- Evaluate ----------------
-    if training_args.load_best_model_at_end:
-        best_eval_metrics = trainer.evaluate()
-
-        best_eval_metrics["best_model_checkpoint"] = trainer.state.best_model_checkpoint
-
-        best_model_metrics_path = os.path.join(metrics_dir, "best_model_metrics.json")
-        with open(best_model_metrics_path, "w") as f:
-            json.dump(best_eval_metrics, f, indent=4)
-
-        print(f"✅ Saved best model eval metrics to {best_model_metrics_path}")
-    else:
-        print("ℹ️ Skipping best model evaluation because load_best_model_at_end=False.")
-        best_eval_metrics = None
-
-    # ---------------- Save ----------------
-    is_main_process = trainer.args.process_index == 0
-    model = trainer.model
-
-    if is_main_process:
-        # if trainer.is_fsdp_enabled and not isinstance(model, PeftModel):
-        #     print(f"💾 Saving full model using FSDP to: {save_dir}")
-        #     trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
-        #     trainer.save_model(save_dir)
-            
-        if isinstance(model, PeftModel):
-            # verify adapter tensors are non-empty
-            sd = model.state_dict()
-            lora_tensors = {k: v for k, v in sd.items() if "lora_" in k}
-            if not lora_tensors:
-                raise RuntimeError("No LoRA tensors found in state_dict — refusing to save an empty adapter.")
-            if any(t.numel() == 0 for t in lora_tensors.values()):
-                bad = [k for k, v in lora_tensors.items() if v.numel() == 0][:5]
-                raise RuntimeError(f"Found zero-sized LoRA tensors (e.g. {bad}). Check target_modules / PEFT version.")
-            print(f"💾 Saving LoRA adapter weights to: {save_dir}")
-            model.save_pretrained(save_dir, save_adapter=True, save_config=True)
-
-        else:
-            print(f"💾 Saving full model (non-FSDP) to: {save_dir}")
-            trainer.save_model(save_dir)
-
-        # Save tokenizer
-        if tokenizer is not None:
-            print(f"💾 Saving tokenizer to: {tokenizer_dir}")
-            tokenizer.save_pretrained(tokenizer_dir)
-        else:
-            print("⚠️ No tokenizer provided; skipping tokenizer save.")
-    else:
-        print("🧵 Not the main process; skipping save.")
-
-    return best_eval_metrics
-
-
-def handle_gradient_checkpointing(args, model, training_args, trainer=None):
-    """
-    Handles gradient checkpointing configuration for DeepSpeed, FSDP, or vanilla HF Trainer.
-    """
-    training_args.gradient_checkpointing = True
-    model.config.use_cache = False
-    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
-
-
-    # if args.gradient_checkpointing:
-    #     if trainer and getattr(trainer.accelerator.state, "deepspeed_plugin", None):
-    #         # ⚡ Using DeepSpeed
-    #         print("⚡ DeepSpeed activation checkpointing enabled via config.")
-    #         model.config.use_cache = False
-    #         training_args.gradient_checkpointing = False  # avoid double checkpointing
-
-    #     elif trainer and getattr(trainer.accelerator.state, "fsdp_plugin", None):
-    #         # ⚡ Using FSDP
-    #         print("⚡ FSDP with Hugging Face gradient checkpointing.")
-    #         model.gradient_checkpointing_enable()
-    #         model.config.use_cache = False
-    #         training_args.gradient_checkpointing = True
-    #         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
-
-    #     else:
-    #         # ⚡ Using Hugging Face Trainer (no DS/FSDP)
-    #         print("⚡ Hugging Face gradient checkpointing enabled in script.")
-    #         model.gradient_checkpointing_enable()
-    #         model.config.use_cache = False
-    #         training_args.gradient_checkpointing = True
-    #         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
-    # else:
-    #     print("ℹ️ Gradient checkpointing disabled.")
-    #     training_args.gradient_checkpointing = False
-
-
 def parse_training_args():
     # First, parse only the config file argument
     pre_parser = argparse.ArgumentParser(add_help=False)
@@ -250,7 +139,7 @@ def parse_training_args():
         type=str,
         help="Choose which dataset to use by specifying its absolute path. Default is imdb for sequence classification and eli5 for causal lm."
     )
-    parser.add_argument("--model_path", type=str, required=not defaults.get("model_path"), help="Full path to the local pretrained model directory")
+    parser.add_argument("--model_path", type=str, help="Full path to the local pretrained model directory")
     parser.add_argument(
         "--class_imbalance_fix",
         type=str,
@@ -264,8 +153,10 @@ def parse_training_args():
     )
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
     parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
-    parser.add_argument("--mixed_precision", action="store_true", help="Enable bf16 or fp16 training")
-    parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")
+    parser.add_argument("--mixed_precision", type=str,
+        choices=["fp32", "fp16", "bf16"],
+        help="Choose one of: fp32, fp16, bf16"
+    )
     parser.add_argument(
         "--continue_from_dir", 
         type=str, 
@@ -282,11 +173,16 @@ def parse_training_args():
         type=int,
         help="Optional. The length to which the sequences should be truncated using the tokenizer to reduce the size of the dataset."
     )
-
     parser.add_argument(
         "--chunking_len",
         type=int,
         help="Optional. The length to which the sequences should be chunked in order to reduce sequence length for the model."
+    )
+    parser.add_argument(
+        "--task_type",
+        type=str,
+        choices=["seq_cls", "clm"],
+        help="sequence classification or causal language modelling."
     )
 
     args = parser.parse_args()
@@ -326,14 +222,7 @@ def parse_training_args():
 
 
 def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
-    """
-    Sets up output, metrics, tensorboard, and model/tokenizer directories.
 
-    Returns:
-        dict with keys: output_dir, run_timestamp, metrics_dir, tensorboard_dir,
-        config_path, live_metrics_path, model_dir, tokenizer_dir, all_dirs (list of paths created),
-        offload_dir, slurm_tmpdir
-    """
     if continue_from_dir:
         output_dir = continue_from_dir
         run_timestamp = os.path.basename(os.path.dirname(output_dir)).split("_", 1)[-1]
@@ -384,52 +273,11 @@ def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
 
 
 class SaveMetricsCallback(TrainerCallback):
-    """
-    A custom Hugging Face `TrainerCallback` for saving training and evaluation metrics to disk
-    after each logging or evaluation step. Metrics are appended to a JSON Lines (JSONL) file,
-    enabling later visualization or analysis (e.g., plotting loss/accuracy curves).
-
-    Args:
-        output_path (str): Path to the output `.jsonl` file where metrics will be saved.
-                           The directory will be created if it does not exist.
-
-    Example JSONL structure:
-        {
-            "step": 100,
-            "type": "train",
-            "metrics": {
-                "loss": 0.543,
-                "learning_rate": 5e-5
-            }
-        }
-
-        {
-            "step": 200,
-            "type": "eval",
-            "metrics": {
-                "eval_accuracy": 0.88,
-                "eval_loss": 0.42
-            }
-        }
-
-    Methods:
-        on_log(): Called after each log event (e.g., loss during training).
-        on_evaluate(): Called after each evaluation step (e.g., validation metrics).
-    """
-
     def __init__(self, output_path):
         self.output_path = output_path
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     def _write_metrics(self, state, metrics, metric_type):
-        """
-        Appends a single metric record to the JSONL file.
-
-        Args:
-            state (TrainerState): The current training state object.
-            metrics (dict): Dictionary of metric values.
-            metric_type (str): One of "train" or "eval" to identify the source.
-        """
         if metrics is not None:
             with open(self.output_path, "a") as f:
                 json.dump({
@@ -440,42 +288,14 @@ class SaveMetricsCallback(TrainerCallback):
                 f.write("\n")
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        """
-        Called after logging training metrics. Saves training metrics to file if present.
-
-        Args:
-            args (TrainingArguments): The training arguments.
-            state (TrainerState): Current state of training.
-            control (TrainerControl): Control flow handler.
-            logs (dict, optional): Dictionary of logged training metrics.
-        """
         if logs and not any(k.startswith("eval_") for k in logs):
             self._write_metrics(state, logs, "train")
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """
-        Called after evaluation. Saves evaluation metrics to file.
-
-        Args:
-            args (TrainingArguments): The training arguments.
-            state (TrainerState): Current state of training.
-            control (TrainerControl): Control flow handler.
-            metrics (dict, optional): Evaluation metrics dictionary.
-        """
         self._write_metrics(state, metrics, "eval")
 
 
 def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
-    """
-    Sets up Trainer callbacks for live metrics logging.
-
-    Args:
-        live_metrics_enabled (bool): Whether to enable live metrics logging.
-        live_metrics_path (str): Path to save live metrics JSONL file if enabled.
-
-    Returns:
-        list: A list of TrainerCallback instances.
-    """
     callbacks = []
 
     if live_metrics_enabled:
@@ -495,11 +315,6 @@ def load_and_split_dataset(
     seed=42,
     format_fn=None
 ):
-    """
-    Loads and splits a local JSONL dataset or the IMDb dataset (top 7000 longest reviews)
-    for causal LM or classification, depending on the provided format_fn.
-    Prints length statistics for the selected dataset.
-    """
 
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
@@ -566,36 +381,6 @@ def load_and_split_dataset(
         "test": eval_dataset,
         "final_test": test_dataset
     })
-
-
-def get_mixed_precision_dtype(use_mixed_precision=True):
-    """
-    Returns torch.bfloat16 if GPU supports BF16, else torch.float16.
-    """
-    if not use_mixed_precision:
-        return torch.float32, False, False
-
-    try:
-        if torch.cuda.is_bf16_supported():
-            dtype = torch.bfloat16
-    except AttributeError:
-        # Fallback: check GPU architecture
-        major, _ = torch.cuda.get_device_capability()
-        if major >= 8:  # Ampere or newer
-            dtype = torch.bfloat16
-
-    dtype = torch.float16
-
-    if dtype == torch.float16:
-        use_fp16 = True
-        use_bf16 = False
-    elif dtype == torch.bfloat16:
-        use_fp16 = False
-        use_bf16 = True
-
-    print(f"Using dtype: {dtype}")
-    return dtype, use_bf16, use_fp16
-
 
 def enable_gradient_checkpointing(
     model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
@@ -687,3 +472,602 @@ def prepare_peft_model(
         peft_module_casting_to_bf16(model)
 
     return model
+
+
+
+def set_dtype(mixed_precision):
+    """
+    Set global dtype and precision flags based on mixed_precision argument.
+    """
+    if mixed_precision == "fp32":
+        DTYPE = torch.float32
+        USE_FP16 = False
+        USE_BF16 = False
+
+    elif mixed_precision == "fp16":
+        DTYPE = torch.float16
+        USE_FP16 = True
+        USE_BF16 = False
+
+    elif mixed_precision == "bf16":
+        DTYPE = torch.bfloat16
+        USE_FP16 = False
+        USE_BF16 = True
+
+    else:
+        raise ValueError(f"Unknown precision type: {mixed_precision}")
+
+    return DTYPE, USE_FP16, USE_BF16
+
+
+def format_for_lm(example):
+    if "text" in example: # imdb dataset
+        return {"text": example["text"]}
+    if "prompt" in example: # jit dataset
+        return {"text": example["prompt"]}
+    return {"text": ""}
+
+def format_for_classification(example):
+    if "text" in example and "label" in example:
+        # IMDb case
+        return {"text": example["text"], "labels": int(example["label"])}
+    elif "prompt" in example and "response" in example:
+        # Custom dataset case
+        return {"text": example["prompt"], "labels": int(example["response"])}
+    else:
+        raise KeyError(f"Unrecognized example keys: {list(example.keys())}")
+
+def determine_format_fn(task):
+    format_funct = None
+
+    if task == "seq_cls":
+        format_funct = format_for_classification
+    elif task == "clm":
+        format_funct = format_for_lm
+    else:
+        raise ValueError(f"Unknown task type: {task}")
+    
+    return format_funct
+
+
+
+def apply_class_imbalance_strategy(
+    dataset,
+    strategy="none",
+    seed=42,
+    alpha=0.25,
+    gamma=2.0
+):
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
+    test_dataset = dataset["final_test"]
+
+    before_dist = compute_class_distribution(dataset)
+    print("📊 Class distribution before balancing:")
+    for split, stats in before_dist.items():
+        print(f"  {split}: {stats}")
+
+    if strategy == "focal_loss":
+        print("🔥 Using Focal Loss for class imbalance.")
+        label_counts = Counter(train_dataset["labels"])
+        alpha_dict = {k: alpha for k in label_counts.keys()}
+        return dataset, None, {"alpha": alpha_dict, "gamma": gamma}, before_dist, before_dist
+
+    elif strategy == "weighted_loss":
+        print("🔄 Using Weighted Cross Entropy Loss.")
+        label_counts = Counter(train_dataset["labels"])
+        total = sum(label_counts.values())
+        weights = [total / label_counts[i] for i in sorted(label_counts)]
+        for i, weight in enumerate(weights):
+            print(f"  Class {i} weight: {weight:.4f}")
+        return dataset, weights, None, before_dist, before_dist
+
+    elif strategy == "oversampling":
+        print("📈 Applying random oversampling to balance dataset.")
+        df = pd.DataFrame(train_dataset)
+        X = df.drop(columns=["labels"])
+        y = df["labels"]
+        ros = RandomOverSampler(random_state=seed)
+        X_resampled, y_resampled = ros.fit_resample(X, y)
+        resampled_df = X_resampled.copy()
+        resampled_df["labels"] = y_resampled
+        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
+
+        balanced_dataset = DatasetDict({
+            "train": train_dataset_balanced,
+            "test": eval_dataset,
+            "final_test": test_dataset
+        })
+
+        after_dist = compute_class_distribution(balanced_dataset)
+        print("📊 Class distribution after oversampling:")
+        for split, stats in after_dist.items():
+            print(f"  {split}: {stats}")
+
+        return balanced_dataset, None, None, before_dist, after_dist
+
+    elif strategy == "undersampling":
+        print("📉 Applying random undersampling to balance dataset.")
+        df = pd.DataFrame(train_dataset)
+        X = df.drop(columns=["labels"])
+        y = df["labels"]
+        rus = RandomUnderSampler(random_state=seed)
+        X_resampled, y_resampled = rus.fit_resample(X, y)
+        resampled_df = X_resampled.copy()
+        resampled_df["labels"] = y_resampled
+        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
+
+        balanced_dataset = DatasetDict({
+            "train": train_dataset_balanced,
+            "test": eval_dataset,
+            "final_test": test_dataset
+        })
+
+        after_dist = compute_class_distribution(balanced_dataset)
+        print("📊 Class distribution after undersampling:")
+        for split, stats in after_dist.items():
+            print(f"  {split}: {stats}")
+
+        return balanced_dataset, None, None, before_dist, after_dist
+
+    elif strategy == "none":
+        print("🟢 No class imbalance fix applied.")
+        return dataset, None, None, before_dist, before_dist
+
+    else:
+        raise ValueError(f"Unsupported class imbalance strategy: {strategy}")
+
+
+
+def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
+    distribution = {}
+
+    for split_name, split_dataset in dataset_dict.items():
+        labels = split_dataset["labels"]
+        label_counts = Counter(labels)
+        total = sum(label_counts.values())
+        pos_count = label_counts.get(1, 0)
+
+        counts = {
+            str(label): int(count)
+            for label, count in sorted(label_counts.items())
+        }
+        pos_pct = (pos_count / total * 100) if total > 0 else 0.0
+
+        distribution[split_name] = {
+            "counts": counts,
+            "positive_percentage": round(pos_pct, 2)
+        }
+
+    return distribution
+
+
+
+class FocalLoss(nn.Module):
+    """
+    Implementation of the Focal Loss function for classification tasks.
+    """
+
+    def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        num_classes = logits.size(-1)
+
+        # Match dtype/device of logits
+        dtype = logits.dtype
+        device = logits.device
+
+        probs = torch.softmax(logits, dim=-1)
+        log_probs = torch.log_softmax(logits, dim=-1)
+
+        # One-hot encode targets in the same dtype/device as logits
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=num_classes).to(dtype=dtype, device=device)
+
+        # Gather probabilities of the true class
+        pt = (probs * targets_one_hot).sum(dim=1)
+
+        # Handle alpha per class if it's a dict
+        if isinstance(self.alpha, dict):
+            alpha_tensor = torch.tensor(
+                [self.alpha.get(str(i), 1.0) for i in range(num_classes)],
+                dtype=dtype,   # match dtype of logits
+                device=device  # match device of logits
+            )
+            alpha = (alpha_tensor * targets_one_hot).sum(dim=1)
+        else:
+            # Cast scalar alpha to same dtype/device
+            alpha = torch.tensor(self.alpha, dtype=dtype, device=device)
+
+        focal_term = (1 - pt) ** self.gamma
+        loss = -alpha * focal_term * log_probs.gather(dim=1, index=targets.unsqueeze(1)).squeeze(1)
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
+def determine_data_collator(task, tokenizer):
+    collator = None
+
+    if task == "seq_cls":
+        collator = DataCollatorWithPadding(tokenizer=tokenizer)
+    elif task == "clm":
+        collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False,
+        )
+    else:
+        raise ValueError(f"Unknown task type: {task}")
+    
+    return collator
+
+
+
+def compute_custom_metrics_seq_cls(eval_pred, threshold=None, percentages=None):
+    accuracy = evaluate.load("accuracy")
+    precision = evaluate.load("precision")
+    recall = evaluate.load("recall")
+    f1 = evaluate.load("f1")
+
+    logits, labels = eval_pred
+
+    probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
+
+    if percentages is None:
+        raise ValueError("You must specify percentages for recall_at_top_k.")
+
+    recall_at_k_metrics = recall_at_top_k(probs[:, 1], labels, percentages=percentages)
+
+    if threshold is not None:
+        predictions = (probs[:, 1] >= threshold).astype(int)
+    else:
+        predictions = np.argmax(logits, axis=1)
+
+    # Prediction distribution
+    class_counts = Counter(predictions)
+    output_distribution = {
+        f"pred_class_{label}": int(count)
+        for label, count in sorted(class_counts.items())
+    }
+
+    try:
+        roc_auc = roc_auc_score(labels, probs[:, 1])
+    except ValueError:
+        roc_auc = float("nan")
+
+    try:
+        pr_auc = average_precision_score(labels, probs[:, 1])
+    except ValueError:
+        pr_auc = float("nan")
+
+    metrics = {
+        "accuracy": accuracy.compute(predictions=predictions, references=labels)["accuracy"],
+        "precision": precision.compute(predictions=predictions, references=labels, average="binary")["precision"],
+        "recall": recall.compute(predictions=predictions, references=labels, average="binary")["recall"],
+        "f1": f1.compute(predictions=predictions, references=labels, average="binary")["f1"],
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc
+    }
+
+    metrics.update(output_distribution)
+    metrics.update(recall_at_k_metrics)
+
+    return metrics
+
+
+def recall_at_top_k(pred_scores, true_labels, percentages=None):
+    if percentages is None:
+        raise ValueError("You must specify percentages for recall_at_top_k.")
+
+    results = {}
+    total_positives = np.sum(true_labels)
+
+    sorted_indices = np.argsort(-pred_scores)
+    sorted_labels = true_labels[sorted_indices]
+
+    for pct in percentages:
+        k = int(len(pred_scores) * pct)
+        top_k_labels = sorted_labels[:k]
+        recall_val = np.sum(top_k_labels) / total_positives
+        results[f"recall@top_{int(pct * 100)}%"] = recall_val
+    return results
+
+
+def save_training_config(
+    config_path,
+    run_timestamp,
+    args,
+    training_args,
+    class_distribution,
+    original_class_distribution,
+    truncation_len,
+    chunking_len,
+    dtype,
+    DEBUG,
+    task,
+    dataset=None,
+    RECALL_AT_TOP_K_PERCENTAGES=None,
+    FL_GAMMA=None,
+    FL_ALPHA=None,
+    model_config=None
+):
+    # ------------------ Compute held-out defect rate + max recall@top_k ------------------
+    defect_rate = None
+    max_recall_at_k = {}
+
+    if dataset is not None and task == "seq_cls":
+        if "final_test" in dataset:
+            true_labels_test_set = np.array(dataset["final_test"]["labels"])
+            
+            defect_rate = compute_defect_rate(true_labels_test_set)
+
+            if RECALL_AT_TOP_K_PERCENTAGES:
+                max_recall_at_k = compute_max_recall_at_top_k(true_labels_test_set, RECALL_AT_TOP_K_PERCENTAGES)
+
+        else:
+            print("⚠️ DatasetDict does not contain 'final_test' split — skipping defect rate and max recall@top_k.")
+
+    # ------------------ Build snapshot ------------------
+    config_snapshot = {
+        "timestamp": run_timestamp,
+        "model_path": args.model_path,
+        "class_imbalance_fix": args.class_imbalance_fix,
+        "dataset_path": args.dataset_path,
+        "learning_rate": training_args.learning_rate,
+        "epochs": training_args.num_train_epochs,
+        "train_batch_size": training_args.per_device_train_batch_size,
+        "eval_batch_size": training_args.per_device_eval_batch_size,
+        "weight_decay": training_args.weight_decay,
+        "metric_for_best_model": training_args.metric_for_best_model,
+        "class_distribution": class_distribution,
+        "original_class_distribution": original_class_distribution,
+        "decision_threshold": args.threshold if args.threshold is not None else "argmax",
+        "quantized": args.quant,
+        "lora_enabled": args.lora,
+        "focal_loss_gamma": FL_GAMMA if args.class_imbalance_fix == "focal_loss" else "None",
+        "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None",
+        "dtype": str(dtype),
+        "gradient_checkpointing": training_args.gradient_checkpointing,
+        "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+        "truncation_len": truncation_len,
+        "chunking_len": chunking_len,
+        "debug": DEBUG,
+        "held_out_test_defect_rate": defect_rate,
+        "max_possible_recall@top_k": max_recall_at_k
+    }
+
+    if model_config is not None:
+        config_snapshot["model_config"] = model_config
+
+    # ------------------ Save ------------------
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(config_snapshot, f, indent=2)
+
+    print(f"⚙️ Logged config to: {config_path}")
+
+
+def compute_max_recall_at_top_k(true_labels, percentages):
+    """
+    Computes the maximum achievable recall@top_k% for a given label distribution.
+    """
+    results = {}
+    total_positives = np.sum(true_labels)
+    n = len(true_labels)
+
+    for pct in percentages:
+        k = int(n * pct)
+        max_recall = min(k, total_positives) / total_positives if total_positives > 0 else 0.0
+        results[f"max_recall@top_{int(pct * 100)}%"] = max_recall
+    return results
+
+def compute_defect_rate(labels):
+    """
+    Computes the defect rate: the fraction of positive class examples in a label array.
+    
+    Args:
+        labels (list or np.ndarray): Array of binary labels (0 or 1).
+    
+    Returns:
+        float: Ratio of positive examples to total examples.
+    """
+    labels = np.array(labels)
+    if len(labels) == 0:
+        return 0.0
+    return np.sum(labels) / len(labels)
+
+
+def register_custom_llama4_if_needed(model_path: str):
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"config.json not found at: {config_path}")
+
+    with open(config_path, "r") as f:
+        config_data = json.load(f)
+    
+    model_type = config_data.get("model_type", "")
+    architectures = config_data.get("architectures", [])
+
+    if model_type == CustomLlama4TextConfig.model_type:
+        AutoConfig.register(CustomLlama4TextConfig.model_type, CustomLlama4TextConfig)
+        AutoModelForSequenceClassification.register(CustomLlama4TextConfig, CustomLlama4ForSequenceClassification)
+        print(f"✅ Registered custom LLaMA: model_type={model_type}, architectures={architectures}")
+    else:
+        print(f"ℹ️ Skipped custom registration: model_type={model_type}")
+
+
+class CustomTrainer(Trainer):
+    """
+    Custom Trainer with class imbalance handling (bf16-only).
+    """
+
+    def __init__(self, *args, class_weights=None, focal_loss_fct=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Store class weights directly in bf16
+        self.class_weights = (
+            torch.tensor(class_weights, dtype=torch.float32)
+            if class_weights is not None else None
+        )
+        self.focal_loss_fct = focal_loss_fct
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.pop("labels").long()
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+
+        if self.focal_loss_fct:
+            # labels = labels.to(device=logits.device)
+            loss = self.focal_loss_fct(logits, labels)
+
+        elif self.class_weights is not None:
+            # Just move to device, dtype already bf16
+            class_weights = self.class_weights.to(device=logits.device)
+            loss = F.cross_entropy(logits, labels, weight=class_weights)
+
+        else:
+            loss = F.cross_entropy(logits, labels)
+
+        return (loss, outputs) if return_outputs else loss
+
+def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
+    metrics_save_path = os.path.join(metrics_dir, filename)
+    training_metrics = trainer.state.log_history
+
+    os.makedirs(metrics_dir, exist_ok=True)
+    with open(metrics_save_path, "w") as f:
+        json.dump(training_metrics, f, indent=4)
+
+    print(f"✅ Saved metrics to {metrics_save_path}")
+    return metrics_save_path
+
+
+
+def run_final_inference(
+    trainer,
+    test_dataset,
+    metrics_dir,
+    percentages,
+    threshold=None,
+):
+
+    accuracy = evaluate.load("accuracy")
+    precision = evaluate.load("precision")
+    recall = evaluate.load("recall")
+    f1 = evaluate.load("f1")
+
+    print("\n🧪 Running final inference on held-out test set...")
+
+    test_results = trainer.predict(test_dataset)
+    logits = test_results.predictions
+    labels = test_results.label_ids
+
+    probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
+    preds = np.argmax(probs, axis=1)
+
+    if threshold is not None:
+        preds = (probs[:, 1] >= threshold).astype(int)
+
+    recall_at_k = recall_at_top_k(probs[:, 1], labels, percentages)
+
+    try:
+        final_roc_auc = roc_auc_score(labels, probs[:, 1])
+    except ValueError:
+        final_roc_auc = float("nan")
+
+    try:
+        final_pr_auc = average_precision_score(labels, probs[:, 1])
+    except ValueError:
+        final_pr_auc = float("nan")
+
+    final_metrics = {
+        "accuracy": accuracy.compute(predictions=preds, references=labels)["accuracy"],
+        "precision": precision.compute(predictions=preds, references=labels, average="binary")["precision"],
+        "recall": recall.compute(predictions=preds, references=labels, average="binary")["recall"],
+        "f1": f1.compute(predictions=preds, references=labels, average="binary")["f1"],
+        "roc_auc": final_roc_auc,
+        "pr_auc": final_pr_auc
+    }
+    final_metrics.update(recall_at_k)
+
+    output_payload = {
+        "metrics": final_metrics,
+        "predictions": preds.tolist(),
+        "probabilities": probs[:, 1].tolist(),
+        "true_labels": labels.tolist()
+    }
+
+    os.makedirs(metrics_dir, exist_ok=True)
+    final_test_metrics_path = os.path.join(metrics_dir, "final_test_results.json")
+    with open(final_test_metrics_path, "w") as f:
+        json.dump(output_payload, f, indent=4)
+
+    print(f"📄 Final test set results saved to: {final_test_metrics_path}")
+    print(json.dumps(final_metrics, indent=4))
+
+
+def chunk_long_samples(
+    dataset_dict,
+    max_seq_length,
+    overlap_pct=0.0
+):
+    if not (0.0 <= overlap_pct < 1.0):
+        raise ValueError(f"overlap_pct must be in [0, 1), got {overlap_pct}")
+
+    stride = int(max_seq_length * (1.0 - overlap_pct))
+    if stride <= 0:
+        raise ValueError(f"Calculated stride must be > 0, got stride={stride}")
+
+    print(f"📏 Chunking long samples using max_seq_length={max_seq_length}, "
+          f"overlap_pct={overlap_pct:.2f}, stride={stride}")
+
+    chunked_dataset = DatasetDict()
+
+    for split in dataset_dict:
+        before_count = len(dataset_dict[split])
+        print(f"🔍 Split '{split}': {before_count} samples before chunking...")
+
+        input_ids_chunks = []
+        attention_mask_chunks = []
+        labels_chunks = []
+
+        for example in dataset_dict[split]:
+            tokens = example["input_ids"]
+            attn_mask = example["attention_mask"]
+            L = len(tokens)
+
+            if L <= max_seq_length:
+                input_ids_chunks.append(tokens)
+                attention_mask_chunks.append(attn_mask)
+                labels_chunks.append(tokens.copy())
+            else:
+                for i in range(0, L, stride):
+                    end = i + max_seq_length
+                    chunk = tokens[i:end]
+                    chunk_mask = attn_mask[i:end]
+
+                    if len(chunk) > max_seq_length or len(chunk_mask) > max_seq_length:
+                        raise AssertionError(f"Chunk or mask length > max_seq_length.")
+
+                    if len(chunk) != len(chunk_mask):
+                        raise AssertionError(f"Chunk and mask lengths should match.")
+
+                    input_ids_chunks.append(chunk)
+                    attention_mask_chunks.append(chunk_mask)
+                    labels_chunks.append(chunk.copy())
+
+        after_count = len(input_ids_chunks)
+        print(f"✅ Split '{split}': {after_count} samples after chunking.")
+
+        chunked_dataset[split] = Dataset.from_dict({
+            "input_ids": input_ids_chunks,
+            "attention_mask": attention_mask_chunks,
+            # "labels": labels_chunks
+        })
+
+    return chunked_dataset
