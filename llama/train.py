@@ -26,7 +26,6 @@ def main():
 
     DEBUG = args.debug
     LLAMA = "llama" in args.model_path.lower()
-    LONG_LLAMA = "long_llama" in args.model_path.lower()
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
     set_seed(42)
@@ -87,76 +86,6 @@ def main():
     if TASK == "seq_cls":
         register_custom_llama4_if_needed(MODEL_PATH)
 
-    # ------------------------- Load dataset -------------------------
-
-    format_funct = determine_format_fn(TASK)
-
-    dataset = load_and_split_dataset(
-        dataset_path=args.dataset_path,
-        repo_path=REPO_PATH,
-        slurm_tmpdir=slurm_tmpdir,
-        debug=DEBUG,
-        format_fn=format_funct
-    )
-
-    if TASK == "seq_cls":
-        dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
-            dataset=dataset,
-            strategy=args.class_imbalance_fix,
-            seed=42,
-            alpha=FL_ALPHA,
-            gamma=FL_GAMMA
-        )
-
-        # Prepare loss function if needed
-        focal_loss_fct = None
-        if args.class_imbalance_fix == "focal_loss":
-            focal_loss_fct = FocalLoss(**focal_loss_dict)
-
-    # ------------------------- tokenize -------------------------
-    # TODO: add special tokens
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
-    config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
-
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
-
-    should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
-        tokenizer=tokenizer,
-        config=config,
-        truncation_len=args.truncation_len,
-        chunking_len=args.chunking_len if TASK == "clm" else None
-    )
-
-    def tokenize_data(examples):
-        outputs = tokenizer(
-            examples["text"],
-            truncation=should_truncate,
-            max_length=tokenizer_max_len
-        )
-        return outputs
-
-    tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
-    final_dataset = tokenized_dataset
-
-    print("Tokenized dataset features:")
-    print(tokenized_dataset['train'].features)
-
-    # ------------------------------ Chunk commits ------------------------------
-    if TASK == "clm" and args.chunking_len:
-        chunked_dataset = chunk_long_samples(
-            tokenized_dataset,
-            max_seq_length=args.chunking_len,
-            overlap_pct=0
-        )
-        final_dataset = chunked_dataset
-
-        print("✅ Chunked dataset features:")
-        print(chunked_dataset['train'].features)
-
-    # ------------------------------ Data Collator ------------------------------
-    data_collator = determine_data_collator(TASK, tokenizer)
-
     # ------------------------- define metrics -------------------------
     def custom_metrics_seq_cls(eval_pred):
         return compute_custom_metrics_seq_cls(eval_pred, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
@@ -198,7 +127,10 @@ def main():
         eval_accumulation_steps=16 if TASK == "clm" else None,
     )
 
-    # ------------------------- Load model and quantization-------------------------
+    # ------------------------- Load model, tokenizer and quantize -------------------------
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True, use_fast=True)
+    config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
+    
     optional_kwargs = {}
     bnb_4bit_quant_storage_dtype = DTYPE if DTYPE == torch.bfloat16 else torch.float32
     model_dtype = DTYPE if not args.quant else bnb_4bit_quant_storage_dtype
@@ -226,6 +158,8 @@ def main():
         **optional_kwargs   
     )
 
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = tokenizer.pad_token_id
     if LLAMA:
         model.config.pretraining_tp = 1
@@ -234,9 +168,88 @@ def main():
     model.config.use_cache = not training_args.gradient_checkpointing
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
+    # ------------------------- Add special tokens-------------------------
+    token_info = add_or_detect_special_tokens(
+        tokenizer=tokenizer,
+        model=model,
+        task=TASK,
+        use_lora=bool(args.lora),
+    )
+
+    # ------------------------- Load dataset -------------------------
+
+    format_func = determine_format_fn(TASK)
+
+    dataset = load_and_split_dataset(
+        dataset_path=args.dataset_path,
+        repo_path=REPO_PATH,
+        slurm_tmpdir=slurm_tmpdir,
+        debug=DEBUG,
+        format_fn=format_func
+    )
+
+    if TASK == "seq_cls":
+        dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
+            dataset=dataset,
+            strategy=args.class_imbalance_fix,
+            seed=42,
+            alpha=FL_ALPHA,
+            gamma=FL_GAMMA
+        )
+
+        # Prepare loss function if needed
+        focal_loss_fct = None
+        if args.class_imbalance_fix == "focal_loss":
+            focal_loss_fct = FocalLoss(**focal_loss_dict)
+
+    # ------------------------- tokenize -------------------------
+    should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
+        tokenizer=tokenizer,
+        config=config,
+        truncation_len=args.truncation_len,
+        chunking_len=args.chunking_len if TASK == "clm" else None
+    )
+
+    def tokenize_data(examples):
+        outputs = tokenizer(
+            examples["text"],
+            truncation=should_truncate,
+            max_length=tokenizer_max_len
+        )
+        return outputs
+
+    tokenized_dataset = dataset.map(tokenize_data, batched=True, remove_columns=["text"])
+    final_dataset = tokenized_dataset
+
+    print("Tokenized dataset features:")
+    print(tokenized_dataset['train'].features)
+
+    # ------------------------------ Chunk commits ------------------------------
+    if TASK == "clm" and args.chunking_len:
+        chunked_dataset = chunk_long_samples(
+            tokenized_dataset,
+            max_seq_length=args.chunking_len,
+            overlap_pct=0
+        )
+        final_dataset = chunked_dataset
+
+        print("✅ Chunked dataset features:")
+        print(chunked_dataset['train'].features)
+
+    # ------------------------------ Data Collator ------------------------------
+    data_collator = determine_data_collator(TASK, tokenizer)
+
     # ------------------------- LORA -------------------------
     if args.lora:
         print("✨ Applying LoRA...")
+
+        modules_to_save = None
+        if TASK == "seq_cls":
+            modules_to_save = ["score"]
+        elif TASK == "clm":
+            if token_info.get("modules_to_save_update"):
+                modules_to_save = ['lm_head']
+
         lora_config = LoraConfig(
             r=8,
             lora_alpha=16,
@@ -244,8 +257,18 @@ def main():
             lora_dropout=0.1,
             bias="none",
             task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
-            modules_to_save = (["score"] if TASK == "seq_cls" else None) # should also save lm_head if new tokens are added
+            modules_to_save=modules_to_save
         )
+
+        # Make only the new embedding rows trainable (if PEFT supports it)
+        if token_info.get("added_token_ids"):
+            if hasattr(lora_config, "trainable_token_indices"):
+                lora_config.trainable_token_indices = {"embed_tokens": token_info["added_token_ids"]}
+                print(f"🔓 PEFT will train only new embed rows: {lora_config.trainable_token_indices['embed_tokens']}")
+            else:
+                print("⚠️ Your PEFT version may not support `trainable_token_indices`. "
+                    "Consider upgrading PEFT. Falling back to adapter-only (new token rows may learn slowly).")
+                lora_config.modules_to_save.append("embed_tokens")
 
         model = prepare_peft_model(model, lora_config, training_args)
 

@@ -1077,3 +1077,63 @@ def chunk_long_samples(
         })
 
     return chunked_dataset
+
+
+
+def add_or_detect_special_tokens(tokenizer, model, task: str, use_lora: bool):
+    """
+    Ensures SPECIAL_TOKENS exist in the tokenizer and the model has the right embedding size.
+    Returns:
+        info: dict with diagnostics
+    """
+
+    SPECIAL_TOKENS = [
+        "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
+        "<FILE>", "</FILE>",
+        "<ADDED>", "</ADDED>",
+        "<REMOVED>", "</REMOVED>",
+    ]
+
+    # What does the tokenizer already have?
+    existing = set(tokenizer.get_added_vocab().keys())
+    to_add = [t for t in SPECIAL_TOKENS if t not in existing]
+
+    info = {
+        "already_present": sorted(list(existing.intersection(SPECIAL_TOKENS))),
+        "added_now": [],
+        "resized_embeddings": False,
+        "modules_to_save_update": None,
+    }
+
+    if to_add:
+        tokenizer.add_special_tokens({"additional_special_tokens": to_add})
+        info["added_now"] = to_add
+        print(f"➕ Added {len(to_add)} special tokens: {to_add}")
+    else:
+        print("ℹ️ All special tokens already present in tokenizer.")
+
+    added_now = to_add  # list of token strings we added
+    added_token_ids = tokenizer.convert_tokens_to_ids(added_now)
+    info["added_token_ids"] = added_token_ids 
+
+    # Always ensure PAD is set (we use EOS as PAD)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # If tokenizer grew, make sure model matches
+    model_embed = model.get_input_embeddings()
+    if model_embed.num_embeddings != len(tokenizer):
+        model.resize_token_embeddings(len(tokenizer))
+        info["resized_embeddings"] = True
+        print(f"🧩 Resized model embeddings to {len(tokenizer)} to match tokenizer.")
+
+    # LoRA + CLM: if we just added tokens, make sure LM head gets saved with adapters
+    # (we set this at LoraConfig time, but we expose a hint so caller can set modules_to_save=['lm_head'])
+    if use_lora and task == "clm" and info["added_now"]:
+        info["modules_to_save_update"] = True
+        print("📎 Detected new tokens with LoRA in CLM. Recommend modules_to_save += ['lm_head'].")
+
+    # Small debug dump
+    print("🔎 Special tokens status:", info)
+    return info
