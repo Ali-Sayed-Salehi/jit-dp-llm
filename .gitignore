@@ -23,6 +23,7 @@ LLMs/**/*
 !secrets/.env.example
 /slurm_jobs
 /llama/training/*
+/llama/inference/*
 /data_extraction/github_api/github_repos/*
 /analysis/output/*
 /docker_jobs

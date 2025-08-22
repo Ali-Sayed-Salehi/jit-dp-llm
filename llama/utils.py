@@ -1124,7 +1124,7 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, use_lora: bool):
     # If tokenizer grew, make sure model matches
     model_embed = model.get_input_embeddings()
     if model_embed.num_embeddings != len(tokenizer):
-        model.resize_token_embeddings(len(tokenizer))
+        model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=8)
         info["resized_embeddings"] = True
         print(f"🧩 Resized model embeddings to {len(tokenizer)} to match tokenizer.")
 

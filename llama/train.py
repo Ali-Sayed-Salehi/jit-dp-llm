@@ -127,10 +127,7 @@ def main():
         eval_accumulation_steps=16 if TASK == "clm" else None,
     )
 
-    # ------------------------- Load model, tokenizer and quantize -------------------------
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True, use_fast=True)
-    config = AutoConfig.from_pretrained(MODEL_PATH, local_files_only=True, trust_remote_code=True)
-    
+    # ------------------------- Load model and quantize -------------------------
     optional_kwargs = {}
     bnb_4bit_quant_storage_dtype = DTYPE if DTYPE == torch.bfloat16 else torch.float32
     model_dtype = DTYPE if not args.quant else bnb_4bit_quant_storage_dtype
@@ -158,15 +155,26 @@ def main():
         **optional_kwargs   
     )
 
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = tokenizer.pad_token_id
     if LLAMA:
         model.config.pretraining_tp = 1
 
     # ------------------------- Gradient Checkpointing -------------------------
     model.config.use_cache = not training_args.gradient_checkpointing
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+
+    # ------------------------- Tokenizer -------------------------
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_PATH, 
+        local_files_only=True, 
+        trust_remote_code=True, 
+        use_fast=True
+    )
+    
+    config = model.config
+
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = tokenizer.pad_token_id
 
     # ------------------------- Add special tokens-------------------------
     token_info = add_or_detect_special_tokens(
@@ -177,7 +185,6 @@ def main():
     )
 
     # ------------------------- Load dataset -------------------------
-
     format_func = determine_format_fn(TASK)
 
     dataset = load_and_split_dataset(

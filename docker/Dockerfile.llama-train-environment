@@ -3,7 +3,9 @@ FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/workspace/.cache/huggingface \
+    TORCHINDUCTOR_CACHE_DIR=/workspace/.torchinductor
 
 # System deps (+ Python headers). NOTE: no stray spaces before the backslash.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,6 +38,10 @@ RUN python3 -m venv /opt/venv \
  && if [ -f requirements.txt ]; then /opt/venv/bin/pip install -U --upgrade-strategy eager -r requirements.txt; fi
 
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy host script and patch DeepSpeed in a separate step
+COPY docker/scripts/patch_deepspeed.py /workspace/scripts/patch_deepspeed.py
+RUN /opt/venv/bin/python /workspace/scripts/patch_deepspeed.py
 
 USER ${USERNAME}
 ENTRYPOINT ["/bin/bash"]

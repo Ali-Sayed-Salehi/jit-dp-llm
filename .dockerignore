@@ -3,3 +3,4 @@
 !requirements.txt
 !docker/Dockerfile
 !docker/docker-compose.yml
+!docker/scripts
