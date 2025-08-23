@@ -328,6 +328,9 @@ def main():
     trainer.save_model(finetuned_model_dir)
     print(f"💾 Saved FULL model to: {finetuned_model_dir}")
 
+    # TODO: if using deepspeed stage 3 with fp32, we should follow this guide for saving:
+    # https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed#saving-and-loading
+
     # ---------------------------- Save Metrics ----------------------------
     save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 
