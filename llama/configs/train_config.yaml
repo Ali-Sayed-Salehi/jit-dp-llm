@@ -5,9 +5,9 @@ dataset_path: datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B
 quant: true
 lora: true
-mixed_precision: fp32
+mixed_precision: bf16
 continue_from_dir: false
-truncation_len: 500
+truncation_len: 20000
 chunking_len: 500           # only for clm
 class_imbalance_fix: oversampling
 threshold: null

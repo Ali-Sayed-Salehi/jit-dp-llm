@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "running the script ..."
+echo "running the inference script ..."
 
 python llama/run_inference.py \
   --model_path LLMs/snapshots/meta-llama/Llama-3.1-70B \
@@ -12,4 +12,4 @@ python llama/run_inference.py \
   --quant \
   --debug
 
-echo "merging finished"
+echo "inference finished"

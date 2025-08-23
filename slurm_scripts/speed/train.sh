@@ -5,7 +5,7 @@
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=200G
+#SBATCH --mem=150G
 #SBATCH --time=168:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=gpu20
@@ -17,6 +17,6 @@ nvidia-smi
 free -h
 
 echo "running the training script"
-accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
+accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_fsdp.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
 # python /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
 echo "training finished"
