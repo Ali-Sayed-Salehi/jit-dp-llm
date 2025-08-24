@@ -1,5 +1,5 @@
 debug: true
-task_type: seq_cls     # clm
+task_type: clm      # seq_cls
 live_metrics: true
 dataset_path: datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B
@@ -7,8 +7,8 @@ quant: true
 lora: true
 mixed_precision: fp32
 continue_from_dir: false
-truncation_len: 20000
-chunking_len: 6000           # only for clm
+truncation_len: 2000
+chunking_len: 500           # only for clm
 class_imbalance_fix: oversampling
 threshold: null
 selection_metric: f1        # recall@top_30%  -  only for seq_ls
