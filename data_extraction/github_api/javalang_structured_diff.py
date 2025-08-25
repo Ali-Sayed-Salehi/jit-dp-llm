@@ -161,7 +161,8 @@ def extract_structured_diff(owner, repo_name, commit_hash, use_ast=False):
     output_lines.append(f"<COMMIT_MESSAGE>{get_commit_message(repo_path, commit_hash)}</COMMIT_MESSAGE>\n")
     changed_files = get_changed_files(repo_path, commit_hash)
     for status, file_path, is_binary, is_symlink, is_permission_change in changed_files:
-        output_lines.append(f"<FILE name=\"{file_path}\">")
+        output_lines.append("<FILE>")
+        output_lines.append(f"  {file_path}")   # put filename as first child line
         if is_symlink:
             output_lines.append("  Symbolic link change detected but content not shown.")
             output_lines.append("</FILE>\n")

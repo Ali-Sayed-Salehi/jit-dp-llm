@@ -216,7 +216,7 @@ def run_inference(
     out_json = os.path.join(out_eval_dir, "final_test_results_seq_cls.json")
     with open(out_json, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"📄 Saved held-out results → {out_json}")
+    print(f"📄 Saved inference results on held-out test dataset → {out_json}")
 
 
 def parse_args():

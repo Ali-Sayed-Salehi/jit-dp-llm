@@ -491,7 +491,7 @@ def main():
         pass
 
     os.makedirs(args.save_path, exist_ok=True)
-    print(f"-> Saving merged model to: {args.save_path} ...")
+    print(f"-> Saving merged model to: {args.save_path}")
     merged_model.save_pretrained(args.save_path, safe_serialization=True)
     tokenizer.save_pretrained(args.save_path)
 

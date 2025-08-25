@@ -11,9 +11,92 @@ from transformers import (
     Llama4TextConfig,
     Llama4TextModel,
     Llama4PreTrainedModel,
+    AutoModelForCausalLM
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 from transformers.modeling_utils import load_sharded_checkpoint
+
+import math
+import random
+
+
+# ---- Utils ----
+def _tensor_allclose(a: torch.Tensor, b: torch.Tensor, rtol=1e-6, atol=1e-6):
+    if a.shape != b.shape:
+        return False, float("inf"), float("inf")
+    # Compare in fp32 to avoid dtype noise
+    a32 = a.detach().to(torch.float32).cpu()
+    b32 = b.detach().to(torch.float32).cpu()
+    diff = (a32 - b32).abs()
+    max_abs = float(diff.max().item()) if diff.numel() else 0.0
+    # relative diff per element; avoid div-by-zero by adding tiny eps
+    denom = torch.maximum(a32.abs(), b32.abs())
+    rel = torch.where(denom > 0, diff / denom, torch.zeros_like(diff))
+    max_rel = float(rel.max().item()) if rel.numel() else 0.0
+    ok = torch.allclose(a32, b32, rtol=rtol, atol=atol)
+    return bool(ok), max_abs, max_rel
+
+
+def _pick_random_shared_param_name(base_sd_keys, cls_sd_keys, seed=0):
+    """Pick a random parameter name present in both models, excluding embeddings and heads."""
+    blacklist_substrings = [
+        "embed_tokens",   # input embeddings
+        "lm_head",        # LM head
+        "score",          # your seq-cls head
+        "classifier",     # generic heads
+    ]
+    shared = [k for k in base_sd_keys if k in cls_sd_keys and not any(s in k for s in blacklist_substrings)]
+    if not shared:
+        return None
+    random.seed(seed)
+    return random.choice(shared)
+
+
+def verify_shared_weights(base_lm_path: str, cls_model: torch.nn.Module, rtol=1e-6, atol=1e-6, seed=0):
+    """
+    Verifies that (1) input embeddings and (2) one random shared layer
+    in the classification model match the base LM weights.
+    """
+    print("Loading base causal LM for weight verification ...")
+    # Load in the same dtype to avoid extra rounding noise
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_lm_path, local_files_only=True, torch_dtype=getattr(cls_model, "dtype", None)
+    )
+
+    # ---- Embedding check ----
+    base_emb = base_model.get_input_embeddings().weight
+    cls_emb = cls_model.get_input_embeddings().weight
+    print(f"[VERIFY] Embedding shapes: base={tuple(base_emb.shape)}, cls={tuple(cls_emb.shape)}; "
+          f"dtypes: base={base_emb.dtype}, cls={cls_emb.dtype}")
+    ok, max_abs, max_rel = _tensor_allclose(base_emb, cls_emb, rtol=rtol, atol=atol)
+    if ok:
+        print(f"[VERIFY] ✅ Embeddings match within tolerances (rtol={rtol}, atol={atol}). "
+              f"max_abs_diff={max_abs:.3e}, max_rel_diff={max_rel:.3e}")
+    else:
+        print(f"[VERIFY] ❌ Embeddings differ. max_abs_diff={max_abs:.3e}, max_rel_diff={max_rel:.3e}")
+
+    # ---- Random shared layer check ----
+    base_sd = base_model.state_dict()
+    cls_sd = cls_model.state_dict()
+
+    pick = _pick_random_shared_param_name(base_sd.keys(), cls_sd.keys(), seed=seed)
+    if pick is None:
+        print("[VERIFY] ⚠️ No suitable shared parameter (besides embeddings/heads) found to compare.")
+        return
+
+    a = base_sd[pick]
+    b = cls_sd[pick]
+    print(f"[VERIFY] Random shared param: {pick}")
+    print(f"[VERIFY] Shapes: base={tuple(a.shape)}, cls={tuple(b.shape)}; dtypes: base={a.dtype}, cls={b.dtype}")
+    ok2, max_abs2, max_rel2 = _tensor_allclose(a, b, rtol=rtol, atol=atol)
+    if ok2:
+        print(f"[VERIFY] ✅ Random layer matches within tolerances (rtol={rtol}, atol={atol}). "
+              f"max_abs_diff={max_abs2:.3e}, max_rel_diff={max_rel2:.3e}")
+    else:
+        print(f"[VERIFY] ❌ Random layer differs. max_abs_diff={max_abs2:.3e}, max_rel_diff={max_rel2:.3e}")
+
+# ---- Utils ----
+
 
 
 # ---- HF-compatible helper ----
@@ -149,10 +232,7 @@ def main():
     parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     args = parser.parse_args()
 
-    path_parts = os.path.normpath(args.base_lm_path).split(os.sep)
-    model_name = path_parts[-1]
-    org_name = path_parts[-2] if len(path_parts) >= 2 else "unknown"
-    SAVE_PATH = os.path.join(args.save_path, org_name, model_name)
+    SAVE_PATH = args.save_path
     os.makedirs(SAVE_PATH, exist_ok=True)
 
     base_tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path, local_files_only=True)
@@ -165,11 +245,13 @@ def main():
         args.seq_cls_config_path, is_llama4=args.llama4
     )
 
+    print("Creating empty seq cls model from config ...")
     if mode == "llama4":
         final_model = CustomLlama4ForSequenceClassification(class_config)
     else:
         final_model = AutoModelForSequenceClassification.from_config(class_config)
 
+    print("Adapting tokenizer and resizing the embeding layer in seq cls model for new tokens ...", flush=True)
     final_model.config.pad_token_id = base_tokenizer.pad_token_id
     if getattr(base_tokenizer, "eos_token_id", None) is not None:
         final_model.config.eos_token_id = base_tokenizer.eos_token_id
@@ -182,6 +264,7 @@ def main():
         final_model.resize_token_embeddings(target_vocab_size)
     final_model.config.vocab_size = target_vocab_size
 
+    print("Loading checkpoint shards from clm model into seq cls model ...")
     load_sharded_checkpoint(final_model, args.base_lm_path, strict=False)
 
     if args.dtype == "bf16":
@@ -194,6 +277,10 @@ def main():
         final_model.to(torch.float32)
         final_model.config.torch_dtype = torch.float32
 
+    print("Verifying shared weights against base LM ...")
+    verify_shared_weights(args.base_lm_path, final_model, rtol=1e-6, atol=1e-6, seed=0)
+
+    print("Saving model and tokenizer ...")
     final_model.save_pretrained(SAVE_PATH)
     base_tokenizer.save_pretrained(SAVE_PATH)
 

@@ -1172,6 +1172,54 @@ def save_model_safely(trainer, finetuned_model_dir: str):
     print(f"💾 Saved model to: {finetuned_model_dir}")
 
 
+def resolve_tokenizer_dir(model_path: str, continue_from_dir: str | None) -> str:
+    """
+    Resolve the directory to load the tokenizer from.
+    
+    - Defaults to model_path.
+    - If continue_from_dir is given, looks for the first checkpoint-* subdirectory.
+    """
+    tokenizer_load_dir = model_path
+    if continue_from_dir and os.path.isdir(continue_from_dir):
+        for d in os.listdir(continue_from_dir):
+            if d.startswith("checkpoint-"):
+                tokenizer_load_dir = os.path.join(continue_from_dir, d)
+                break
+    return tokenizer_load_dir
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ---------- Checks ----------
 
@@ -1309,3 +1357,20 @@ def count_trainable_params(model, tokenizer=None, task="clm", added_token_ids=No
             "expected_total_effective": theoretical_total,
         },
     }
+
+
+def debug_lora_config(lc, prefix="LoRA config"):
+    # Works for PEFT >= 0.5; safely handles fields that might not exist
+    def _get(name, default=None):
+        return getattr(lc, name, default)
+    print(f"\n--- {prefix} ---")
+    print("target_modules      :", _get("target_modules"))
+    print("modules_to_save     :", _get("modules_to_save"))
+    print("exclude_modules     :", _get("exclude_modules", None))   # only exists on newer PEFTs
+    print("layers_to_transform :", _get("layers_to_transform", None))
+    print("layers_pattern      :", _get("layers_pattern", None))
+    print("rank_pattern        :", _get("rank_pattern", None))
+    print("alpha_pattern       :", _get("alpha_pattern", None))
+    print("use_dora            :", _get("use_dora", False))
+    print("use_rslora          :", _get("use_rslora", False))
+    print("--------------------\n")

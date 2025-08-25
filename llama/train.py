@@ -25,7 +25,7 @@ def main():
     args = parse_training_args()
 
     DEBUG = args.debug
-    LLAMA = "llama" in args.model_path.lower()
+    LLAMA = True
     trainer_callbacks = []
     SLURM_TMPDIR = "TMPDIR"
     set_seed(42)
@@ -155,13 +155,17 @@ def main():
         **optional_kwargs   
     )
 
+    print(model)
+
     # ------------------------- Gradient Checkpointing -------------------------
     model.config.use_cache = not training_args.gradient_checkpointing
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # ------------------------- Tokenizer -------------------------
+    tokenizer_load_dir = resolve_tokenizer_dir(MODEL_PATH, args.continue_from_dir)
+
     tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_PATH, 
+        tokenizer_load_dir, 
         local_files_only=True, 
         trust_remote_code=True, 
         use_fast=True
@@ -270,6 +274,8 @@ def main():
                 print("⚠️ Your PEFT version may not support `trainable_token_indices`. "
                     "Consider upgrading PEFT. Falling back to adapter-only (new token rows may learn slowly).")
                 lora_config.modules_to_save.append("embed_tokens")
+
+        debug_lora_config(lora_config, prefix="LoRA config (pre-injection)")
 
         model = prepare_peft_model(model, lora_config, training_args)
 
