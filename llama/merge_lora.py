@@ -30,8 +30,10 @@ from transformers import (
     PreTrainedModel,
 )
 from peft import PeftModel
-from safetensors import safe_open  # validate adapter tensors
 
+import hashlib
+from typing import Optional, Tuple
+from safetensors import safe_open
 
 # =========================
 # Defaults (edit these)
@@ -54,8 +56,128 @@ TASK_TO_CLASS = {
     "seq-cls": AutoModelForSequenceClassification,
 }
 
-
 # ----------------------------- Utilities ----------------------------- #
+
+def inspect_adapter_heads(adapter_path: str, adapter_cfg: dict):
+    """
+    Returns a dict with:
+      - lora_for_lm_head / lora_for_score / lora_for_classifier (bool)
+      - dense_lm_head_saved / dense_score_saved / dense_classifier_saved (bool)
+      - modules_to_save (list from adapter_config)
+      - keys_scanned (int)
+    """
+    weights_path = os.path.join(adapter_path, "adapter_model.safetensors")
+    if not os.path.isfile(weights_path):
+        raise FileNotFoundError(f"Missing weights file: {weights_path}")
+
+    modules_to_save = adapter_cfg.get("modules_to_save", []) or []
+    keys = []
+    with safe_open(weights_path, framework="pt", device="cpu") as f:
+        keys = list(f.keys())
+
+    # Heuristics:
+    # - LoRA deltas typically have "lora_A" or "lora_B" (and sometimes "lora_embedding_A/B").
+    # - Dense weights saved via modules_to_save will appear as plain ".weight"/".bias" entries without "lora_".
+    def is_lora_key(k: str) -> bool:
+        return "lora_A" in k or "lora_B" in k or "lora_embedding_A" in k or "lora_embedding_B" in k
+
+    def has_lora_for(token: str) -> bool:
+        return any((token in k) and is_lora_key(k) for k in keys)
+
+    def has_dense_for(token: str) -> bool:
+        return any((token in k) and (".weight" in k or ".bias" in k) and not is_lora_key(k) for k in keys)
+
+    # Check for CLM head
+    lora_for_lm_head = has_lora_for("lm_head")
+    dense_lm_head_saved = has_dense_for("lm_head") or ("lm_head" in modules_to_save)
+
+    # Check for sequence-classification heads (score / classifier)
+    lora_for_score = has_lora_for("score")
+    dense_score_saved = has_dense_for("score") or ("score" in modules_to_save)
+
+    lora_for_classifier = has_lora_for("classifier")
+    dense_classifier_saved = has_dense_for("classifier") or ("classifier" in modules_to_save)
+
+    report = {
+        "modules_to_save": modules_to_save,
+        "keys_scanned": len(keys),
+
+        "lora_for_lm_head": lora_for_lm_head,
+        "dense_lm_head_saved": dense_lm_head_saved,
+
+        "lora_for_score": lora_for_score,
+        "dense_score_saved": dense_score_saved,
+
+        "lora_for_classifier": lora_for_classifier,
+        "dense_classifier_saved": dense_classifier_saved,
+    }
+    return report
+
+def print_adapter_head_report(report: dict):
+    print("=== Adapter head coverage report ===")
+    print(f"• keys scanned: {report['keys_scanned']}")
+    print(f"• modules_to_save: {report['modules_to_save']}")
+    print("")
+    print(f"CLM head (lm_head):")
+    print(f"  - LoRA deltas present: {report['lora_for_lm_head']}")
+    print(f"  - Dense weights saved: {report['dense_lm_head_saved']}")
+    print("")
+    print(f"Seq-cls head (score):")
+    print(f"  - LoRA deltas present: {report['lora_for_score']}")
+    print(f"  - Dense weights saved: {report['dense_score_saved']}")
+    print("")
+    print(f"Seq-cls head (classifier):")
+    print(f"  - LoRA deltas present: {report['lora_for_classifier']}")
+    print(f"  - Dense weights saved: {report['dense_classifier_saved']}")
+    print("====================================")
+
+
+def _sha256_tensor(t: torch.Tensor) -> str:
+    # Device/dtype agnostic fingerprint
+    a = t.detach().cpu().to(torch.float32).contiguous().numpy().tobytes()
+    return hashlib.sha256(a).hexdigest()
+
+def _find_seqcls_head_module(model: PreTrainedModel) -> Optional[torch.nn.Module]:
+    # Priority by common naming
+    if hasattr(model, "score") and isinstance(getattr(model, "score"), torch.nn.Module):
+        return getattr(model, "score")
+    if hasattr(model, "classifier") and isinstance(getattr(model, "classifier"), torch.nn.Module):
+        head = getattr(model, "classifier")
+        # Some heads wrap the last linear as out_proj
+        if hasattr(head, "out_proj") and isinstance(head.out_proj, torch.nn.Module):
+            return head.out_proj
+        return head
+    # Heuristic: pick the last Linear named like "*score" or "*classifier"
+    candidates = []
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear):
+            last = name.split(".")[-1]
+            if last in {"score", "classifier"} or name.endswith(("score", "classifier")):
+                candidates.append((name, mod))
+    return candidates[-1][1] if candidates else None
+
+def _locate_head_and_name(model: PreTrainedModel, task: str) -> Tuple[str, torch.nn.Module]:
+    if task == "causal-lm":
+        head = model.get_output_embeddings()
+        if head is None:
+            raise RuntimeError("Could not locate lm_head via get_output_embeddings().")
+        return "lm_head", head
+    elif task == "seq-cls":
+        head = _find_seqcls_head_module(model)
+        if head is None:
+            raise RuntimeError("Could not locate classification head (score/classifier).")
+        # Prefer 'score' label if present, else 'classifier'
+        label = "score" if hasattr(model, "score") else "classifier"
+        return label, head
+    else:
+        raise ValueError(f"Unknown task: {task}")
+
+def _snapshot_head_hash(model: PreTrainedModel, task: str) -> Tuple[str, str]:
+    name, head = _locate_head_and_name(model, task)
+    if not hasattr(head, "weight"):
+        raise RuntimeError(f"Head '{name}' has no '.weight' parameter.")
+    return name, _sha256_tensor(head.weight)
+
 
 def select_dtype(dtype_str: str):
     if dtype_str == "fp32":
@@ -183,7 +305,15 @@ def main():
 
     final_dtype = select_dtype(args.dtype)
 
-    validate_adapter_folder(args.adapter_path)
+    adapter_cfg = validate_adapter_folder(args.adapter_path)
+
+    # --- Inspect adapter for lm_head/score/classifier coverage ---
+    try:
+        report = inspect_adapter_heads(args.adapter_path, adapter_cfg)
+        print_adapter_head_report(report)
+    except Exception as e:
+        print(f"Warning: could not inspect adapter heads: {e}")
+
 
     tokenizer = load_tokenizer(args.adapter_path, args.base_model, trust_remote, local_only)
 
@@ -202,6 +332,7 @@ def main():
             config.label2id = label2id
 
     ModelClass = TASK_TO_CLASS[args.task]
+
     print(f"-> Loading base model in fp32 for merge: {args.base_model}")
     model = ModelClass.from_pretrained(
         args.base_model,
@@ -213,6 +344,14 @@ def main():
     )
 
     maybe_resize_embeddings(model, tokenizer)
+
+    # === Merge verification: snapshot head BEFORE merge ===
+    try:
+        head_name, pre_hash = _snapshot_head_hash(model, args.task)
+        print(f"[verify] {head_name} hash BEFORE merge: {pre_hash}")
+    except Exception as e:
+        print(f"[verify] ⚠️ Could not snapshot head before merge: {e}")
+        pre_hash = None
 
     print(f"-> Loading LoRA adapter from: {args.adapter_path} ...")
     peft_model = PeftModel.from_pretrained(
@@ -228,8 +367,22 @@ def main():
         if hasattr(peft_model.config, "pad_token_id"):
             peft_model.config.pad_token_id = tokenizer.pad_token_id
 
-    print("-> Merging LoRA weights into base model (fp32)...")
-    merged_model = peft_model.merge_and_unload(safe_merge =True)
+    print("-> Merging LoRA weights into base model ...")
+    merged_model = peft_model.merge_and_unload(safe_merge=True)
+
+
+    # === Merge verification: snapshot head AFTER merge and compare ===
+    try:
+        _, post_hash = _snapshot_head_hash(merged_model, args.task)
+        print(f"[verify] {head_name} hash AFTER  merge: {post_hash}")
+        if pre_hash is not None:
+            if pre_hash != post_hash:
+                print(f"[verify] ✅ {head_name} changed after merge (LoRA likely affected this head).")
+            else:
+                print(f"[verify] ⚠️ {head_name} unchanged after merge.")
+    except Exception as e:
+        print(f"[verify] ⚠️ Could not snapshot head after merge: {e}")
+
 
     if final_dtype != torch.float32:
         merged_model = merged_model.to(final_dtype)
@@ -237,8 +390,6 @@ def main():
     if args.task == "seq-cls":
         ensure_seqcls_head(merged_model, getattr(merged_model.config, "num_labels", None))
 
-    if args.task == "causal-lm" and hasattr(merged_model, "tie_weights"):
-        merged_model.tie_weights()
     if hasattr(merged_model.config, "use_cache"):
         merged_model.config.use_cache = True
     try:

@@ -1137,3 +1137,36 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, use_lora: bool):
     # Small debug dump
     print("🔎 Special tokens status:", info)
     return info
+
+
+def save_model_safely(trainer, finetuned_model_dir: str):
+    """
+    Save logic with DeepSpeed and fsdp:
+      - If DeepSpeed ZeRO-3 + fp32 -> skip full save
+      - Else -> FSDP FULL_STATE_DICT then trainer.save_model
+    """
+    args = trainer.args
+    acc = trainer.accelerator
+
+    # Precision flags (fp32 iff neither fp16 nor bf16 is active)
+    is_fp32 = not getattr(args, "fp16", False) and not getattr(args, "bf16", False)
+
+    # Detect DeepSpeed + ZeRO stage
+    deepspeed_engine = getattr(trainer, "deepspeed", None)
+    ds_plugin = getattr(getattr(acc, "state", None), "deepspeed_plugin", None)
+    zero_stage = getattr(ds_plugin, "zero_stage", None)
+
+    using_ds_zero3_fp32 = (deepspeed_engine is not None or ds_plugin is not None) and is_fp32 and zero_stage == 3
+
+    # If using deepspeed stage 3 with fp32, we should follow this guide for saving:
+    # https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed#saving-and-loading
+    if using_ds_zero3_fp32:
+        print("⏭️ Skipping full model save (DeepSpeed ZeRO-3 + fp32).")
+        return
+
+    # ---------- Existing logic (unchanged) ----------
+    if trainer.is_fsdp_enabled:
+        trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+
+    trainer.save_model(finetuned_model_dir)
+    print(f"💾 Saved model to: {finetuned_model_dir}")

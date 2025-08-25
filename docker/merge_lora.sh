@@ -6,7 +6,8 @@ echo "running the script ..."
 # CLM
 # python llama/merge_lora.py \
 #   --base_model LLMs/snapshots/meta-llama/Llama-3.1-8B \
-#   --adapter_path llama/training/run_2025-08-21_17-12-54/model \
+#   --task causal-lm \
+#   --adapter_path llama/training/run_2025-08-24_03-27-46/model \
 #   --save_path LLMs/pretrained/causal-lm/test \
 #   --dtype fp32
 
@@ -14,8 +15,8 @@ echo "running the script ..."
 python llama/merge_lora.py \
   --task seq-cls \
   --base_model LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --adapter_path llama/training/run_2025-08-21_17-12-54/model \
-  --save_path LLMs/pretrained/causal-lm/test1 \
-  --dtype fp32
+  --adapter_path llama/training/run_2025-08-24_03-37-23/model \
+  --save_path LLMs/pretrained/causal-lm/test2 \
+  # --dtype fp32
 
 echo "merging finished"

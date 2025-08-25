@@ -250,6 +250,7 @@ def main():
     if args.lora:
         print("✨ Applying LoRA...")
 
+        # TODO: check peft config file and see there are two score and a classifier in modules to save
         modules_to_save = None
         if TASK == "seq_cls":
             modules_to_save = ["score"]
@@ -323,13 +324,12 @@ def main():
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
     # ---------------------------- Save ----------------------------
+    # save_model_safely(trainer, finetuned_model_dir)
+
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
     trainer.save_model(finetuned_model_dir)
-    print(f"💾 Saved FULL model to: {finetuned_model_dir}")
-
-    # TODO: if using deepspeed stage 3 with fp32, we should follow this guide for saving:
-    # https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed#saving-and-loading
+    print(f"💾 Saved model to: {finetuned_model_dir}")
 
     # ---------------------------- Save Metrics ----------------------------
     save_training_metrics(trainer, metrics_dir, filename="metrics.json")
