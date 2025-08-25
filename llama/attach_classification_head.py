@@ -2,28 +2,25 @@ import os
 import argparse
 import torch
 from torch import nn
-from torch.nn import init
 from functools import wraps
 
 from transformers import (
     AutoConfig,
     AutoTokenizer,
-    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     Llama4TextConfig,
     Llama4TextModel,
-    Llama4PreTrainedModel
+    Llama4PreTrainedModel,
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
-from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 from transformers.modeling_utils import load_sharded_checkpoint
 
 
-# Local version of hugging face can_return_tuple
+# ---- HF-compatible helper ----
 def can_return_tuple(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        return_dict = self.config.return_dict if hasattr(self, "config") else True
+        return_dict = getattr(self.config, "return_dict", True)
         return_dict_passed = kwargs.pop("return_dict", return_dict)
         if return_dict_passed is not None:
             return_dict = return_dict_passed
@@ -33,24 +30,25 @@ def can_return_tuple(func):
         return output
     return wrapper
 
+
+# ---- Custom LLaMA4 classifier head ----
 class CustomLlama4TextConfig(Llama4TextConfig):
     model_type = "custom-llama4-classification"
+
 
 class CustomLlama4ForSequenceClassification(Llama4PreTrainedModel):
     config_class = CustomLlama4TextConfig
 
-
-    # if model is llama4
-    base_model_prefix = "language_model"
+    base_model_prefix = "model"
     _no_split_modules = ["Llama4TextDecoderLayer"]
     _tied_weights_keys = ["model.embed_tokens.weight"]
 
-
     def __init__(self, config):
         super().__init__(config)
-        self.num_labels = config.num_labels
+        self.num_labels = 2  # always binary
         self.model = Llama4TextModel(config)
         self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
+        nn.init.normal_(self.score.weight, mean=0.0, std=0.02)
         self.post_init()
 
     def get_input_embeddings(self):
@@ -64,7 +62,6 @@ class CustomLlama4ForSequenceClassification(Llama4PreTrainedModel):
 
     def set_decoder(self, decoder):
         self.model = decoder
-
 
     @can_return_tuple
     def forward(
@@ -89,27 +86,25 @@ class CustomLlama4ForSequenceClassification(Llama4PreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
-
         hidden_states = transformer_outputs.last_hidden_state
         logits = self.score(hidden_states)
 
-        batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
+        if input_ids is not None:
+            batch_size = input_ids.size(0)
+        else:
+            batch_size = inputs_embeds.size(0)
 
-        if self.config.pad_token_id is None and batch_size != 1:
-            raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+        pad_id = self.config.pad_token_id
+        if pad_id is None and batch_size != 1:
+            raise ValueError("Batch > 1 requires pad_token_id to be set.")
 
-        if self.config.pad_token_id is None:
-            last_non_pad_token = -1
-        elif input_ids is not None:
-            non_pad_mask = (input_ids != self.config.pad_token_id).int()
+        if pad_id is None:
+            pooled_logits = logits[:, -1, :]
+        else:
+            non_pad_mask = (input_ids != pad_id).int()
             token_indices = torch.arange(input_ids.shape[-1], device=logits.device, dtype=torch.int)
             last_non_pad_token = (token_indices * non_pad_mask).argmax(-1)
-        else:
-            last_non_pad_token = -1
-
-        pooled_logits = logits[torch.arange(batch_size, device=logits.device), last_non_pad_token]
-
-        # loss is not calculated because it is overridden by compute_loss in CustomTrainer class
+            pooled_logits = logits[torch.arange(batch_size, device=logits.device), last_non_pad_token]
 
         return SequenceClassifierOutputWithPast(
             logits=pooled_logits,
@@ -118,57 +113,93 @@ class CustomLlama4ForSequenceClassification(Llama4PreTrainedModel):
             attentions=transformer_outputs.attentions,
         )
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base_lm_path", type=str, required=True, help="Path to base LLaMA Causal LM")
-    parser.add_argument("--save_path", type=str, required=True, help="Root path to save the new classification model")
-    parser.add_argument("--llama4", action="store_true", help="Should be passed if the models is llama4")
-    args = parser.parse_args()
 
-    REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    path_parts = os.path.normpath(args.base_lm_path).split(os.sep)
-    model_name = path_parts[-1]
-    org_name = path_parts[-2]
+def _derive_seq_cls_config_from_snapshot(snapshot_dir: str, is_llama4: bool):
+    if not os.path.isdir(snapshot_dir):
+        raise FileNotFoundError(f"seq_cls_config_path (snapshot) not found: {snapshot_dir}")
 
-    SAVE_PATH = os.path.join(args.save_path, org_name, model_name)
-    offload_dir = os.path.join(os.environ["TMPDIR"], "offload", org_name, model_name)
-    model_id = f"{org_name}/{model_name}"
-    Pretrained_seq_class_model_path = os.path.join(REPO_PATH, "LLMs", "pretrained", "sequence-classification", org_name, model_name)
-
-    print(f"Creating new classification model from config: {args.base_lm_path}")
-    if args.llama4:
-        config = CustomLlama4TextConfig.from_pretrained(
-            args.base_lm_path,
-            num_labels=2,
-            architectures=["CustomLlama4ForSequenceClassification"],
-            model_type=CustomLlama4TextConfig.model_type,
-            local_files_only=True
+    try:
+        if is_llama4:
+            base_cfg = Llama4TextConfig.from_pretrained(snapshot_dir, local_files_only=True)
+            class_cfg = CustomLlama4TextConfig(**base_cfg.to_dict())
+            class_cfg.architectures = ["CustomLlama4ForSequenceClassification"]
+            class_cfg.model_type = CustomLlama4TextConfig.model_type
+            class_cfg.num_labels = 2
+            return class_cfg, "llama4"
+        else:
+            base_cfg = AutoConfig.from_pretrained(snapshot_dir, local_files_only=True)
+            base_cfg.num_labels = 2
+            return base_cfg, "auto"
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to derive a sequence-classification config from snapshot at {snapshot_dir}: {e}"
         )
 
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base_lm_path", type=str, required=True,
+                        help="Path to base Causal LM (folder with config/model/tokenizer).")
+    parser.add_argument("--seq_cls_config_path", type=str, required=True,
+                        help="Path to a *CAUSAL LM snapshot directory*. We'll derive a seq-cls config from this.")
+    parser.add_argument("--save_path", type=str, required=True,
+                        help="Root path to save the new classification model.")
+    parser.add_argument("--llama4", action="store_true",
+                        help="Set if backbone is LLaMA4.")
+    parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    args = parser.parse_args()
+
+    path_parts = os.path.normpath(args.base_lm_path).split(os.sep)
+    model_name = path_parts[-1]
+    org_name = path_parts[-2] if len(path_parts) >= 2 else "unknown"
+    SAVE_PATH = os.path.join(args.save_path, org_name, model_name)
+    os.makedirs(SAVE_PATH, exist_ok=True)
+
+    base_tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path, local_files_only=True)
+    if base_tokenizer.pad_token is None:
+        base_tokenizer.pad_token = base_tokenizer.eos_token
+        base_tokenizer.pad_token_id = base_tokenizer.eos_token_id
+    target_vocab_size = len(base_tokenizer)
+
+    class_config, mode = _derive_seq_cls_config_from_snapshot(
+        args.seq_cls_config_path, is_llama4=args.llama4
+    )
+
+    if mode == "llama4":
+        final_model = CustomLlama4ForSequenceClassification(class_config)
     else:
-        config = AutoConfig.from_pretrained(Pretrained_seq_class_model_path, local_files_only=True)
+        final_model = AutoModelForSequenceClassification.from_config(class_config)
 
-    print(f"Initializing new classification model from config ...")
-    if args.llama4:
-        final_model = CustomLlama4ForSequenceClassification(config)
-    else:
-        final_model = AutoModelForSequenceClassification.from_config(config)
+    final_model.config.pad_token_id = base_tokenizer.pad_token_id
+    if getattr(base_tokenizer, "eos_token_id", None) is not None:
+        final_model.config.eos_token_id = base_tokenizer.eos_token_id
+    if getattr(base_tokenizer, "bos_token_id", None) is not None:
+        final_model.config.bos_token_id = base_tokenizer.bos_token_id
+    if getattr(base_tokenizer, "unk_token_id", None) is not None:
+        final_model.config.unk_token_id = base_tokenizer.unk_token_id
 
+    if final_model.get_input_embeddings().weight.size(0) != target_vocab_size:
+        final_model.resize_token_embeddings(target_vocab_size)
+    final_model.config.vocab_size = target_vocab_size
 
-    print(f"Loading backbone weights copied from Causal LM into final_model ...")
     load_sharded_checkpoint(final_model, args.base_lm_path, strict=False)
 
-    print(str(final_model))
+    if args.dtype == "bf16":
+        final_model.to(torch.bfloat16)
+        final_model.config.torch_dtype = torch.bfloat16
+    elif args.dtype == "fp16":
+        final_model.to(torch.float16)
+        final_model.config.torch_dtype = torch.float16
+    else:
+        final_model.to(torch.float32)
+        final_model.config.torch_dtype = torch.float32
 
-    final_model.to(torch.bfloat16)
-    final_model.config.torch_dtype = torch.bfloat16
-
-    os.makedirs(SAVE_PATH, exist_ok=True)
     final_model.save_pretrained(SAVE_PATH)
-    tokenizer = AutoTokenizer.from_pretrained(args.base_lm_path)
-    tokenizer.save_pretrained(SAVE_PATH)
+    base_tokenizer.save_pretrained(SAVE_PATH)
 
     print(f"✅ New classification model + tokenizer saved to: {SAVE_PATH}")
+    print(f"   vocab_size={final_model.config.vocab_size}, pad_token_id={final_model.config.pad_token_id}, dtype={final_model.config.torch_dtype}")
+
 
 if __name__ == "__main__":
     main()

@@ -155,9 +155,6 @@ def main():
         **optional_kwargs   
     )
 
-    if LLAMA:
-        model.config.pretraining_tp = 1
-
     # ------------------------- Gradient Checkpointing -------------------------
     model.config.use_cache = not training_args.gradient_checkpointing
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
@@ -280,7 +277,7 @@ def main():
         _ = count_trainable_params(
             model=model,
             tokenizer=tokenizer,
-            task=TASK,  # "clm" or "seq_cls"
+            task=TASK,
             added_token_ids=token_info.get("added_token_ids", None),
             verbose=True,
         )
