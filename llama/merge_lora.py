@@ -58,6 +58,98 @@ TASK_TO_CLASS = {
 
 # ----------------------------- Utilities ----------------------------- #
 
+def get_added_token_ids(tokenizer):
+    """Return the list of ids for tokens added after the base vocab."""
+    try:
+        added = tokenizer.get_added_vocab()  # {token_str: id}
+        return sorted(added.values())
+    except Exception:
+        return []
+
+def _normalize_adapter_key_for_embed(k: str) -> str:
+    # Strip PEFT prefixes
+    for p in ("base_model.model.", "base_model."):
+        if k.startswith(p):
+            k = k[len(p):]
+    return k
+
+def _find_adapter_embedding_tensor(adapter_path: str):
+    """
+    Try to retrieve an embedding matrix from the adapter. Preference order:
+      1) Dense saved embedding (modules_to_save): *embed_tokens.weight
+      2) Token adapter tensor from trainable_token_indices: *embed_tokens.token_adapter.base_layer.weight
+    Returns (tensor, key, kind) or (None, None, None).
+    """
+    weights_path = os.path.join(adapter_path, "adapter_model.safetensors")
+    if not os.path.isfile(weights_path):
+        return None, None, None
+
+    dense_candidate = None
+    dense_key = None
+    adapter_candidate = None
+    adapter_key = None
+
+    with safe_open(weights_path, framework="pt", device="cpu") as fh:
+        for raw_k in fh.keys():
+            if "lora_" in raw_k:
+                continue  # we want dense/adapter, not LoRA
+            k = _normalize_adapter_key_for_embed(raw_k)
+            # 1) Dense embed (modules_to_save)
+            if (".weight" in k) and ("embed_tokens" in k) and ("token_adapter" not in k):
+                dense_candidate = fh.get_tensor(raw_k).cpu()
+                dense_key = raw_k
+            # 2) Token adapter base layer
+            if "embed_tokens.token_adapter.base_layer.weight" in k:
+                adapter_candidate = fh.get_tensor(raw_k).cpu()
+                adapter_key = raw_k
+
+    if dense_candidate is not None:
+        return dense_candidate, dense_key, "dense"
+    if adapter_candidate is not None:
+        return adapter_candidate, adapter_key, "token_adapter"
+    return None, None, None
+
+def verify_adapter_embeddings_applied(model: PreTrainedModel, tokenizer, adapter_path: str):
+    """
+    Compare adapter's embedding matrix (dense or token_adapter) with the merged model's input embeddings
+    on the ADDED TOKEN IDS. Prints max|Δ| and L2 norms.
+    """
+    added_ids = get_added_token_ids(tokenizer)
+    if not added_ids:
+        print("[embed-verify] No added tokens detected; nothing to verify.")
+        return
+
+    adapter_w, adapter_key, kind = _find_adapter_embedding_tensor(adapter_path)
+    if adapter_w is None:
+        print("[embed-verify] Adapter does not contain a dense embedding or token_adapter tensor.")
+        return
+
+    model_in = model.get_input_embeddings()
+    if model_in is None or not hasattr(model_in, "weight"):
+        print("[embed-verify] Could not access model input embeddings.")
+        return
+    model_w = model_in.weight.detach().cpu()
+
+    if adapter_w.shape != model_w.shape:
+        # Token adapters usually store a full-sized matrix after training those rows.
+        # If shapes differ, we can't row-compare directly.
+        print(f"[embed-verify] Shape mismatch: adapter {tuple(adapter_w.shape)} vs model {tuple(model_w.shape)}")
+        return
+
+    # Compare only added rows
+    a = adapter_w.index_select(0, torch.tensor(added_ids))
+    b = model_w.index_select(0, torch.tensor(added_ids))
+    diff = (b.float() - a.float())
+    max_abs = float(diff.abs().max())
+    l2 = float(torch.linalg.vector_norm(diff))
+    print(f"[embed-verify] Compared {len(added_ids)} added rows from adapter '{adapter_key}' ({kind}) "
+          f"to merged model embeddings -> max|Δ|={max_abs:.3e}, L2={l2:.3e}")
+
+    # Optional per-row summary: count exact/near matches
+    near_matches = (diff.abs().amax(dim=1) < 1e-6).sum().item()
+    print(f"[embed-verify] Rows with max|Δ| < 1e-6: {near_matches}/{len(added_ids)}")
+
+
 def inspect_adapter_heads(adapter_path: str, adapter_cfg: dict):
     """
     Returns a dict with:
@@ -370,6 +462,7 @@ def main():
     print("-> Merging LoRA weights into base model ...")
     merged_model = peft_model.merge_and_unload(safe_merge=True)
 
+    verify_adapter_embeddings_applied(merged_model, tokenizer, args.adapter_path)
 
     # === Merge verification: snapshot head AFTER merge and compare ===
     try:

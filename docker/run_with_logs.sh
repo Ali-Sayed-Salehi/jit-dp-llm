@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ====== CONFIGURATION ======
-SCRIPT_NAME="merge_lora.sh"  # Name of the script to run (inside ./docker/)
+SCRIPT_NAME="train.sh"  # Name of the script to run (inside ./docker/)
 # ===========================
 
 LOG_DIR="/workspace/docker_jobs"

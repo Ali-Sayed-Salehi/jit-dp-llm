@@ -250,13 +250,9 @@ def main():
     if args.lora:
         print("✨ Applying LoRA...")
 
-        # TODO: check peft config file and see there are two score and a classifier in modules to save
         modules_to_save = None
-        if TASK == "seq_cls":
-            modules_to_save = ["score"]
-        elif TASK == "clm":
-            if token_info.get("modules_to_save_update"):
-                modules_to_save = ['lm_head']
+        if TASK == "clm" and token_info.get("modules_to_save_update"):
+            modules_to_save = ['lm_head']
 
         lora_config = LoraConfig(
             r=8,
@@ -279,6 +275,15 @@ def main():
                 lora_config.modules_to_save.append("embed_tokens")
 
         model = prepare_peft_model(model, lora_config, training_args)
+
+        # Summarize trainable parameters
+        _ = count_trainable_params(
+            model=model,
+            tokenizer=tokenizer,
+            task=TASK,  # "clm" or "seq_cls"
+            added_token_ids=token_info.get("added_token_ids", None),
+            verbose=True,
+        )
 
     # ------------------------- Save Config to File -------------------------
     save_training_config(
