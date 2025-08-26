@@ -171,4 +171,4 @@ if __name__ == "__main__":
     main(args.dataset, args.model, args.field, args.output, args.logy, args.configs)
 
 
-# python /speed-scratch/a_s87063/repos/perf-pilot/analysis/token_length_violin.py --dataset /speed-scratch/a_s87063/repos/perf-pilot/datasets/apachejit/apachejit_small_llm_struc.jsonl --model /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B --configs /speed-scratch/a_s87063/repos/perf-pilot/analysis/seq_len_confis.jsonl --field prompt --logy --output /speed-scratch/a_s87063/repos/perf-pilot/analysis/output
+# python /speed-scratch/a_s87063/repos/perf-pilot/analysis/token_length_violin.py --dataset /speed-scratch/a_s87063/repos/perf-pilot/datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl --model /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B --configs /speed-scratch/a_s87063/repos/perf-pilot/analysis/seq_len_confis.jsonl --field prompt --logy --output /speed-scratch/a_s87063/repos/perf-pilot/analysis/output
