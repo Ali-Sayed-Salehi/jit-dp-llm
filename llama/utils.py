@@ -1358,19 +1358,3 @@ def count_trainable_params(model, tokenizer=None, task="clm", added_token_ids=No
         },
     }
 
-
-def debug_lora_config(lc, prefix="LoRA config"):
-    # Works for PEFT >= 0.5; safely handles fields that might not exist
-    def _get(name, default=None):
-        return getattr(lc, name, default)
-    print(f"\n--- {prefix} ---")
-    print("target_modules      :", _get("target_modules"))
-    print("modules_to_save     :", _get("modules_to_save"))
-    print("exclude_modules     :", _get("exclude_modules", None))   # only exists on newer PEFTs
-    print("layers_to_transform :", _get("layers_to_transform", None))
-    print("layers_pattern      :", _get("layers_pattern", None))
-    print("rank_pattern        :", _get("rank_pattern", None))
-    print("alpha_pattern       :", _get("alpha_pattern", None))
-    print("use_dora            :", _get("use_dora", False))
-    print("use_rslora          :", _get("use_rslora", False))
-    print("--------------------\n")
