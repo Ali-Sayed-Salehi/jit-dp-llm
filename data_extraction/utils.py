@@ -11,6 +11,13 @@ def diff_to_structured_xml(diff_string):
     """
     Converts a multi-file unified diff string into structured XML-like diff format,
     including full file additions, deletions, renames, and binary file changes.
+
+    Format change: <FILE> is opened without attributes, and the filename is printed
+    on the next line:
+        <FILE>
+          path/to/file
+          ...
+        </FILE>
     """
     lines = diff_string.strip().splitlines()
     output = []
@@ -70,7 +77,8 @@ def diff_to_structured_xml(diff_string):
             match = re.match(r'diff --git a/(.+?) b/(.+)', line)
             if match:
                 current_file = match.group(2)
-                output.append(f'<FILE name="{current_file}">')
+                output.append(f"<FILE>")
+                output.append(f"  {current_file}")
 
         elif line.startswith("rename from "):
             rename_from = line[len("rename from "):].strip()
@@ -78,10 +86,11 @@ def diff_to_structured_xml(diff_string):
 
         elif line.startswith("rename to "):
             rename_to = line[len("rename to "):].strip()
-            # We'll print this after both rename_from and rename_to are known
+            # If this file wasn't introduced by 'diff --git', open it now.
             if not current_file:
                 current_file = rename_to
-                output.append(f'<FILE name="{current_file}">')
+                output.append(f"<FILE>")
+                output.append(f"  {current_file}")
 
         elif line.startswith("--- "):
             if line.strip() == "--- /dev/null":
@@ -165,7 +174,6 @@ def diff_to_structured_xml(diff_string):
 
     flush_file()
     return "\n".join(output)
-
 
 
 
