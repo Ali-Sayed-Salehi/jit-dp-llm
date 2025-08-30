@@ -106,7 +106,7 @@ def main():
         max_steps=1 if DEBUG else -1,
         weight_decay=1e-4,
         logging_strategy="steps",
-        logging_steps=1 if DEBUG else 25,
+        logging_steps=1 if DEBUG else 50,
         report_to=["tensorboard"],
         logging_dir=tensorboard_dir,
         save_strategy="steps",

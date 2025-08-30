@@ -25,9 +25,9 @@ echo "Running the attach classification head script ..."
 
 # llama
 python /speed-scratch/a_s87063/repos/perf-pilot/llama/attach_classification_head.py \
-  --base_lm_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/test \
+  --base_lm_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/llama3.1_jit_defects4j \
   --seq_cls_config_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/test \
+  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/llama3.1_jit_defects4j \
 #   --dtype fp16
 
 echo "script finished"
