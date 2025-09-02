@@ -24,6 +24,7 @@ LLMs/**/*
 /slurm_jobs
 /llama/training/*
 /llama/inference/*
+/llama/adapter_models/*
 /data_extraction/github_api/github_repos/*
 /analysis/output/*
 /docker_jobs
