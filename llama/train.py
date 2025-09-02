@@ -341,14 +341,14 @@ def main():
     save_training_metrics(trainer, metrics_dir, filename="metrics.json")
 
     # ---------------------------- Run inference on held-out test set ----------------------------
-    # if TASK == "seq_cls":
-    #     run_final_inference(
-    #         trainer=trainer,
-    #         test_dataset=final_dataset["final_test"],
-    #         metrics_dir=metrics_dir,
-    #         percentages=RECALL_AT_TOP_K_PERCENTAGES,
-    #         threshold=args.threshold,
-    #     )
+    if TASK == "seq_cls":
+        run_final_inference(
+            trainer=trainer,
+            test_dataset=final_dataset["final_test"],
+            metrics_dir=metrics_dir,
+            percentages=RECALL_AT_TOP_K_PERCENTAGES,
+            threshold=args.threshold,
+        )
 
 
 if __name__ == "__main__":
