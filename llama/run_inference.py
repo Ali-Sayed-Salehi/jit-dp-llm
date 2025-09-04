@@ -202,14 +202,32 @@ def run_inference(
         recall_pcts=recall_pcts_list,
     )
 
+    # Try to pull commit_id from the dataset (gracefully handle absence)
+    if "commit_id" in test_ds.column_names:
+        commit_ids = list(test_ds["commit_id"])
+    else:
+        print("⚠️ 'commit_id' column not found in final_test; setting commit_id=None for all samples.")
+        commit_ids = [None] * len(labels)
+
+    # Build per-sample dicts with commit_id, true_label, prediction, confidence
+    samples = []
+    for i in range(len(labels)):
+        pred = int(preds[i])
+        conf = float(probs_again[i, pred])   # probability of the predicted class
+        samples.append({
+            "commit_id": commit_ids[i],
+            "true_label": int(labels[i]),
+            "prediction": pred,
+            "confidence": conf,
+        })
+
     results = {
         "task_type": "seq_cls",
         "debug": debug,
         "used_samples": int(len(texts)),
+        "label_order": ordered_labels,  # helpful for interpreting class indices
         "metrics": metrics,
-        "predictions": preds.tolist(),
-        "probabilities": probs_again[:, 1].tolist(),  # positive-class probs
-        "true_labels": labels.tolist(),
+        "samples": samples,             # ✅ per-sample dicts live here
     }
 
     # ---- Save JSON results ----

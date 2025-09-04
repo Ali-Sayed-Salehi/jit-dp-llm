@@ -182,6 +182,7 @@ def main():
         tokenizer=tokenizer,
         model=model,
         task=TASK,
+        add_new_tokens=args.add_new_tokens,
         use_lora=bool(args.lora),
     )
 

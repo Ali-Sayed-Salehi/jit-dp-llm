@@ -199,6 +199,7 @@ elif args.mode == "jit_llm_struc":
     OWNER = "apache"
 
     for commit in sorted_jit_list:
+        commit_id = commit.get('commit_id')
         project = commit.get('project')
         project_parts = project.split("/")
         repo = project_parts[1]
@@ -242,7 +243,7 @@ elif args.mode == "jit_llm_struc":
         else:
             prompt = diff
 
-        new_jit_list.append({'prompt': prompt, 'response': response})
+        new_jit_list.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
     output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc.jsonl")

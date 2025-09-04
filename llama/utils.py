@@ -185,6 +185,7 @@ def parse_training_args():
         choices=["seq_cls", "clm"],
         help="sequence classification or causal language modelling."
     )
+    parser.add_argument("--add_new_tokens", action="store_true", help="Whether to add new tokens like <FILE>")
 
     args = parser.parse_args()
 
@@ -380,7 +381,8 @@ def load_and_split_dataset(
     if format_fn is not None:
         train_dataset = train_dataset.map(format_fn, remove_columns=train_dataset.column_names)
         eval_dataset  = eval_dataset.map(format_fn, remove_columns=eval_dataset.column_names)
-        test_dataset  = test_dataset.map(format_fn, remove_columns=test_dataset.column_names)
+        # Keep the commit_id column for traceability
+        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt", "response"])
 
     return DatasetDict({
         "train": train_dataset,
@@ -1080,7 +1082,7 @@ def chunk_long_samples(
 
 
 
-def add_or_detect_special_tokens(tokenizer, model, task: str, use_lora: bool):
+def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, use_lora: bool):
     """
     Ensures SPECIAL_TOKENS exist in the tokenizer and the model has the right embedding size.
     Returns:
@@ -1104,6 +1106,9 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, use_lora: bool):
         "resized_embeddings": False,
         "modules_to_save_update": None,
     }
+
+    if not add_new_tokens:
+        return info
 
     if to_add:
         tokenizer.add_special_tokens({"additional_special_tokens": to_add})
