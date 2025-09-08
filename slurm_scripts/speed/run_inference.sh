@@ -20,7 +20,7 @@ python /speed-scratch/a_s87063/repos/perf-pilot/llama/run_inference.py \
   --model_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/saved_runs/run_2025-08-01_19-31-14_llama3.1_jit_struc_small_20k_len/model \
   --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/apachejit/apachejit_small_llm_struc.jsonl \
   --mixed_precision bf16 \
-  --truncation_len 20000 \
+  --truncation_len 22000 \
   --quant \
   # --debug
 

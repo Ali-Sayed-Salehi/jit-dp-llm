@@ -847,7 +847,8 @@ def save_training_config(
         "chunking_len": chunking_len,
         "debug": DEBUG,
         "held_out_test_defect_rate": defect_rate,
-        "max_possible_recall@top_k": max_recall_at_k
+        "max_possible_recall@top_k": max_recall_at_k,
+        "training_args_full": training_args.to_dict()
     }
 
     if model_config is not None:

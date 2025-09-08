@@ -201,7 +201,7 @@ def main():
         format_fn=format_func
     )
 
-    if TASK == "seq_cls":
+    if TASK == "seq_cls" and args.class_imbalance_fix:
         dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
             dataset=dataset,
             strategy=args.class_imbalance_fix,
@@ -297,8 +297,8 @@ def main():
         run_timestamp=run_timestamp,
         args=args,
         training_args=training_args,
-        class_distribution=class_distribution if TASK == "seq_cls" else None,
-        original_class_distribution=original_class_distribution if TASK == "seq_cls" else None,
+        class_distribution=class_distribution if TASK == "seq_cls" and args.class_imbalance_fix else None,
+        original_class_distribution=original_class_distribution if TASK == "seq_cls" and args.class_imbalance_fix else None,
         truncation_len=tokenizer_max_len,
         chunking_len=args.chunking_len if TASK == "clm" else None,
         dtype=DTYPE,
@@ -315,8 +315,10 @@ def main():
     trainer_optional_kwargs = {}
     if TASK == "seq_cls":
         trainer_optional_kwargs["compute_metrics"] = custom_metrics_seq_cls
-        # trainer_optional_kwargs["class_weights"] = class_weights if args.class_imbalance_fix == "weighted_loss" else None
-        # trainer_optional_kwargs["focal_loss_fct"] = focal_loss_fct if args.class_imbalance_fix == "focal_loss" else None
+        # if imbalance_strategy == "weighted_loss" and class_weights is not None:
+        #     trainer_optional_kwargs["class_weights"] = class_weights
+        # if imbalance_strategy == "focal_loss" and focal_loss_fct is not None:
+        #     trainer_optional_kwargs["focal_loss_fct"] = focal_loss_fct
 
 
     trainer = Trainer(

@@ -9,7 +9,7 @@ mixed_precision: bf16
 continue_from_dir: false
 truncation_len: 22000
 chunking_len: 4000           # only for clm
-class_imbalance_fix: oversampling
+class_imbalance_fix: null     # oversampling
 threshold: null
 selection_metric: recall@top_30%       #f1   # recall@top_30%  -  only for seq_ls
-add_new_tokens: false
+add_new_tokens: true
