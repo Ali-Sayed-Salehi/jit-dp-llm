@@ -1,8 +1,8 @@
-debug: true
+debug: false
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
-model_path: LLMs/pretrained/sequence-classification/llama3.1_apachejit    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/test
+model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/llama3.1_apachejit
 quant: true
 lora: true
 mixed_precision: bf16

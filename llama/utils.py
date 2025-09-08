@@ -955,7 +955,6 @@ def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
     return metrics_save_path
 
 
-
 def run_final_inference(
     trainer,
     test_dataset,
@@ -971,10 +970,20 @@ def run_final_inference(
 
     print("\n🧪 Running final inference on held-out test set...")
 
-    test_results = trainer.predict(test_dataset)
+    # --- 1) Preserve commit_id order, then drop it before predict ---
+    commit_ids = None
+    if hasattr(test_dataset, "column_names") and "commit_id" in test_dataset.column_names:
+        commit_ids = test_dataset["commit_id"]
+        ds_for_pred = test_dataset.remove_columns(["commit_id"])
+    else:
+        ds_for_pred = test_dataset
+
+    # --- 2) Predict ---
+    test_results = trainer.predict(ds_for_pred)
     logits = test_results.predictions
     labels = test_results.label_ids
 
+    # --- 3) Compute predictions & metrics ---
     probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
     preds = np.argmax(probs, axis=1)
 
@@ -1003,11 +1012,20 @@ def run_final_inference(
     }
     final_metrics.update(recall_at_k)
 
+    # --- 4) Build per-sample results ---
+    results = []
+    for i in range(len(labels)):
+        results.append({
+            "commit_id": commit_ids[i] if commit_ids is not None else None,
+            "true_label": int(labels[i]),
+            "prediction": int(preds[i]),
+            "confidence": float(probs[i, 1])  # probability for positive class
+        })
+
+    # --- 5) Save everything ---
     output_payload = {
         "metrics": final_metrics,
-        "predictions": preds.tolist(),
-        "probabilities": probs[:, 1].tolist(),
-        "true_labels": labels.tolist()
+        "results": results
     }
 
     os.makedirs(metrics_dir, exist_ok=True)
@@ -1193,40 +1211,9 @@ def resolve_tokenizer_dir(model_path: str, continue_from_dir: str | None) -> str
     return tokenizer_load_dir
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ----------------------------
 # ---------- Checks ----------
+# ----------------------------
 
 def _n_params(t): return int(t.numel())
 

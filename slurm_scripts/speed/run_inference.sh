@@ -16,12 +16,12 @@ source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.c
 echo "running the inference script ..."
 
 python /speed-scratch/a_s87063/repos/perf-pilot/llama/run_inference.py \
-  --model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/trained/sequence-classification/llama3.1_8B_apachejit_small \
+  --base_model_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+  --model_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/saved_runs/run_2025-08-01_19-31-14_llama3.1_jit_struc_small_20k_len/model \
   --dataset_path /speed-scratch/a_s87063/repos/perf-pilot/datasets/apachejit/apachejit_small_llm_struc.jsonl \
   --mixed_precision bf16 \
-  --batch_size 1 \
-  --truncation_len 22000 \
+  --truncation_len 20000 \
   --quant \
-  --debug
+  # --debug
 
 echo "inference finished"

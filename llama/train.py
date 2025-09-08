@@ -97,14 +97,14 @@ def main():
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        learning_rate=1e-4,
+        learning_rate=5e-5,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=16,
         gradient_checkpointing = True,
         num_train_epochs=3,
         max_steps=1 if DEBUG else -1,
-        weight_decay=1e-4,
+        weight_decay=0.01,
         logging_strategy="steps",
         logging_steps=1 if DEBUG else 50,
         report_to=["tensorboard"],
@@ -125,6 +125,10 @@ def main():
         log_level_replica="warning",
         remove_unused_columns=False,
         eval_accumulation_steps=16 if TASK == "clm" else None,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.0,
+        label_smoothing_factor=0.05,
+        # lr_scheduler_type="reduce_lr_on_plateau"
     )
 
     # ------------------------- Load model and quantize -------------------------

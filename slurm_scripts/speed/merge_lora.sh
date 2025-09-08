@@ -27,8 +27,8 @@ echo "running the script ..."
 python /speed-scratch/a_s87063/repos/perf-pilot/llama/merge_lora.py \
   --task seq-cls \
   --base_model /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --adapter_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-08-29_23-01-30/model \
-  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/trained/sequence-classification/llama3.1_8B_apachejit_small \
+  --adapter_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/saved_runs/run_2025-09-02_00-09-19_apachejit_small_struc_recall@30/model \
+  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/trained/sequence-classification/llama3.1_8B_apachejit_small_recall@30 \
   # --dtype fp32
 
 echo "merging finished"

@@ -429,7 +429,7 @@ def main():
     model = ModelClass.from_pretrained(
         args.base_model,
         config=config if args.task == "seq-cls" else None,
-        torch_dtype=torch.float32,
+        # torch_dtype=torch.float32,
         trust_remote_code=trust_remote,
         local_files_only=local_only,
         low_cpu_mem_usage=True,
@@ -477,8 +477,8 @@ def main():
         print(f"[verify] ⚠️ Could not snapshot head after merge: {e}")
 
 
-    if final_dtype != torch.float32:
-        merged_model = merged_model.to(final_dtype)
+    # if final_dtype != torch.float32:
+    #     merged_model = merged_model.to(final_dtype)
 
     if args.task == "seq-cls":
         ensure_seqcls_head(merged_model, getattr(merged_model.config, "num_labels", None))
