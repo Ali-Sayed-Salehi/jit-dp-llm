@@ -29,6 +29,7 @@ LLMs/**/*
 /analysis/output/*
 /docker_jobs
 .nfs*
+slurm*
 
 # cache
 .cache
