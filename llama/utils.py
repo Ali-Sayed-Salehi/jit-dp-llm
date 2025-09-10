@@ -154,6 +154,7 @@ def parse_training_args():
     )
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
     parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
+    parser.add_argument("--flash_attn_2", action="store_true", help="Use flash attention 2")
     parser.add_argument("--mixed_precision", type=str,
         choices=["fp32", "fp16", "bf16"],
         help="Choose one of: fp32, fp16, bf16"
@@ -186,6 +187,11 @@ def parse_training_args():
         help="sequence classification or causal language modelling."
     )
     parser.add_argument("--add_new_tokens", action="store_true", help="Whether to add new tokens like <FILE>")
+    parser.add_argument(
+        "--slurm_tmpdir_env",
+        type=str,
+        help="Environment variable that point to slurm temporary directory"
+    )
 
     args = parser.parse_args()
 

@@ -27,7 +27,7 @@ def main():
     DEBUG = args.debug
     LLAMA = True
     trainer_callbacks = []
-    SLURM_TMPDIR = "TMPDIR"
+    SLURM_TMPDIR = args.slurm_tmpdir_env
     set_seed(42)
 
     DTYPE, USE_FP16, USE_BF16 = set_dtype(args.mixed_precision)
@@ -80,7 +80,7 @@ def main():
     print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
     # ------------------------- HF login -------------------------
-    # login_to_huggingface(REPO_PATH)
+    login_to_huggingface(REPO_PATH)
 
     # ------------------------- Register custom llama -------------------------
     if TASK == "seq_cls":
@@ -152,6 +152,8 @@ def main():
         optional_kwargs["label2id"] = {"NEGATIVE": 0, "POSITIVE": 1}
         optional_kwargs["num_labels"] = 2
 
+    if args.flash_attn_2:
+        optional_kwargs["attn_implementation"] = "flash_attention_2"
 
     model = ModelClass.from_pretrained(
         MODEL_PATH,
