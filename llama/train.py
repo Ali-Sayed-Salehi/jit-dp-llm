@@ -97,7 +97,7 @@ def main():
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        learning_rate=5e-5,
+        learning_rate=1e-4,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=16,
@@ -163,7 +163,7 @@ def main():
     if TASK == "seq_cls" and model.config.model_type == "llama":
         model.config.problem_type = "single_label_classification"
         model.config.num_labels = 2
-        model.config.architectures = LlamaForSequenceClassification
+        model.config.architectures = "LlamaForSequenceClassification"
 
     print(model)
 
@@ -270,7 +270,7 @@ def main():
             r=8,
             lora_alpha=16,
             target_modules="all-linear" if LLAMA else ["query", "value"],
-            lora_dropout=0.1,
+            lora_dropout=0.0,
             bias="none",
             task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
             modules_to_save=modules_to_save
