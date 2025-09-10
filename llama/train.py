@@ -213,7 +213,8 @@ def main():
             strategy=args.class_imbalance_fix,
             seed=42,
             alpha=FL_ALPHA,
-            gamma=FL_GAMMA
+            gamma=FL_GAMMA,
+            sampling_strategy=0.5
         )
 
         # Prepare loss function if needed

@@ -1,4 +1,4 @@
-debug: true
+debug: false
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl

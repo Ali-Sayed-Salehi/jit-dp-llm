@@ -538,14 +538,33 @@ def determine_format_fn(task):
     return format_funct
 
 
-
 def apply_class_imbalance_strategy(
-    dataset,
-    strategy="none",
-    seed=42,
-    alpha=0.25,
-    gamma=2.0
+    dataset: DatasetDict,
+    strategy: str = "none",
+    seed: int = 42,
+    alpha: float = 0.25,
+    gamma: float = 2.0,
+    sampling_strategy=None,
+    label_col: str = "labels"
 ):
+    """
+    sampling_strategy (used when strategy is 'oversampling' or 'undersampling'):
+
+    - float in (0, 1]: desired minority/majority ratio AFTER resampling (binary).
+      Example: 0.3 -> minority_count_after = 0.3 * majority_count_after (not fully balanced).
+
+    - dict: {class_label: target_count_after} for exact per-class totals (multi-class or binary).
+      Example: {0: 5000, 1: 2000}.
+
+    - str: one of imbalanced-learn presets, e.g. 'minority', 'not minority', 'all', 'auto'.
+
+    - callable: f(y) -> dict like above.
+
+    Notes:
+    - For oversampling, float must be in (0, 1]; use dict/callable if you want a class to exceed the majority.
+    - For multiclass with floats, prefer dict/callable for full control.
+    """
+
     train_dataset = dataset["train"]
     eval_dataset = dataset["test"]
     test_dataset = dataset["final_test"]
@@ -557,28 +576,43 @@ def apply_class_imbalance_strategy(
 
     if strategy == "focal_loss":
         print("🔥 Using Focal Loss for class imbalance.")
-        label_counts = Counter(train_dataset["labels"])
+        label_counts = Counter(train_dataset[label_col])
         alpha_dict = {k: alpha for k in label_counts.keys()}
         return dataset, None, {"alpha": alpha_dict, "gamma": gamma}, before_dist, before_dist
 
     elif strategy == "weighted_loss":
         print("🔄 Using Weighted Cross Entropy Loss.")
-        label_counts = Counter(train_dataset["labels"])
+        label_counts = Counter(train_dataset[label_col])
         total = sum(label_counts.values())
+        # weights[i] = total / count_i  (inverse-frequency)
         weights = [total / label_counts[i] for i in sorted(label_counts)]
         for i, weight in enumerate(weights):
             print(f"  Class {i} weight: {weight:.4f}")
         return dataset, weights, None, before_dist, before_dist
 
-    elif strategy == "oversampling":
-        print("📈 Applying random oversampling to balance dataset.")
+    elif strategy in {"oversampling", "undersampling"}:
+        if sampling_strategy is None:
+            # default behavior matches your previous code: fully balance classes
+            sampling_strategy = "auto"  # imblearn will balance all classes
+
+        print(f"{'📈' if strategy=='oversampling' else '📉'} Applying {strategy} with sampling_strategy={sampling_strategy!r}")
+
         df = pd.DataFrame(train_dataset)
-        X = df.drop(columns=["labels"])
-        y = df["labels"]
-        ros = RandomOverSampler(random_state=seed)
-        X_resampled, y_resampled = ros.fit_resample(X, y)
+        if label_col not in df.columns:
+            raise KeyError(f"Label column '{label_col}' not found in the training dataset.")
+
+        X = df.drop(columns=[label_col])
+        y = df[label_col]
+
+        if strategy == "oversampling":
+            sampler = RandomOverSampler(random_state=seed, sampling_strategy=sampling_strategy)
+        else:
+            sampler = RandomUnderSampler(random_state=seed, sampling_strategy=sampling_strategy)
+
+        X_resampled, y_resampled = sampler.fit_resample(X, y)
+
         resampled_df = X_resampled.copy()
-        resampled_df["labels"] = y_resampled
+        resampled_df[label_col] = y_resampled
         train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
 
         balanced_dataset = DatasetDict({
@@ -588,31 +622,7 @@ def apply_class_imbalance_strategy(
         })
 
         after_dist = compute_class_distribution(balanced_dataset)
-        print("📊 Class distribution after oversampling:")
-        for split, stats in after_dist.items():
-            print(f"  {split}: {stats}")
-
-        return balanced_dataset, None, None, before_dist, after_dist
-
-    elif strategy == "undersampling":
-        print("📉 Applying random undersampling to balance dataset.")
-        df = pd.DataFrame(train_dataset)
-        X = df.drop(columns=["labels"])
-        y = df["labels"]
-        rus = RandomUnderSampler(random_state=seed)
-        X_resampled, y_resampled = rus.fit_resample(X, y)
-        resampled_df = X_resampled.copy()
-        resampled_df["labels"] = y_resampled
-        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
-
-        balanced_dataset = DatasetDict({
-            "train": train_dataset_balanced,
-            "test": eval_dataset,
-            "final_test": test_dataset
-        })
-
-        after_dist = compute_class_distribution(balanced_dataset)
-        print("📊 Class distribution after undersampling:")
+        print(f"📊 Class distribution after {strategy}:")
         for split, stats in after_dist.items():
             print(f"  {split}: {stats}")
 
