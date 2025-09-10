@@ -1,4 +1,4 @@
-debug: false
+debug: true
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
@@ -9,7 +9,7 @@ mixed_precision: bf16
 continue_from_dir: false
 truncation_len: 22000
 chunking_len: 4000           # only for clm
-class_imbalance_fix: null     # oversampling
+class_imbalance_fix: oversampling     # oversampling
 threshold: null
 selection_metric: recall@top_30%       #f1   # recall@top_30%  -  only for seq_ls
 add_new_tokens: true

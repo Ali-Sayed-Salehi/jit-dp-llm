@@ -8,7 +8,8 @@ from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix
 
 # --------------------- argparse ---------------------
 parser = argparse.ArgumentParser(description="Plot fine-tuning metrics for LLaMA JIT defect prediction.")
-parser.add_argument("--metrics_dir", type=str, required=True, help="Path to metrics directory containing live_metrics.jsonl and final_test_results.json")
+parser.add_argument("--metrics_dir", type=str, required=True,
+                    help="Path to metrics directory containing live_metrics.jsonl and final_test_results.json")
 args = parser.parse_args()
 
 metrics_dir = args.metrics_dir
@@ -28,25 +29,22 @@ if os.path.exists(live_metrics_path):
 with open(final_test_results_path) as f:
     final_model_metrics = json.load(f)
 
-# Try to load raw predictions if available
-labels = final_model_metrics.get("true_labels")
-probs = final_model_metrics.get("probabilities")
-preds = final_model_metrics.get("predictions")
-final_metrics = final_model_metrics.get("metrics")
+final_metrics = final_model_metrics.get("metrics", {}) or {}
 
-# If probabilities and labels are not available, skip further plots
-if probs is None or labels is None:
-    print("⚠️ Skipping ROC, PR, and Confusion Matrix plots due to missing predictions in metrics.")
+results_list = final_model_metrics.get("results", []) or []
+
+if len(results_list) == 0:
+    labels = probs = preds = None
 else:
-    probs = np.array(probs)
-    labels = np.array(labels)
-    preds = np.array(preds)
+    labels = np.array([r["true_label"] for r in results_list], dtype=int)
+    preds  = np.array([r["prediction"] for r in results_list], dtype=int)
+    probs  = np.array([r["confidence"] for r in results_list], dtype=float)
 
 # --------------------- 1. Loss Curve ---------------------
 train_steps = [m["step"] for m in live_metrics if m["type"] == "train" and "loss" in m["metrics"]]
-train_loss = [m["metrics"]["loss"] for m in live_metrics if m["type"] == "train" and "loss" in m["metrics"]]
-eval_steps = [m["step"] for m in live_metrics if m["type"] == "eval" and "eval_loss" in m["metrics"]]
-eval_loss = [m["metrics"]["eval_loss"] for m in live_metrics if m["type"] == "eval" and "eval_loss" in m["metrics"]]
+train_loss  = [m["metrics"]["loss"] for m in live_metrics if m["type"] == "train" and "loss" in m["metrics"]]
+eval_steps  = [m["step"] for m in live_metrics if m["type"] == "eval" and "eval_loss" in m["metrics"]]
+eval_loss   = [m["metrics"]["eval_loss"] for m in live_metrics if m["type"] == "eval" and "eval_loss" in m["metrics"]]
 
 plt.figure(figsize=(10, 6))
 plt.plot(train_steps, train_loss, label="Train Loss")
@@ -61,10 +59,7 @@ plt.close()
 
 # --------------------- 2. Evaluation Metric Trends ---------------------
 plt.figure(figsize=(10, 6))
-
 metrics_to_plot = ["eval_f1", "eval_precision", "eval_recall", "eval_accuracy"]
-
-# Use a color cycle to keep colors consistent
 color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 for i, metric in enumerate(metrics_to_plot):
@@ -73,8 +68,7 @@ for i, metric in enumerate(metrics_to_plot):
     if steps:
         color = color_cycle[i % len(color_cycle)]
         plt.plot(steps, values, label=f"{metric} (eval)", color=color)
-
-        # Final test value
+        # Final value from test metrics (drop 'eval_' prefix)
         final_metric_name = metric.replace("eval_", "")
         final_value = final_metrics.get(final_metric_name)
         if final_value is not None:
@@ -83,21 +77,16 @@ for i, metric in enumerate(metrics_to_plot):
 plt.xlabel("Steps")
 plt.ylabel("Score")
 plt.title("Evaluation Metrics over Steps (with Final Test Values)")
-
-# Move legend outside the plot area on the right
 plt.legend(loc='center left', bbox_to_anchor=(1.05, 0.5))
-
 plt.grid(True)
-plt.tight_layout()  # Adjust layout to make room for legend
+plt.tight_layout()
 plt.savefig(os.path.join(plots_dir, "eval_metrics_curve.png"), bbox_inches='tight')
 plt.close()
 
 # --------------------- 2b. Recall@Top-K% Trends ---------------------
 plt.figure(figsize=(10, 6))
-
 topk_metrics = ["eval_recall@top_5%", "eval_recall@top_10%", "eval_recall@top_30%"]
 color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
 plotted_any = False
 
 for i, metric in enumerate(topk_metrics):
@@ -108,7 +97,6 @@ for i, metric in enumerate(topk_metrics):
         color = color_cycle[i % len(color_cycle)]
         plt.plot(steps, values, label=f"{metric} (eval)", color=color)
 
-        # Try to match final test metric without "eval_" prefix
         final_metric_name = metric.replace("eval_", "")
         final_value = final_metrics.get(final_metric_name)
         if final_value is not None:
@@ -125,6 +113,12 @@ if plotted_any:
     plt.close()
 else:
     print("⚠️ No Recall@Top-K% metrics found in live_metrics.jsonl. Skipping Recall@Top-K% plot.")
+
+# --------------------- Guard: predictions available? ---------------------
+if probs is None or labels is None:
+    print("⚠️ Skipping ROC, PR, Confusion Matrix, and related plots due to missing predictions in metrics.")
+    print(f"✅ Plots saved (loss/metric trends) to: {plots_dir}")
+    raise SystemExit(0)
 
 # --------------------- 3. ROC Curve ---------------------
 fpr, tpr, _ = roc_curve(labels, probs)
@@ -153,22 +147,23 @@ plt.close()
 # --------------------- 5. Confusion Matrix ---------------------
 conf_mat = confusion_matrix(labels, preds)
 plt.figure(figsize=(6, 5))
-sns.heatmap(conf_mat, annot=True, fmt="d", cmap="Blues", xticklabels=["Non-Buggy", "Buggy"], yticklabels=["Non-Buggy", "Buggy"])
+sns.heatmap(conf_mat, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Non-Buggy", "Buggy"], yticklabels=["Non-Buggy", "Buggy"])
 plt.xlabel("Predicted")
 plt.ylabel("Actual")
 plt.title("Confusion Matrix")
 plt.savefig(os.path.join(plots_dir, "confusion_matrix.png"))
 plt.close()
 
-# --------------------- 6. Recall@Top-K% Curve ---------------------
+# --------------------- 6. Recall@Top-K% Curve (sweep) ---------------------
 sorted_indices = np.argsort(-probs)
 sorted_labels = labels[sorted_indices]
 percentages = np.linspace(0.01, 0.5, 30)
 recalls = []
 total_positives = np.sum(labels)
 for pct in percentages:
-    k = int(len(probs) * pct)
-    recall_at_k = np.sum(sorted_labels[:k]) / total_positives
+    k = max(1, int(len(probs) * pct))
+    recall_at_k = np.sum(sorted_labels[:k]) / total_positives if total_positives > 0 else 0.0
     recalls.append(recall_at_k)
 
 plt.figure(figsize=(10, 6))
