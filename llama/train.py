@@ -14,7 +14,8 @@ from transformers import (
 )
 from peft import (
     LoraConfig,
-    TaskType
+    TaskType,
+    PrefixTuningConfig
 )
 
 from utils import *
@@ -97,11 +98,11 @@ def main():
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        learning_rate=5e-5,
+        learning_rate=1e-3 if args.peft == "prefix_tuning" else 1e-4,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=16,
-        gradient_checkpointing = True,
+        gradient_checkpointing = False if args.peft == "prefix_tuning" else True ,
         num_train_epochs=3,
         max_steps=1 if DEBUG else -1,
         weight_decay=0.01,
@@ -163,12 +164,12 @@ def main():
     if TASK == "seq_cls" and model.config.model_type == "llama":
         model.config.problem_type = "single_label_classification"
         model.config.num_labels = 2
-        model.config.architectures = LlamaForSequenceClassification
+        model.config.architectures = "LlamaForSequenceClassification"
 
     print(model)
 
     # ------------------------- Gradient Checkpointing -------------------------
-    model.config.use_cache = not training_args.gradient_checkpointing
+    model.config.use_cache = False
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # ------------------------- Tokenizer -------------------------
@@ -193,7 +194,7 @@ def main():
         model=model,
         task=TASK,
         add_new_tokens=args.add_new_tokens,
-        use_lora=bool(args.lora),
+        use_peft=bool(args.peft),
     )
 
     # ------------------------- Load dataset -------------------------
@@ -259,34 +260,45 @@ def main():
     data_collator = determine_data_collator(TASK, tokenizer)
 
     # ------------------------- LORA -------------------------
-    if args.lora:
-        print("✨ Applying LoRA...")
+    if args.peft:
+        print(f"✨ Applying PEFT with {args.peft}...")
 
         modules_to_save = None
         if TASK == "clm" and token_info.get("modules_to_save_update"):
             modules_to_save = ['lm_head']
+        elif TASK == "seq_cls":
+            modules_to_save = ['score']
 
-        lora_config = LoraConfig(
-            r=8,
-            lora_alpha=16,
-            target_modules="all-linear" if LLAMA else ["query", "value"],
-            lora_dropout=0.1,
-            bias="none",
-            task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
-            modules_to_save=modules_to_save
-        )
+        peft_config = None
+        if args.peft == "lora":
+            peft_config = LoraConfig(
+                r=8,
+                lora_alpha=16,
+                target_modules="all-linear" if LLAMA else ["query", "value"],
+                lora_dropout=0.0,
+                bias="none",
+                task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
+                modules_to_save=modules_to_save
+            )
+        elif args.peft == "prefix_tuning":
+            peft_config = PrefixTuningConfig(
+                task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
+                num_virtual_tokens=8,
+                prefix_projection=False,
+                modules_to_save=modules_to_save
+            )
 
         # Make only the new embedding rows trainable (if PEFT supports it)
         if token_info.get("added_token_ids"):
-            if hasattr(lora_config, "trainable_token_indices"):
-                lora_config.trainable_token_indices = {"embed_tokens": token_info["added_token_ids"]}
-                print(f"🔓 PEFT will train only new embed rows: {lora_config.trainable_token_indices['embed_tokens']}")
+            if hasattr(peft_config, "trainable_token_indices"):
+                peft_config.trainable_token_indices = {"embed_tokens": token_info["added_token_ids"]}
+                print(f"🔓 PEFT will train only new embed rows: {peft_config.trainable_token_indices['embed_tokens']}")
             else:
-                print("⚠️ Your PEFT version may not support `trainable_token_indices`. "
-                    "Consider upgrading PEFT. Falling back to adapter-only (new token rows may learn slowly).")
-                lora_config.modules_to_save.append("embed_tokens")
+                print("⚠️ Your PEFT config/version may not support `trainable_token_indices`. "
+                    "Consider upgrading PEFT. Falling back to saving the entire embedding layer instead of new tokens.")
+                peft_config.modules_to_save.append("embed_tokens")
 
-        model = prepare_peft_model(model, lora_config, training_args)
+        model = prepare_peft_model(model, peft_config, training_args)
 
         # Summarize trainable parameters
         _ = count_trainable_params(

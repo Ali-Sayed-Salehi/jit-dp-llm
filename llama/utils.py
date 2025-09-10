@@ -153,7 +153,7 @@ def parse_training_args():
         help="Optional decision threshold for classifying as class 1 (between 0 and 1). If not set, uses argmax."
     )
     parser.add_argument("--quant", action="store_true", help="Enable quantization with BitsAndBytesConfig")
-    parser.add_argument("--lora", action="store_true", help="Enable LoRA fine-tuning using PEFT")
+    parser.add_argument("--peft", type=str, choices=["lora", "prefix_tuning"], help="Enable LoRA or prefix tuning using PEFT")
     parser.add_argument("--mixed_precision", type=str,
         choices=["fp32", "fp16", "bf16"],
         help="Choose one of: fp32, fp16, bf16"
@@ -837,7 +837,7 @@ def save_training_config(
         "original_class_distribution": original_class_distribution,
         "decision_threshold": args.threshold if args.threshold is not None else "argmax",
         "quantized": args.quant,
-        "lora_enabled": args.lora,
+        "peft": args.peft,
         "focal_loss_gamma": FL_GAMMA if args.class_imbalance_fix == "focal_loss" else "None",
         "focal_loss_alpha": FL_ALPHA if args.class_imbalance_fix == "focal_loss" else "None",
         "dtype": str(dtype),
@@ -857,7 +857,12 @@ def save_training_config(
     # ------------------ Save ------------------
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     with open(config_path, "w") as f:
-        json.dump(config_snapshot, f, indent=2)
+        for k, v in config_snapshot.items():
+            try:
+                json.dumps({k: v})
+            except TypeError as e:
+                print(f"❌ Can't serialize key '{k}': {type(v)} -> {v}")
+                raise
 
     print(f"⚙️ Logged config to: {config_path}")
 
@@ -1101,7 +1106,7 @@ def chunk_long_samples(
 
 
 
-def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, use_lora: bool):
+def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, use_peft: bool):
     """
     Ensures SPECIAL_TOKENS exist in the tokenizer and the model has the right embedding size.
     Returns:
@@ -1154,7 +1159,7 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, us
 
     # LoRA + CLM: if we just added tokens, make sure LM head gets saved with adapters
     # (we set this at LoraConfig time, but we expose a hint so caller can set modules_to_save=['lm_head'])
-    if use_lora and task == "clm" and info["added_now"]:
+    if use_peft and task == "clm" and info["added_now"]:
         info["modules_to_save_update"] = True
         print("📎 Detected new tokens with LoRA in CLM. Recommend modules_to_save += ['lm_head'].")
 
