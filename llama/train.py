@@ -165,7 +165,7 @@ def main():
     if TASK == "seq_cls" and model.config.model_type == "llama":
         model.config.problem_type = "single_label_classification"
         model.config.num_labels = 2
-        model.config.architectures = "LlamaForSequenceClassification"
+        model.config.architectures = ["LlamaForSequenceClassification"]
 
     print(model)
 

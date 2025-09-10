@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=train-tril
-#SBATCH --output=/home/$USER/links/scratch/repos/perf-pilot/slurm_jobs/%x-%j.out
+#SBATCH --output=/home/alis/links/scratch/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --account=def-pcr
