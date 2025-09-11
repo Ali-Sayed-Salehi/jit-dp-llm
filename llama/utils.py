@@ -5,6 +5,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 import yaml
 from collections import Counter, defaultdict
+from pathlib import Path
+import shutil
 import numpy as np
 import pandas as pd
 import torch
@@ -350,16 +352,29 @@ def load_and_split_dataset(
 
         # Only copy if slurm_tmpdir is provided
         if slurm_tmpdir and slurm_tmpdir.strip():
-            dataset_relpath = os.path.relpath(dataset_path, start=repo_path)
-            dest_dir = os.path.join(slurm_tmpdir, os.path.dirname(dataset_relpath))
-            dest_file = os.path.join(dest_dir, os.path.basename(dataset_path))
+            src = Path(dataset_path).resolve()
+            repo = Path(repo_path).resolve()
+
+            # Decide how to place the file inside TMPDIR:
+            # - If src is inside repo, keep its relative path under repo
+            # - Otherwise, flatten (just copy filename into TMPDIR)
+            try:
+                src_relative_to_repo = src.relative_to(repo)
+                rel_parent = src_relative_to_repo.parent  # e.g., datasets/apachejit
+            except ValueError:
+                # Not under repo; don't try to recreate the whole absolute path
+                rel_parent = Path("")
+
+            dest_dir = Path(slurm_tmpdir) / rel_parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_file = dest_dir / src.name
 
             try:
-                os.makedirs(dest_dir, exist_ok=True)
-                run(["rsync", "-a", "--delete", dataset_path, dest_file], check=True)
-                print(f"✅ Copied {dataset_path} → {dest_file}")
-                dataset_copy_path = dest_file
-            except (OSError, CalledProcessError) as e:
+                # shutil.copy2 is enough here; rsync isn't necessary for single files
+                shutil.copy2(src, dest_file)
+                print(f"✅ Copied {src} → {dest_file}")
+                dataset_copy_path = str(dest_file)
+            except OSError as e:
                 print(f"⚠️ Could not copy dataset to SLURM tmpdir: {e}")
                 print(f"🔄 Falling back to using original dataset path: {dataset_path}")
         else:
@@ -395,6 +410,7 @@ def load_and_split_dataset(
         "test": eval_dataset,
         "final_test": test_dataset
     })
+
 
 def enable_gradient_checkpointing(
     model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]

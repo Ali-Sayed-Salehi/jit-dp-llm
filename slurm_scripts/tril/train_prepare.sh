@@ -1,7 +1,9 @@
 #!/bin/bash
 
 echo "loading modules"
+module load arch/avx512
 module load StdEnv/2023 
+module load intel/2025.2.0
 module load nvhpc/25.1 
 module load openmpi/5.0.3
 module load cuda/12.6 
@@ -18,5 +20,8 @@ source /home/$USER/links/scratch/repos/perf-pilot/venv/bin/activate
 
 nvidia-smi
 free -h
-export="DS_SKIP_CUDA_CHECK 1"
-export="PYTORCH_CUDA_ALLOC_CONF expandable_segments:True"
+export DS_SKIP_CUDA_CHECK=1
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+ds_report
+transformers env

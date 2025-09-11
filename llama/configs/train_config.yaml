@@ -3,13 +3,13 @@ task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/llama3.1_apachejit
-quant: true
-lora: true
+quant: false
+lora: false
 flash_attn_2: true
 mixed_precision: bf16
 continue_from_dir: false
-truncation_len: 22000
-chunking_len: 4000           # only for clm
+truncation_len: 20000
+chunking_len: 10           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
 selection_metric: recall@top_30%       #f1   # recall@top_30%  -  only for seq_ls
