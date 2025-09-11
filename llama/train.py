@@ -346,15 +346,6 @@ def main():
     # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
-    if TASK == "seq_cls":
-        run_final_inference(
-            trainer=trainer,
-            test_dataset=final_dataset["final_test"],
-            metrics_dir=metrics_dir,
-            percentages=RECALL_AT_TOP_K_PERCENTAGES,
-            threshold=args.threshold,
-        )
-
     # ---------------------------- Save ----------------------------
     # save_model_safely(trainer, finetuned_model_dir)
 
