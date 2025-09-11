@@ -8,10 +8,11 @@ lora: false
 flash_attn_2: true
 mixed_precision: bf16
 continue_from_dir: false
-truncation_len: 20000
-chunking_len: 10           # only for clm
+truncation_len: null
+chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
 selection_metric: recall@top_30%       #f1   # recall@top_30%  -  only for seq_ls
 add_new_tokens: true
 slurm_tmpdir_env: SLURM_TMPDIR   # SLURM_TMPDIR   # TMPDIR
+continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output

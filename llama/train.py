@@ -127,7 +127,8 @@ def main():
         eval_accumulation_steps=16 if TASK == "clm" else None,
         lr_scheduler_type="cosine",
         warmup_ratio=0.0,
-        label_smoothing_factor=0.05,
+        label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
+        # torch_compile=True,
         # lr_scheduler_type="reduce_lr_on_plateau"
     )
 
@@ -216,7 +217,7 @@ def main():
             seed=42,
             alpha=FL_ALPHA,
             gamma=FL_GAMMA,
-            sampling_strategy=0.5
+            sampling_strategy=0.8
         )
 
         # Prepare loss function if needed
@@ -344,6 +345,15 @@ def main():
 
     # ---------------------------- Train ----------------------------
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
+
+    if TASK == "seq_cls":
+        run_final_inference(
+            trainer=trainer,
+            test_dataset=final_dataset["final_test"],
+            metrics_dir=metrics_dir,
+            percentages=RECALL_AT_TOP_K_PERCENTAGES,
+            threshold=args.threshold,
+        )
 
     # ---------------------------- Save ----------------------------
     # save_model_safely(trainer, finetuned_model_dir)

@@ -1241,6 +1241,7 @@ def resolve_tokenizer_dir(model_path: str, continue_from_dir: str | None) -> str
             if d.startswith("checkpoint-"):
                 tokenizer_load_dir = os.path.join(continue_from_dir, d)
                 break
+    print(f"-> Loading tokenizer from {tokenizer_load_dir}")
     return tokenizer_load_dir
 
 
