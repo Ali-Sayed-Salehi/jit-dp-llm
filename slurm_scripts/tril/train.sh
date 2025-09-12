@@ -3,7 +3,7 @@
 #SBATCH --job-name=train-tril
 #SBATCH --output=/home/alis/links/scratch/repos/perf-pilot/slurm_jobs/%x-%j.out
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
+#SBATCH --gpus-per-node=1
 #SBATCH --time=24:00:00
 #SBATCH --account=def-pcr
 #SBATCH --partition=compute

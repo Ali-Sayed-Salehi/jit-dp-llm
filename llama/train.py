@@ -97,7 +97,7 @@ def main():
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        learning_rate=1e-4,
+        learning_rate=1e-3,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=16,
@@ -217,7 +217,7 @@ def main():
             seed=42,
             alpha=FL_ALPHA,
             gamma=FL_GAMMA,
-            sampling_strategy=0.8
+            sampling_strategy=0.7
         )
 
         # Prepare loss function if needed
