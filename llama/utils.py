@@ -161,6 +161,15 @@ def parse_training_args():
         choices=["fp32", "fp16", "bf16"],
         help="Choose one of: fp32, fp16, bf16"
     )
+    parser.add_argument("--learning_rate", type=float, help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, help="weight_decay")
+    parser.add_argument("--num_train_epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--resampling_ratio", type=float, help="float in (0, 1]: desired minority/majority ratio AFTER resampling (binary)")
+    parser.add_argument("--lora_r", type=int, help="lora_r")
+    parser.add_argument("--lora_alpha", type=int, help="lora_alpha")
+    parser.add_argument("--lora_dropout", type=float, help="lora_dropout")
+    parser.add_argument("--gradient_accumulation_steps", type=int, help="gradient_accumulation_steps")
+    parser.add_argument("--lr_warmup_ratio", type=float, help="Learning rate warmup ratio")
     parser.add_argument(
         "--continue_from_dir", 
         type=str, 

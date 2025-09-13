@@ -8,6 +8,7 @@ import csv
 import argparse
 from fetch_commit_data import get_commit_diff, get_commit_message
 from javalang_structured_diff import extract_structured_diff
+from tqdm.auto import tqdm
 
 # ---------------------------- Parse Args ----------------------------
 parser = argparse.ArgumentParser()
@@ -68,7 +69,7 @@ OWNER = "apache"
 fail_file_exists = os.path.exists(fail_path)
 
 if args.struc:
-    for commit in apachejit_list:
+    for commit in tqdm(apachejit_list, desc="Extracting diffs", unit="commit"):
         commit_hash = commit.get('commit_id')
         if commit_hash in processed_commit_ids:
             print(f"⏩ Skipping already processed commit {commit_hash}")
@@ -107,7 +108,7 @@ else:
     RETRY_DELAY = 1  # seconds
     REQUEST_DELAY = 1.4  # GitHub API limit ~5000 req/hour
 
-    for commit in apachejit_list:
+    for commit in tqdm(apachejit_list, desc="Extracting diffs", unit="commit"):
         commit_hash = commit.get('commit_id')
         if commit_hash in processed_commit_ids:
             print(f"⏩ Skipping already processed commit {commit_hash}")

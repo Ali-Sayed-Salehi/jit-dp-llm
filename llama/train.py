@@ -97,14 +97,14 @@ def main():
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        learning_rate=1e-3,
+        learning_rate=args.learning_rate,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=16,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing = True,
-        num_train_epochs=3,
+        num_train_epochs=args.num_train_epochs,
         max_steps=1 if DEBUG else -1,
-        weight_decay=0.01,
+        weight_decay=args.weight_decay,
         logging_strategy="steps",
         logging_steps=1 if DEBUG else 50,
         report_to=["tensorboard"],
@@ -125,8 +125,8 @@ def main():
         log_level_replica="warning",
         remove_unused_columns=False,
         eval_accumulation_steps=16 if TASK == "clm" else None,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.0,
+        # lr_scheduler_type="cosine",
+        warmup_ratio=args.lr_warmup_ratio,
         label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
         # torch_compile=True,
         # lr_scheduler_type="reduce_lr_on_plateau"
@@ -217,7 +217,7 @@ def main():
             seed=42,
             alpha=FL_ALPHA,
             gamma=FL_GAMMA,
-            sampling_strategy=0.7
+            sampling_strategy=args.resampling_ratio
         )
 
         # Prepare loss function if needed
@@ -271,10 +271,10 @@ def main():
             modules_to_save = ['lm_head']
 
         lora_config = LoraConfig(
-            r=8,
-            lora_alpha=16,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
             target_modules="all-linear" if LLAMA else ["query", "value"],
-            lora_dropout=0.0,
+            lora_dropout=args.lora_dropout,
             bias="none",
             task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
             modules_to_save=modules_to_save
