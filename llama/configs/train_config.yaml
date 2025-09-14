@@ -1,4 +1,4 @@
-debug: true
+debug: false
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
 dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
@@ -16,11 +16,12 @@ add_new_tokens: true
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 1e-4  
-num_train_epochs: 3
+num_train_epochs: 5
 weight_decay: 0
 resampling_ratio: 0.7
-lora_r: 24
-lora_alpha: 48
+lora_r: 32
+lora_alpha: 64
 lora_dropout: 0
 gradient_accumulation_steps: 32
-lr_warmup_ratio: 0.03
+lr_warmup_ratio: 0.01
+eval_steps: 5

@@ -111,7 +111,7 @@ def main():
         logging_dir=tensorboard_dir,
         save_strategy="steps",
         eval_strategy="steps",
-        eval_steps=1 if DEBUG else 50,
+        eval_steps=1 if DEBUG else args.eval_steps,
         save_steps=1 if DEBUG else 50,
         save_total_limit=2,
         load_best_model_at_end= True,
