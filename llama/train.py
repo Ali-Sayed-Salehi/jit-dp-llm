@@ -312,7 +312,6 @@ def main():
         truncation_len=tokenizer_max_len,
         chunking_len=args.chunking_len if TASK == "clm" else None,
         dtype=DTYPE,
-        DEBUG=DEBUG,
         task=TASK,
         dataset=dataset,
         RECALL_AT_TOP_K_PERCENTAGES=RECALL_AT_TOP_K_PERCENTAGES if TASK == "seq_cls" else None,
