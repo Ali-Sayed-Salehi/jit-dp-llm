@@ -170,6 +170,8 @@ def parse_training_args():
     parser.add_argument("--lora_dropout", type=float, help="lora_dropout")
     parser.add_argument("--gradient_accumulation_steps", type=int, help="gradient_accumulation_steps")
     parser.add_argument("--eval_steps", type=int, help="Run evaluation every x steps")
+    parser.add_argument("--logging_steps", type=int, help="Print training metrics every x steps")
+    parser.add_argument("--save_steps", type=int, help="Save the model every x steps")
     parser.add_argument("--lr_warmup_ratio", type=float, help="Learning rate warmup ratio")
     parser.add_argument(
         "--continue_from_dir", 

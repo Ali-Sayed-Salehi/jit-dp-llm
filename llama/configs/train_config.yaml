@@ -1,7 +1,7 @@
-debug: false
+debug: true
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
-dataset_path: datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
+dataset_path: datasets/apachejit/apachejit_total_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/llama3.1_apachejit
 quant: true
 lora: true
@@ -16,12 +16,14 @@ add_new_tokens: true
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 1e-4  
-num_train_epochs: 5
-weight_decay: 0
+num_train_epochs: 3
+weight_decay: 0.01
 resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
-lora_dropout: 0
+lora_dropout: 0.05
 gradient_accumulation_steps: 32
-lr_warmup_ratio: 0.01
+lr_warmup_ratio: 0.05
 eval_steps: 5
+logging_steps: 5
+save_steps: 50
