@@ -154,10 +154,12 @@ def main():
         )
         optional_kwargs["quantization_config"] = quant_config
 
-    if TASK == "seq_cls":
+    if TASK == "seq_cls" and LLAMA:
         optional_kwargs["id2label"] = {0: "NEGATIVE", 1: "POSITIVE"}
         optional_kwargs["label2id"] = {"NEGATIVE": 0, "POSITIVE": 1}
         optional_kwargs["num_labels"] = 2
+        optional_kwargs["problem_type"] = "single_label_classification"
+        optional_kwargs["architectures"] = ["LlamaForSequenceClassification"]
 
     if args.flash_attn_2 and LLAMA:
         optional_kwargs["attn_implementation"] = "flash_attention_2"
@@ -168,11 +170,6 @@ def main():
         torch_dtype=model_dtype,
         **optional_kwargs   
     )
-
-    if TASK == "seq_cls" and model.config.model_type == "llama":
-        model.config.problem_type = "single_label_classification"
-        model.config.num_labels = 2
-        model.config.architectures = ["LlamaForSequenceClassification"]
 
     print(model)
 
