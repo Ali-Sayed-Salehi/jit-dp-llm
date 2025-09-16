@@ -754,6 +754,12 @@ def determine_data_collator(task, tokenizer):
             tokenizer=tokenizer,
             mlm=False,
         )
+    elif task == "mlm":
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer, 
+            mlm=True, 
+            mlm_probability=0.15
+        )
     else:
         raise ValueError(f"Unknown task type: {task}")
     

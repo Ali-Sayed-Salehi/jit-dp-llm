@@ -10,7 +10,8 @@ from transformers import (
     AutoModelForCausalLM,
     BitsAndBytesConfig,
     set_seed,
-    AutoModelForSequenceClassification
+    AutoModelForSequenceClassification,
+    AutoModelForMaskedLM
 )
 from peft import (
     LoraConfig,
@@ -25,7 +26,7 @@ def main():
     args = parse_training_args()
 
     DEBUG = args.debug
-    LLAMA = True
+
     trainer_callbacks = []
     SLURM_TMPDIR = args.slurm_tmpdir_env
     set_seed(42)
@@ -41,6 +42,7 @@ def main():
 
     TASK_TO_MODEL_CLASS = {
         "clm": AutoModelForCausalLM,
+        "mlm": AutoModelForMaskedLM,
         "seq_cls": AutoModelForSequenceClassification,
     }
 
@@ -82,8 +84,12 @@ def main():
     # ------------------------- HF login -------------------------
     login_to_huggingface(REPO_PATH)
 
+    # ------------------------- Detect model -------------------------
+    cfg = AutoConfig.from_pretrained(MODEL_PATH)
+    LLAMA = ("llama" in cfg.model_type.lower())
+
     # ------------------------- Register custom llama -------------------------
-    if TASK == "seq_cls":
+    if TASK == "seq_cls" and LLAMA:
         register_custom_llama4_if_needed(MODEL_PATH)
 
     # ------------------------- define metrics -------------------------
@@ -127,7 +133,7 @@ def main():
         eval_accumulation_steps=16 if TASK == "clm" else None,
         # lr_scheduler_type="cosine",
         warmup_ratio=args.lr_warmup_ratio,
-        label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
+        # label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
         # torch_compile=True,
         # lr_scheduler_type="reduce_lr_on_plateau"
     )
@@ -137,7 +143,7 @@ def main():
     bnb_4bit_quant_storage_dtype = DTYPE if DTYPE == torch.bfloat16 else torch.float32
     model_dtype = DTYPE if not args.quant else bnb_4bit_quant_storage_dtype
 
-    if args.quant and LLAMA:
+    if args.quant:
         print("🔢 Using 4-bit quantization...")
         quant_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -153,7 +159,7 @@ def main():
         optional_kwargs["label2id"] = {"NEGATIVE": 0, "POSITIVE": 1}
         optional_kwargs["num_labels"] = 2
 
-    if args.flash_attn_2:
+    if args.flash_attn_2 and LLAMA:
         optional_kwargs["attn_implementation"] = "flash_attention_2"
 
     model = ModelClass.from_pretrained(
@@ -186,9 +192,10 @@ def main():
     
     config = model.config
 
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = tokenizer.pad_token_id
+    if LLAMA:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = tokenizer.pad_token_id
 
     # ------------------------- Add special tokens-------------------------
     token_info = add_or_detect_special_tokens(
@@ -263,7 +270,7 @@ def main():
     data_collator = determine_data_collator(TASK, tokenizer)
 
     # ------------------------- LORA -------------------------
-    if args.lora:
+    if args.lora and LLAMA:
         print("✨ Applying LoRA...")
 
         modules_to_save = None
