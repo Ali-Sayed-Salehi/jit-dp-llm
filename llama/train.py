@@ -87,6 +87,8 @@ def main():
     # ------------------------- Detect model -------------------------
     cfg = AutoConfig.from_pretrained(MODEL_PATH)
     LLAMA = ("llama" in cfg.model_type.lower())
+    BIGCODE = any(x in cfg.model_type.lower() for x in ["gpt_bigcode", "starcoder", "starcoder2"])
+    BERT = any(x in cfg.model_type.lower() for x in ["roberta", "bert"])
 
     # ------------------------- Register custom llama -------------------------
     if TASK == "seq_cls" and LLAMA:
@@ -154,14 +156,15 @@ def main():
         )
         optional_kwargs["quantization_config"] = quant_config
 
-    if TASK == "seq_cls" and LLAMA:
+    if TASK == "seq_cls":
         optional_kwargs["id2label"] = {0: "NEGATIVE", 1: "POSITIVE"}
         optional_kwargs["label2id"] = {"NEGATIVE": 0, "POSITIVE": 1}
         optional_kwargs["num_labels"] = 2
         optional_kwargs["problem_type"] = "single_label_classification"
-        optional_kwargs["architectures"] = ["LlamaForSequenceClassification"]
+        # optional_kwargs["architectures"] = ["LlamaForSequenceClassification"]
 
-    if args.flash_attn_2 and LLAMA:
+
+    if args.flash_attn_2 and not BERT:
         optional_kwargs["attn_implementation"] = "flash_attention_2"
 
     model = ModelClass.from_pretrained(
@@ -189,10 +192,11 @@ def main():
     
     config = model.config
 
-    if LLAMA:
+    if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id
+
 
     # ------------------------- Add special tokens-------------------------
     token_info = add_or_detect_special_tokens(
@@ -274,10 +278,13 @@ def main():
         if TASK == "clm" and token_info.get("modules_to_save_update"):
             modules_to_save = ['lm_head']
 
+        target_modules = infer_lora_target_modules(model)
+        print(f"🔧 LoRA target_modules = {target_modules}")
+
         lora_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
-            target_modules="all-linear" if LLAMA else ["query", "value"],
+            target_modules=target_modules,
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type=TaskType.SEQ_CLS if TASK == "seq_cls" else TaskType.CAUSAL_LM,
