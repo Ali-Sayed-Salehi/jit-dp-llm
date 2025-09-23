@@ -1,7 +1,7 @@
 #!/encs/bin/tcsh
 
 #SBATCH --job-name=merge-lora-speed
-#SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
+#SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
@@ -11,24 +11,24 @@
 #SBATCH --constraint=gpu20
 
 echo "Preparing training environment"
-source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
+source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/train_prepare.csh
 
 echo "running the script ..."
 
 # CLM
-# python /speed-scratch/a_s87063/repos/perf-pilot/llama/merge_lora.py \
-#   --base_model /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/merge_lora.py \
+#   --base_model /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
 #   --task causal-lm \
-#   --adapter_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/run_2025-08-27_23-44-11/model \
-#   --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/llama3.1_jit_defects4j \
+#   --adapter_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-08-27_23-44-11/model \
+#   --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/causal-lm/llama3.1_jit_defects4j \
 #   # --dtype fp32
 
 # Sequence classification
-python /speed-scratch/a_s87063/repos/perf-pilot/llama/merge_lora.py \
+python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/merge_lora.py \
   --task seq-cls \
-  --base_model /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --adapter_path /speed-scratch/a_s87063/repos/perf-pilot/llama/training/saved_runs/run_2025-09-02_00-09-19_apachejit_small_struc_recall@30/model \
-  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/trained/sequence-classification/llama3.1_8B_apachejit_small_recall@30 \
+  --base_model /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+  --adapter_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/saved_runs/run_2025-09-02_00-09-19_apachejit_small_struc_recall@30/model \
+  --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/trained/sequence-classification/llama3.1_8B_apachejit_small_recall@30 \
   # --dtype fp32
 
 echo "merging finished"

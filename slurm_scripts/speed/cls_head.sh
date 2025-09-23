@@ -1,7 +1,7 @@
 #!/encs/bin/tcsh
 
 #SBATCH --job-name=cls-head-speed
-#SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
+#SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
@@ -11,7 +11,7 @@
 #SBATCH --constraint=gpu20
 
 echo "Preparing training environment"
-source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
+source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/train_prepare.csh
 
 echo "Running the attach classification head script ..."
 
@@ -24,10 +24,10 @@ echo "Running the attach classification head script ..."
 # #   --dtype bf16
 
 # llama
-python /speed-scratch/a_s87063/repos/perf-pilot/llama/attach_classification_head.py \
-  --base_lm_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/causal-lm/llama3.1_jit_defects4j \
-  --seq_cls_config_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --save_path /speed-scratch/a_s87063/repos/perf-pilot/LLMs/pretrained/sequence-classification/llama3.1_jit_defects4j \
+python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/attach_classification_head.py \
+  --base_lm_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/causal-lm/llama3.1_jit_defects4j \
+  --seq_cls_config_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+  --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/sequence-classification/llama3.1_jit_defects4j \
 #   --dtype fp16
 
 echo "script finished"

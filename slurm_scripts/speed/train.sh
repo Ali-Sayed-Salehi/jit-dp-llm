@@ -1,7 +1,7 @@
 #!/encs/bin/tcsh
 
 #SBATCH --job-name=train-speed
-#SBATCH --output=/speed-scratch/a_s87063/repos/perf-pilot/slurm_jobs/%x-%j.out
+#SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
@@ -10,8 +10,9 @@
 #SBATCH --account=pcr
 #SBATCH --constraint=gpu20
 
+
 echo "Preparing training environment"
-source /speed-scratch/$USER/repos/perf-pilot/slurm_scripts/speed/train_prepare.csh
+source /speed-scratch/a_s87063/repos/jit-dp-llmT/slurm_scripts/speed/train_prepare.csh
 
 nvidia-smi
 free -h
@@ -19,6 +20,6 @@ setenv DS_SKIP_CUDA_CHECK 1
 setenv PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
 
 echo "running the training script"
-accelerate launch --config_file=/speed-scratch/a_s87063/repos/perf-pilot/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
-# python /speed-scratch/a_s87063/repos/perf-pilot/llama/train.py --config /speed-scratch/a_s87063/repos/perf-pilot/llama/configs/train_config.yaml
+accelerate launch --config_file=/speed-scratch/a_s87063/repos/jit-dp-llmT/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/jit-dp-llmT/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llmT/llama/configs/train_config.yaml
+# python /speed-scratch/a_s87063/repos/jit-dp-llmT/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llmT/llama/configs/train_config.yaml
 echo "training finished"

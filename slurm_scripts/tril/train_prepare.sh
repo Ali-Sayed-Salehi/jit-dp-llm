@@ -12,11 +12,13 @@ module load arrow/21.0.0
 module load gcc/14.3
 module list
 
+REPO_ROOT="/home/$USER/links/scratch/repos/jit-dp-llm"
+
 echo "setting env variables"
-source /home/$USER/links/scratch/repos/perf-pilot/slurm_scripts/tril/set_env.sh
+source $REPO_ROOT/slurm_scripts/tril/set_env.sh
 
 echo "activating venv"
-source /home/$USER/links/scratch/repos/perf-pilot/venv/bin/activate
+source $REPO_ROOT/venv/bin/activate
 
 nvidia-smi
 free -h
