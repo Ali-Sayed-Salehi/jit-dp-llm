@@ -10,6 +10,7 @@ source venv/Scripts/activate
 pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 ```
+Create `<jit-dp-llm>/secrets/.env` and fill out the secrets.
 
 Contact the authors to provide the datsets for you, alternatively, you can use the data_extraction directory to create them yourself
 
