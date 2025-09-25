@@ -1248,53 +1248,53 @@ def resolve_tokenizer_dir(model_path: str, continue_from_dir: str | None) -> str
     return tokenizer_load_dir
 
 
-    def infer_lora_target_modules(model):
-        """
-        Heuristically select LoRA targets across common encoders/decoders.
+def infer_lora_target_modules(model):
+    """
+    Heuristically select LoRA targets across common encoders/decoders.
 
-        Covers:
-        - LLaMA/NeoX/StarCoder/CodeGen/GPT-J/ GPT-2: q_proj,k_proj,v_proj,o_proj,c_attn,c_proj,up/down/gate_proj,c_fc
-        - BERT/RoBERTa/CodeBERT: self.query,self.key,self.value, intermediate.dense, output.dense
-        Fallback: 'all-linear'.
-        """
-        # Substrings to probe in module names (ordered by commonality)
-        cand_substrings = [
-            # decoder-style attention
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "c_attn", "c_proj", "attn.c_attn", "attn.c_proj",
-            # decoder-style MLPs
-            "up_proj", "down_proj", "gate_proj", "c_fc", "mlp.c_fc", "mlp.c_proj",
+    Covers:
+    - LLaMA/NeoX/StarCoder/CodeGen/GPT-J/ GPT-2: q_proj,k_proj,v_proj,o_proj,c_attn,c_proj,up/down/gate_proj,c_fc
+    - BERT/RoBERTa/CodeBERT: self.query,self.key,self.value, intermediate.dense, output.dense
+    Fallback: 'all-linear'.
+    """
+    # Substrings to probe in module names (ordered by commonality)
+    cand_substrings = [
+        # decoder-style attention
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "c_attn", "c_proj", "attn.c_attn", "attn.c_proj",
+        # decoder-style MLPs
+        "up_proj", "down_proj", "gate_proj", "c_fc", "mlp.c_fc", "mlp.c_proj",
 
-            # encoder-style attention (BERT/RoBERTa/CodeBERT)
-            "self.query", "self.key", "self.value",
+        # encoder-style attention (BERT/RoBERTa/CodeBERT)
+        "self.query", "self.key", "self.value",
 
-            # encoder-style MLPs
-            "intermediate.dense", "output.dense",
-        ]
+        # encoder-style MLPs
+        "intermediate.dense", "output.dense",
+    ]
 
-        found = set()
-        for name, module in model.named_modules():
-            # PEFT matches substrings on module/param names; we just collect the substrings that appear.
-            # Include Linear and Conv1D (GPT-2 uses Conv1D wrapper).
-            cls = module.__class__.__name__
-            if cls not in {"Linear", "Conv1D"}:
-                continue
-            for s in cand_substrings:
-                if s in name:
-                    found.add(s)
+    found = set()
+    for name, module in model.named_modules():
+        # PEFT matches substrings on module/param names; we just collect the substrings that appear.
+        # Include Linear and Conv1D (GPT-2 uses Conv1D wrapper).
+        cls = module.__class__.__name__
+        if cls not in {"Linear", "Conv1D"}:
+            continue
+        for s in cand_substrings:
+            if s in name:
+                found.add(s)
 
-        if not found:
-            return "all-linear"
+    if not found:
+        return "all-linear"
 
-        # Normalize to a compact, deduped target list PEFT can match by substring
-        priority_order = [
-            "q_proj","k_proj","v_proj","o_proj","c_attn","c_proj",
-            "up_proj","down_proj","gate_proj","c_fc",
-            "self.query","self.key","self.value",
-            "intermediate.dense","output.dense",
-        ]
-        targets = [s for s in priority_order if any(s in f for f in found)]
-        return targets or "all-linear"
+    # Normalize to a compact, deduped target list PEFT can match by substring
+    priority_order = [
+        "q_proj","k_proj","v_proj","o_proj","c_attn","c_proj",
+        "up_proj","down_proj","gate_proj","c_fc",
+        "self.query","self.key","self.value",
+        "intermediate.dense","output.dense",
+    ]
+    targets = [s for s in priority_order if any(s in f for f in found)]
+    return targets or "all-linear"
 
 
 

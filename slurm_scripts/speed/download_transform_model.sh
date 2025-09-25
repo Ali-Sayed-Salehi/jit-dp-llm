@@ -13,6 +13,8 @@
 echo "Preparing training environment"
 source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/train_prepare.csh
 
+setenv HF_HUB_ENABLE_HF_TRANSFER 1
+
 echo "Running the download/transform script ..."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id meta-llama/Llama-3.1-8B --model_head sequence-classification --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/sequence-classification/custom/bf32
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id syzymon/long_llama_code_7b --model_head sequence-classification

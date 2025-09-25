@@ -43,3 +43,4 @@ requests
 treeherder-client
 unidiff
 dotenv
+hf_transfer
