@@ -15,15 +15,15 @@ module list
 REPO_ROOT="/home/$USER/links/scratch/repos/jit-dp-llm"
 
 echo "setting env variables"
-source "$REPO_ROOT/slurm_scripts/tril/set_env.sh"
+source $REPO_ROOT/slurm_scripts/tril/set_env.sh
 
 echo "activating venv"
-source "$REPO_ROOT/venv/bin/activate"
+source $REPO_ROOT/venv/bin/activate
 
-nvidia-smi
-free -h
+# nvidia-smi
+# free -h
 export DS_SKIP_CUDA_CHECK=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-ds_report
-transformers env
+# ds_report
+# transformers env

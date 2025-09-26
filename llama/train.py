@@ -19,6 +19,7 @@ from peft import (
 )
 
 from utils import *
+from checks import *
 
 
 def main():
@@ -82,7 +83,7 @@ def main():
     print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
 
     # ------------------------- HF login -------------------------
-    login_to_huggingface(REPO_PATH)
+    # login_to_huggingface(REPO_PATH)
 
     # ------------------------- Detect model -------------------------
     cfg = AutoConfig.from_pretrained(MODEL_PATH)
