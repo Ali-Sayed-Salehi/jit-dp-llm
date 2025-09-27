@@ -355,7 +355,6 @@ def load_and_split_dataset(
         # Sort and take top 7000
         full_dataset = full_dataset.sort("length", reverse=True)
         final_dataset = full_dataset.select(range(min(7000, len(full_dataset))))
-
     else:
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"❌ Dataset file does not exist: {dataset_path}")
@@ -382,7 +381,6 @@ def load_and_split_dataset(
             dest_file = dest_dir / src.name
 
             try:
-                # shutil.copy2 is enough here; rsync isn't necessary for single files
                 shutil.copy2(src, dest_file)
                 print(f"✅ Copied {src} → {dest_file}")
                 dataset_copy_path = str(dest_file)
@@ -403,12 +401,16 @@ def load_and_split_dataset(
     eval_dataset  = final_dataset.select(range(n_train, n_train + n_eval))
     test_dataset  = final_dataset.select(range(n_train + n_eval, n_total))
 
+    # Optional debug downsampling
     if debug:
         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
 
+    # Shuffle each split independently
     train_dataset = train_dataset.shuffle(seed=seed)
+    eval_dataset  = eval_dataset.shuffle(seed=seed + 1)
+    test_dataset  = test_dataset.shuffle(seed=seed + 2)
 
     # Apply formatter if provided
     if format_fn is not None:
