@@ -172,6 +172,7 @@ def parse_training_args():
     parser.add_argument("--logging_steps", type=int, help="Print training metrics every x steps")
     parser.add_argument("--save_steps", type=int, help="Save the model every x steps")
     parser.add_argument("--lr_warmup_ratio", type=float, help="Learning rate warmup ratio")
+    parser.add_argument("--train_batch_size", type=int, help="per device training batch size")
     parser.add_argument(
         "--continue_from_dir", 
         type=str, 

@@ -15,15 +15,16 @@ selection_metric: f1       #f1   # recall@top_30%  -  only for seq_ls
 add_new_tokens: true
 slurm_tmpdir_env: SLURM_TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
-learning_rate: 1e-5  
+learning_rate: 1e-4  
 num_train_epochs: 3
 weight_decay: 0.01
 resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
-lora_dropout: 0.05
-gradient_accumulation_steps: 32
+lora_dropout: 0.01
+gradient_accumulation_steps: 1
+train_batch_size: 64
 lr_warmup_ratio: 0.05
-eval_steps: 5
+eval_steps: 25
 logging_steps: 5
 save_steps: 50

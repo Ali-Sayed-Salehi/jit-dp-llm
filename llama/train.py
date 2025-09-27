@@ -107,7 +107,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         learning_rate=args.learning_rate,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=args.train_batch_size,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing = True,
