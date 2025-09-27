@@ -10,9 +10,7 @@ __pychache__/
 .idea/
 
 # datasets
-/datasets/apachejit/*
-/datasets/mozilla_perf/*
-/datasets/jit_defects4j/*
+/datasets/*
 
 # LLMs
 LLMs/**/*

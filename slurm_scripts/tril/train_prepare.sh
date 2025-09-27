@@ -24,6 +24,7 @@ source $REPO_ROOT/venv/bin/activate
 # free -h
 export DS_SKIP_CUDA_CHECK=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+export HF_HUB_ENABLE_HF_TRANSFER="1"
 
 # ds_report
 # transformers env
