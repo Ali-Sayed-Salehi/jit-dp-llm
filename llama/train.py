@@ -272,7 +272,7 @@ def main():
     data_collator = determine_data_collator(TASK, tokenizer)
 
     # ------------------------- LORA -------------------------
-    if args.lora and LLAMA:
+    if args.lora:
         print("✨ Applying LoRA...")
 
         modules_to_save = None
