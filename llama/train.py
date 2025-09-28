@@ -97,7 +97,7 @@ def main():
 
     # ------------------------- define metrics -------------------------
     def custom_metrics_seq_cls(eval_pred):
-        return compute_custom_metrics_seq_cls(eval_pred, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
+        return compute_custom_metrics_seq_cls(eval_pred, REPO_PATH, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
 
     trainer_callbacks.extend(
         setup_live_metrics(args.live_metrics, live_metrics_path)
@@ -375,6 +375,7 @@ def main():
             test_dataset=final_dataset["final_test"],
             metrics_dir=metrics_dir,
             percentages=RECALL_AT_TOP_K_PERCENTAGES,
+            repo_root=REPO_PATH,
             threshold=args.threshold,
         )
 

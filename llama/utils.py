@@ -768,57 +768,157 @@ def determine_data_collator(task, tokenizer):
     return collator
 
 
+def _np_softmax(x):
+    x = x - np.max(x, axis=1, keepdims=True)
+    np.exp(x, out=x)
+    x /= np.sum(x, axis=1, keepdims=True)
+    return x
 
-def compute_custom_metrics_seq_cls(eval_pred, threshold=None, percentages=None):
-    accuracy = evaluate.load("accuracy")
-    precision = evaluate.load("precision")
-    recall = evaluate.load("recall")
-    f1 = evaluate.load("f1")
+def _load_metric_local_first(metric_name: str, repo_root):
+    local_path = Path(repo_root) / "metrics" / metric_name
+    if local_path.exists():
+        return evaluate.load(str(local_path))
+    return evaluate.load(metric_name)
 
-    logits, labels = eval_pred
-
-    probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
-
+def _compute_metrics_core(
+    logits,
+    labels,
+    *,
+    repo_root,
+    threshold=None,
+    percentages=None,
+    average="binary",
+    recall_at_top_k_fn=None,
+):
+    """
+    Shared, CPU-only metrics computation.
+    Loads metrics internally via _load_metric_local_first.
+    Returns (metrics_dict, predictions, probs).
+    """
     if percentages is None:
         raise ValueError("You must specify percentages for recall_at_top_k.")
+    if recall_at_top_k_fn is None:
+        raise ValueError("You must provide recall_at_top_k via recall_at_top_k_fn.")
 
-    recall_at_k_metrics = recall_at_top_k(probs[:, 1], labels, percentages=percentages)
+    logits = np.asarray(logits)
+    labels = np.asarray(labels).reshape(-1)
+
+    probs = _np_softmax(logits.copy())
 
     if threshold is not None:
-        predictions = (probs[:, 1] >= threshold).astype(int)
+        preds = (probs[:, 1] >= float(threshold)).astype(int)
     else:
-        predictions = np.argmax(logits, axis=1)
+        preds = logits.argmax(axis=1).astype(int)
 
-    # Prediction distribution
-    class_counts = Counter(predictions)
-    output_distribution = {
-        f"pred_class_{label}": int(count)
-        for label, count in sorted(class_counts.items())
-    }
+    class_counts = Counter(preds)
+    output_distribution = {f"pred_class_{k}": int(v) for k, v in sorted(class_counts.items())}
 
     try:
         roc_auc = roc_auc_score(labels, probs[:, 1])
     except ValueError:
         roc_auc = float("nan")
-
     try:
         pr_auc = average_precision_score(labels, probs[:, 1])
     except ValueError:
         pr_auc = float("nan")
 
+    recall_at_k_metrics = recall_at_top_k_fn(probs[:, 1], labels, percentages=percentages)
+
+    acc_h  = _load_metric_local_first("accuracy",  repo_root)
+    pre_h  = _load_metric_local_first("precision", repo_root)
+    rec_h  = _load_metric_local_first("recall",    repo_root)
+    f1_h   = _load_metric_local_first("f1",        repo_root)
+
+    m_acc = acc_h.compute(predictions=preds, references=labels).get("accuracy")
+    m_pre = pre_h.compute(predictions=preds, references=labels, average=average).get("precision")
+    m_rec = rec_h.compute(predictions=preds, references=labels, average=average).get("recall")
+    m_f1  = f1_h.compute(predictions=preds, references=labels, average=average).get("f1")
+
     metrics = {
-        "accuracy": accuracy.compute(predictions=predictions, references=labels)["accuracy"],
-        "precision": precision.compute(predictions=predictions, references=labels, average="binary")["precision"],
-        "recall": recall.compute(predictions=predictions, references=labels, average="binary")["recall"],
-        "f1": f1.compute(predictions=predictions, references=labels, average="binary")["f1"],
-        "roc_auc": roc_auc,
-        "pr_auc": pr_auc
+        "accuracy":  float(m_acc),
+        "precision": float(m_pre) if m_pre is not None else float("nan"),
+        "recall":    float(m_rec) if m_rec is not None else float("nan"),
+        "f1":        float(m_f1)  if m_f1  is not None else float("nan"),
+        "roc_auc":   float(roc_auc),
+        "pr_auc":    float(pr_auc),
+        **output_distribution,
+        **recall_at_k_metrics,
     }
+    return metrics, preds, probs
 
-    metrics.update(output_distribution)
-    metrics.update(recall_at_k_metrics)
 
+def compute_custom_metrics_seq_cls(
+    eval_pred,
+    repo_root,
+    threshold=None,
+    percentages=None,
+    average="binary",
+):
+    if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+        logits, labels = eval_pred.predictions, eval_pred.label_ids
+    else:
+        logits, labels = eval_pred
+
+    metrics, _, _ = _compute_metrics_core(
+        logits, labels,
+        repo_root=repo_root,
+        threshold=threshold,
+        percentages=percentages,
+        average=average,
+        recall_at_top_k_fn=recall_at_top_k,
+    )
     return metrics
+
+
+def run_final_inference(
+    trainer,
+    test_dataset,
+    metrics_dir,
+    repo_root,
+    percentages,
+    threshold=None,
+    average="binary",
+):
+    print("\n🧪 Running final inference on held-out test set...")
+
+    # Keep commit_id order then drop before predict
+    commit_ids = None
+    if hasattr(test_dataset, "column_names") and "commit_id" in test_dataset.column_names:
+        commit_ids = test_dataset["commit_id"]
+        ds_for_pred = test_dataset.remove_columns(["commit_id"])
+    else:
+        ds_for_pred = test_dataset
+
+    test_results = trainer.predict(ds_for_pred)
+    logits = test_results.predictions
+    labels = test_results.label_ids
+
+    final_metrics, preds, probs = _compute_metrics_core(
+        logits, labels,
+        repo_root=repo_root,
+        threshold=threshold,
+        percentages=percentages,
+        average=average,
+        recall_at_top_k_fn=recall_at_top_k,
+    )
+
+    results = []
+    pos_conf = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
+    for i in range(len(labels)):
+        results.append({
+            "commit_id":  commit_ids[i] if commit_ids is not None else None,
+            "true_label": int(labels[i]),
+            "prediction": int(preds[i]),
+            "confidence": float(pos_conf[i]),
+        })
+
+    os.makedirs(metrics_dir, exist_ok=True)
+    final_test_metrics_path = os.path.join(metrics_dir, "final_test_results.json")
+    with open(final_test_metrics_path, "w") as f:
+        json.dump({"metrics": final_metrics, "results": results}, f, indent=4)
+
+    print(f"📄 Final test set results saved to: {final_test_metrics_path}")
+    print(json.dumps(final_metrics, indent=4))
 
 
 def recall_at_top_k(pred_scores, true_labels, percentages=None):
@@ -991,88 +1091,6 @@ def save_training_metrics(trainer, metrics_dir, filename="metrics.json"):
 
     print(f"✅ Saved metrics to {metrics_save_path}")
     return metrics_save_path
-
-
-def run_final_inference(
-    trainer,
-    test_dataset,
-    metrics_dir,
-    percentages,
-    threshold=None,
-):
-
-    accuracy = evaluate.load("accuracy")
-    precision = evaluate.load("precision")
-    recall = evaluate.load("recall")
-    f1 = evaluate.load("f1")
-
-    print("\n🧪 Running final inference on held-out test set...")
-
-    # --- 1) Preserve commit_id order, then drop it before predict ---
-    commit_ids = None
-    if hasattr(test_dataset, "column_names") and "commit_id" in test_dataset.column_names:
-        commit_ids = test_dataset["commit_id"]
-        ds_for_pred = test_dataset.remove_columns(["commit_id"])
-    else:
-        ds_for_pred = test_dataset
-
-    # --- 2) Predict ---
-    test_results = trainer.predict(ds_for_pred)
-    logits = test_results.predictions
-    labels = test_results.label_ids
-
-    # --- 3) Compute predictions & metrics ---
-    probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
-    preds = np.argmax(probs, axis=1)
-
-    if threshold is not None:
-        preds = (probs[:, 1] >= threshold).astype(int)
-
-    recall_at_k = recall_at_top_k(probs[:, 1], labels, percentages)
-
-    try:
-        final_roc_auc = roc_auc_score(labels, probs[:, 1])
-    except ValueError:
-        final_roc_auc = float("nan")
-
-    try:
-        final_pr_auc = average_precision_score(labels, probs[:, 1])
-    except ValueError:
-        final_pr_auc = float("nan")
-
-    final_metrics = {
-        "accuracy": accuracy.compute(predictions=preds, references=labels)["accuracy"],
-        "precision": precision.compute(predictions=preds, references=labels, average="binary")["precision"],
-        "recall": recall.compute(predictions=preds, references=labels, average="binary")["recall"],
-        "f1": f1.compute(predictions=preds, references=labels, average="binary")["f1"],
-        "roc_auc": final_roc_auc,
-        "pr_auc": final_pr_auc
-    }
-    final_metrics.update(recall_at_k)
-
-    # --- 4) Build per-sample results ---
-    results = []
-    for i in range(len(labels)):
-        results.append({
-            "commit_id": commit_ids[i] if commit_ids is not None else None,
-            "true_label": int(labels[i]),
-            "prediction": int(preds[i]),
-            "confidence": float(probs[i, 1])  # probability for positive class
-        })
-
-    # --- 5) Save everything ---
-    output_payload = {
-        "metrics": final_metrics,
-        "results": results
-    }
-
-    os.makedirs(metrics_dir, exist_ok=True)
-    final_test_metrics_path = os.path.join(metrics_dir, "final_test_results.json")
-    with open(final_test_metrics_path, "w") as f:
-        json.dump(output_payload, f, indent=4)
-
-    print(f"📄 Final test set results saved to: {final_test_metrics_path}")
-    print(json.dumps(final_metrics, indent=4))
 
 
 def chunk_long_samples(

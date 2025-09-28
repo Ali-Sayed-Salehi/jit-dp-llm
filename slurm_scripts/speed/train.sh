@@ -20,6 +20,6 @@ setenv DS_SKIP_CUDA_CHECK 1
 setenv PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
 
 echo "running the training script"
-accelerate launch --config_file=/speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/jit-dp-llm/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/train_config.yaml
+accelerate launch --config_file=/speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/accelerate_config_deepspeed.yaml --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/jit-dp-llm/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/train_config_local.yaml
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/train_config.yaml
 echo "training finished"
