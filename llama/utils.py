@@ -116,7 +116,17 @@ def login_to_huggingface(repo_path: str, env_path: str = "secrets/.env"):
     print("✅ Logged in to Hugging Face.")
 
 
+
 def parse_training_args():
+    # ---- helper: parse CLI lists that may be comma- or space-separated ----
+    class ParseList(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            # values can be [] (when user passes --new_tokens with no items)
+            items = []
+            for v in values:
+                items.extend([s for s in re.split(r"[,\s]+", v) if s])
+            setattr(namespace, self.dest, items)
+
     # First, parse only the config file argument
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", type=str, default=None, help="Path to YAML config file with default arguments")
@@ -129,6 +139,21 @@ def parse_training_args():
             raise FileNotFoundError(f"Config file not found: {known_args.config}")
         with open(known_args.config, "r") as f:
             defaults = yaml.safe_load(f) or {}
+
+    # ---- normalize config-provided new_tokens into list[str] (or keep None) ----
+    if "new_tokens" in defaults:
+        nt = defaults["new_tokens"]
+        if isinstance(nt, str):
+            # allow a single comma/space separated string in YAML if desired
+            defaults["new_tokens"] = [s for s in re.split(r"[,\s]+", nt) if s]
+        elif isinstance(nt, list):
+            # ensure everything is str and non-empty (empty list stays empty)
+            defaults["new_tokens"] = [str(s).strip() for s in nt if str(s).strip()]
+        elif nt is None:
+            # leave as None; we'll coalesce to [] after parsing
+            pass
+        else:
+            raise TypeError("Config key 'new_tokens' must be a list, string, or null.")
 
     # Full parser with defaults from config
     parser = argparse.ArgumentParser(parents=[pre_parser])
@@ -200,7 +225,15 @@ def parse_training_args():
         choices=["seq_cls", "clm"],
         help="sequence classification or causal language modelling."
     )
-    parser.add_argument("--add_new_tokens", action="store_true", help="Whether to add new tokens like <FILE>")
+
+    # ---- NEW: list of new tokens; missing or empty -> [] ----
+    parser.add_argument(
+        "--new_tokens",
+        action=ParseList,
+        nargs="*",                 # zero or more values allowed on CLI
+        help="List of new tokens (space- or comma-separated). Empty or missing becomes []."
+    )
+
     parser.add_argument(
         "--slurm_tmpdir_env",
         type=str,
@@ -209,6 +242,10 @@ def parse_training_args():
 
     args = parser.parse_args()
 
+    # Coalesce to [] so caller never has to check for None
+    if args.new_tokens is None:
+        args.new_tokens = []
+
     # --- Path normalization ---
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -216,12 +253,9 @@ def parse_training_args():
         path_val = getattr(args, key, None)
         if path_val and path_val != "imdb":
             if os.path.isabs(path_val):
-                # Leave absolute paths untouched
                 abs_path = path_val
             else:
-                # Join relative paths to repo_root without resolving symlinks
                 abs_path = os.path.normpath(os.path.join(repo_root, path_val))
-                # Strip "/nfs" if it's just a symlinked prefix
                 if abs_path.startswith("/nfs/"):
                     abs_path = abs_path.replace("/nfs", "", 1)
             setattr(args, key, abs_path)
@@ -246,6 +280,7 @@ def parse_training_args():
     print("=======================================\n")
 
     return args
+
 
 
 def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
@@ -1156,7 +1191,7 @@ def chunk_long_samples(
 
 
 
-def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, use_lora: bool):
+def add_or_detect_special_tokens(tokenizer, model, task: str, new_tokens, use_lora: bool):
     """
     Ensures SPECIAL_TOKENS exist in the tokenizer and the model has the right embedding size.
     Returns:
@@ -1168,7 +1203,22 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, us
         "<FILE>", "</FILE>",
         "<ADDED>", "</ADDED>",
         "<REMOVED>", "</REMOVED>",
+        "[VERY_LOW]", "[LOW]",
+        "[MEDIUM]", "[HIGH]", "[VERY_HIGH]",
+        "[num_lines_added:]",
+        "[num_lines_deleted:]",
+        "[num_files_touched:]",
+        "[num_directories_touched:]",
+        "[num_subsystems_touched:]",
+        "[change_entropy:]",
+        "[num_developers_touched_files:]",
+        "[time_from_last_change:]",
+        "[num_changes_in_files:]",
+        "[author_experience:]",
+        "[author_recent_experience:]",
+        "[author_subsystem_experience:]"
     ]
+
 
     # What does the tokenizer already have?
     existing = set(tokenizer.get_added_vocab().keys())
@@ -1181,7 +1231,7 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, add_new_tokens, us
         "modules_to_save_update": None,
     }
 
-    if not add_new_tokens:
+    if not new_tokens:
         return info
 
     if to_add:

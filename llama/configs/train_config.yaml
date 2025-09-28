@@ -12,7 +12,6 @@ chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
 selection_metric: f1       #f1   # recall@top_30%  -  only for seq_ls
-add_new_tokens: true
 slurm_tmpdir_env: SLURM_TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 1e-4  
@@ -28,3 +27,23 @@ lr_warmup_ratio: 0.05
 eval_steps: 25
 logging_steps: 5
 save_steps: 50
+new_tokens: [
+        "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
+        "<FILE>", "</FILE>",
+        "<ADDED>", "</ADDED>",
+        "<REMOVED>", "</REMOVED>",
+        "[VERY_LOW]", "[LOW]",
+        "[MEDIUM]", "[HIGH]", "[VERY_HIGH]",
+        "[num_lines_added:]",
+        "[num_lines_deleted:]",
+        "[num_files_touched:]",
+        "[num_directories_touched:]",
+        "[num_subsystems_touched:]",
+        "[change_entropy:]",
+        "[num_developers_touched_files:]",
+        "[time_from_last_change:]",
+        "[num_changes_in_files:]",
+        "[author_experience:]",
+        "[author_recent_experience:]",
+        "[author_subsystem_experience:]"
+    ]

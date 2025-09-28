@@ -223,20 +223,18 @@ elif args.mode == "jit_llm_struc":
             author_subsystem_experience = commit.get('asexp_bucketized')
 
             lines = [
-                "<METADATA>",
-                f"num_lines_added: {num_lines_added}",
-                f"num_lines_deleted: {num_lines_deleted}",
-                f"num_files_touched: {num_files_touched}",
-                f"num_directories_touched: {num_directories_touched}",
-                f"num_subsystems_touched: {num_subsystems_touched}",
-                f"change_entropy: {change_entropy}",
-                f"num_developers_touched_files: {num_developers_touched_files}",
-                f"time_from_last_change: {time_from_last_change}",
-                f"num_changes_in_files: {num_changes_in_files}",
-                f"author_experience: {author_experience}",
-                f"author_recent_experience: {author_recent_experience}",
-                f"author_subsystem_experience: {author_subsystem_experience}",
-                "</METADATA>",
+                f"[num_lines_added:] [{num_lines_added}]",
+                f"[num_lines_deleted:] [{num_lines_deleted}]",
+                f"[num_files_touched:] [{num_files_touched}]",
+                f"[num_directories_touched:] [{num_directories_touched}]",
+                f"[num_subsystems_touched:] [{num_subsystems_touched}]",
+                f"[change_entropy:] [{change_entropy}]",
+                f"[num_developers_touched_files:] [{num_developers_touched_files}]",
+                f"[time_from_last_change:] [{time_from_last_change}]",
+                f"[num_changes_in_files:] [{num_changes_in_files}]",
+                f"[author_experience:] [{author_experience}]",
+                f"[author_recent_experience:] [{author_recent_experience}]",
+                f"[author_subsystem_experience:] [{author_subsystem_experience}]",
                 diff,
             ]
             prompt = "\n".join(lines)
@@ -246,6 +244,6 @@ elif args.mode == "jit_llm_struc":
         new_jit_list.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc{'_meta' if args.include_metadata else ''}.jsonl")
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
