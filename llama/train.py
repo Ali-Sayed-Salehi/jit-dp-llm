@@ -136,7 +136,7 @@ def main():
         eval_accumulation_steps=16 if TASK == "clm" else None,
         # lr_scheduler_type="cosine",
         warmup_ratio=args.lr_warmup_ratio,
-        # label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
+        label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
         # torch_compile=True,
         # lr_scheduler_type="reduce_lr_on_plateau"
     )
