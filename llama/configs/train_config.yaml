@@ -46,5 +46,6 @@ new_tokens: [
         "[num_changes_in_files:]",
         "[author_experience:]",
         "[author_recent_experience:]",
-        "[author_subsystem_experience:]"
+        "[author_subsystem_experience:]",
+        "[drs]", "[/drs]"
     ]

@@ -27,6 +27,11 @@ parser.add_argument("--debug", action="store_true", help="Process only a small p
 parser.add_argument("--include_metadata", action="store_true", help="Inlcude other commit features in buckets instead ofnumerical values.")
 parser.add_argument("--dataset_name", type=str, help="apachejit or jit_defects4j.")
 parser.add_argument("--dataset_size", type=str, help="small or total.")
+parser.add_argument(
+    "--clm_mode", 
+    action="store_true", 
+    help="In clm mode, the label and a classification prompt is appened to the diff."
+    )
 
 args = parser.parse_args()
 DEBUG = args.debug
@@ -208,20 +213,20 @@ elif args.mode == "jit_llm_struc":
             continue
         response = "1" if commit.get('buggy') else "0"
 
-        if args.include_metadata:
-            num_lines_added = commit.get('la_bucketized')
-            num_lines_deleted = commit.get('ld_bucketized')
-            num_files_touched = commit.get('nf_bucketized')
-            num_directories_touched = commit.get('nd_bucketized')
-            num_subsystems_touched = commit.get('ns_bucketized')
-            change_entropy = commit.get('ent_bucketized')
-            num_developers_touched_files = commit.get('ndev_bucketized')
-            time_from_last_change = commit.get('age_bucketized')
-            num_changes_in_files = commit.get('nuc_bucketized')
-            author_experience = commit.get('aexp_bucketized')
-            author_recent_experience = commit.get('arexp_bucketized')
-            author_subsystem_experience = commit.get('asexp_bucketized')
+        num_lines_added = commit.get('la_bucketized')
+        num_lines_deleted = commit.get('ld_bucketized')
+        num_files_touched = commit.get('nf_bucketized')
+        num_directories_touched = commit.get('nd_bucketized')
+        num_subsystems_touched = commit.get('ns_bucketized')
+        change_entropy = commit.get('ent_bucketized')
+        num_developers_touched_files = commit.get('ndev_bucketized')
+        time_from_last_change = commit.get('age_bucketized')
+        num_changes_in_files = commit.get('nuc_bucketized')
+        author_experience = commit.get('aexp_bucketized')
+        author_recent_experience = commit.get('arexp_bucketized')
+        author_subsystem_experience = commit.get('asexp_bucketized')
 
+        if args.include_metadata:
             lines = [
                 f"[num_lines_added:] [{num_lines_added}]",
                 f"[num_lines_deleted:] [{num_lines_deleted}]",
@@ -238,12 +243,47 @@ elif args.mode == "jit_llm_struc":
                 diff,
             ]
             prompt = "\n".join(lines)
+
+
+        if args.clm_mode:
+            system_prompt = textwrap.dedent("""\
+                Consider the metadata and code changes and commit messages, 
+                Is this commit likely to cause a bug? If the commit is risky give 1. If not give 0. 
+                Give a single digit and nothing more, only 0 or 1.
+            """)
+
+            lines = [
+                system_prompt,
+                "[drs]",
+                f"[num_lines_added:] [{num_lines_added}]",
+                f"[num_lines_deleted:] [{num_lines_deleted}]",
+                f"[num_files_touched:] [{num_files_touched}]",
+                f"[num_directories_touched:] [{num_directories_touched}]",
+                f"[num_subsystems_touched:] [{num_subsystems_touched}]",
+                f"[change_entropy:] [{change_entropy}]",
+                f"[num_developers_touched_files:] [{num_developers_touched_files}]",
+                f"[time_from_last_change:] [{time_from_last_change}]",
+                f"[num_changes_in_files:] [{num_changes_in_files}]",
+                f"[author_experience:] [{author_experience}]",
+                f"[author_recent_experience:] [{author_recent_experience}]",
+                f"[author_subsystem_experience:] [{author_subsystem_experience}]",
+                diff,
+                "[/drs]",
+                f" {response}"
+            ]
+
+            prompt = "\n".join(lines)
+            prompt = prompt.rstrip()
         else:
             prompt = diff
 
         new_jit_list.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
     new_jit_df = pd.DataFrame(new_jit_list)
-    output_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc{'_meta' if args.include_metadata else ''}.jsonl")
+    output_data_path = os.path.join(
+        REPO_PATH, "datasets", 
+        DATASET_NAME, 
+        f"{DATASET_NAME}_{DATASET_SIZE}_llm_struc{'_meta' if args.include_metadata else ''}{'_clm' if args.clm_mode else ''}.jsonl"
+    )
     new_jit_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")

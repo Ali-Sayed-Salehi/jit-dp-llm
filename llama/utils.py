@@ -1220,7 +1220,8 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, new_tokens, use_lo
         "[num_changes_in_files:]",
         "[author_experience:]",
         "[author_recent_experience:]",
-        "[author_subsystem_experience:]"
+        "[author_subsystem_experience:]",
+        "[drs]", "[/drs]"
     ]
 
 
