@@ -456,10 +456,10 @@ def load_and_split_dataset(
 
     # Apply formatter if provided
     if format_fn is not None:
-        train_dataset = train_dataset.map(format_fn, remove_columns=["prompt"])
-        eval_dataset  = eval_dataset.map(format_fn, remove_columns=["prompt"])
+        train_dataset = train_dataset.map(format_fn, remove_columns=train_dataset.column_names)
+        eval_dataset  = eval_dataset.map(format_fn, remove_columns=eval_dataset.column_names)
         # Keep the commit_id column for traceability
-        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt"])
+        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt", "response"])
 
     return DatasetDict({
         "train": train_dataset,
@@ -603,13 +603,16 @@ def format_for_classification(example):
     else:
         raise KeyError(f"Unrecognized example keys: {list(example.keys())}")
 
-def determine_format_fn(task):
+def determine_format_fn(task, clm_for_seq_cls):
     format_funct = None
 
     if task == "seq_cls":
         format_funct = format_for_classification
     elif task == "clm":
-        format_funct = format_for_lm
+        if clm_for_seq_cls:
+            format_funct = format_for_classification
+        else:
+            format_funct = format_for_lm
     else:
         raise ValueError(f"Unknown task type: {task}")
     
@@ -1352,10 +1355,10 @@ def append_drs_and_label_to_tokens(
     ex: Mapping[str, List[int]],
     *,
     tokenizer,
-    label_key: str = "response",
+    label_key: str = "labels",
     drs_token: str = "[/drs]",
-    zero_token: str = " 0",
-    one_token: str = " 1",
+    zero_token: str = "0",
+    one_token: str = "1",
     strict_single_token: bool = True,
 ) -> Dict[str, List[int]]:
     """

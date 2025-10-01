@@ -37,10 +37,9 @@ def main():
     TASK = args.task_type
     print(f"▶️ Finetuning task type: {TASK}")
 
-    if TASK == "seq_cls":
-        FL_ALPHA = 2
-        FL_GAMMA = 5
-        RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
+    FL_ALPHA = 2
+    FL_GAMMA = 5
+    RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
 
     TASK_TO_MODEL_CLASS = {
         "clm": AutoModelForCausalLM,
@@ -98,26 +97,6 @@ def main():
     # ------------------------- Register custom llama -------------------------
     if TASK == "seq_cls" and LLAMA:
         register_custom_llama4_if_needed(MODEL_PATH)
-
-    # ------------------------- define metrics -------------------------
-    def custom_metrics_seq_cls(eval_pred):
-        return compute_custom_metrics_seq_cls(eval_pred, REPO_PATH, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
-
-    if TASK == "clm" and args.clm_for_seq_cls:
-        clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
-            tokenizer=tokenizer,
-            repo_root=REPO_ROOT,
-            recall_at_top_k_fn=recall_at_top_k,   # your function
-            percentages=[0.05, 0.1, 0.2],
-            threshold=0.5,
-            average="binary",
-            zero_token=" 0",
-            one_token=" 1",
-        )
-
-    trainer_callbacks.extend(
-        setup_live_metrics(args.live_metrics, live_metrics_path)
-    )
 
     # ------------------------- Training arguments -------------------------
     training_args = TrainingArguments(
@@ -228,7 +207,7 @@ def main():
     )
 
     # ------------------------- Load dataset -------------------------
-    format_func = determine_format_fn(TASK)
+    format_func = determine_format_fn(TASK, args.clm_for_seq_cls)
 
     dataset = load_and_split_dataset(
         dataset_path=args.dataset_path,
@@ -238,7 +217,7 @@ def main():
         format_fn=format_func
     )
 
-    if TASK == "seq_cls" and args.class_imbalance_fix:
+    if args.class_imbalance_fix:
         dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
             dataset=dataset,
             strategy=args.class_imbalance_fix,
@@ -289,15 +268,15 @@ def main():
 
     # ------------------------------ clm for seq cls -----------------------------
     if TASK == "clm" and args.clm_for_seq_cls:
-        final_dataset = final_dataset.map(append_drs_and_label_to_tokens, remove_columns=['response'])
+        final_dataset = final_dataset.map(append_drs_and_label_to_tokens, fn_kwargs=dict(tokenizer=tokenizer))
 
         report = check_drs_append(
             final_dataset,
             tokenizer,
-            label_key="response",            # where 0/1 is stored
+            label_key="labels",            # where 0/1 is stored
             drs_token="[/drs]",
-            zero_token=" 0",
-            one_token=" 1",
+            zero_token="0",
+            one_token="1",
             strict_single_token=True,     # ensure " 0"/" 1" are single pieces
             max_errors=10,                # show up to 10 bad examples
             tail_tokens_to_show=8,
@@ -373,6 +352,26 @@ def main():
         FL_GAMMA=FL_GAMMA if TASK == "seq_cls" else None,
         FL_ALPHA=FL_ALPHA if TASK == "seq_cls" else None,
         model_config=model.config.to_dict()
+    )
+
+    # ------------------------- define metrics -------------------------
+    def custom_metrics_seq_cls(eval_pred):
+        return compute_custom_metrics_seq_cls(eval_pred, REPO_PATH, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
+
+    if TASK == "clm" and args.clm_for_seq_cls:
+        clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
+            tokenizer=tokenizer,
+            repo_root=REPO_ROOT,
+            recall_at_top_k_fn=recall_at_top_k,   # your function
+            percentages=[0.05, 0.1, 0.2],
+            threshold=0.5,
+            average="binary",
+            zero_token=" 0",
+            one_token=" 1",
+        )
+
+    trainer_callbacks.extend(
+        setup_live_metrics(args.live_metrics, live_metrics_path)
     )
 
     # ------------------------- Trainer -------------------------
