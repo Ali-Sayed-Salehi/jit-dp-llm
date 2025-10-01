@@ -21,8 +21,8 @@ resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
 lora_dropout: 0.01
-gradient_accumulation_steps: 128
-train_batch_size: 4
+gradient_accumulation_steps: 256
+train_batch_size: 1
 lr_warmup_ratio: 0.05
 eval_steps: 25
 logging_steps: 5
@@ -48,5 +48,5 @@ new_tokens: [
         # "[author_experience:]",
         # "[author_recent_experience:]",
         # "[author_subsystem_experience:]",
-        "[drs]", "[/drs]"           # Mandatory when clm_for_seq_cls: true
+        "[drs]", "[/drs]"           # Mandatory when clm_for_seq_cls is true
     ]

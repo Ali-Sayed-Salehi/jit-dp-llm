@@ -1436,9 +1436,9 @@ def make_compute_metrics_for_clm_seqcls_autoids(
     strict_single_token=True,
 ):
     """
-    Builds a HF `compute_metrics(eval_pred)` for CLM-as-seq-cls WITHOUT passing ID0/ID1.
+    Builds a HF `compute_metrics(eval_pred)` for CLM-as-seq-cls.
     It resolves the two label-token ids from the tokenizer once here.
-    Reports accuracy/precision/recall/f1/roc_auc/pr_auc via your _compute_metrics_core,
+    Reports accuracy/precision/recall/f1/roc_auc/pr_auc via _compute_metrics_core,
     plus `valid_rate` and `num_invalid` (whether the model’s raw top token ∈ {0,1}).
     """
 
@@ -1511,7 +1511,7 @@ def make_compute_metrics_for_clm_seqcls_autoids(
         logits_2 = np.stack([step_logits[:, ID0], step_logits[:, ID1]], axis=1)
         y01 = (y_ids == ID1).astype(int)
 
-        # Use your existing core to compute accuracy/precision/recall/f1/roc_auc/pr_auc etc.
+        # Use the existing core to compute accuracy/precision/recall/f1/roc_auc/pr_auc etc.
         metrics, preds, probs = _compute_metrics_core(
             logits_2,
             y01,

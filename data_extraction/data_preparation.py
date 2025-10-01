@@ -225,20 +225,27 @@ elif args.mode == "jit_llm_struc":
         author_recent_experience = commit.get('arexp_bucketized')
         author_subsystem_experience = commit.get('asexp_bucketized')
 
+        lines = [
+            f"[num_lines_added:] [{num_lines_added}]",
+            f"[num_lines_deleted:] [{num_lines_deleted}]",
+            f"[num_files_touched:] [{num_files_touched}]",
+            f"[num_directories_touched:] [{num_directories_touched}]",
+            f"[num_subsystems_touched:] [{num_subsystems_touched}]",
+            f"[change_entropy:] [{change_entropy}]",
+            f"[num_developers_touched_files:] [{num_developers_touched_files}]",
+            f"[time_from_last_change:] [{time_from_last_change}]",
+            f"[num_changes_in_files:] [{num_changes_in_files}]",
+            f"[author_experience:] [{author_experience}]",
+            f"[author_recent_experience:] [{author_recent_experience}]",
+            f"[author_subsystem_experience:] [{author_subsystem_experience}]",
+        ]
+        meta_data = "\n".join(lines)
+
+        prompt = diff
+
         if args.include_metadata:
             lines = [
-                f"[num_lines_added:] [{num_lines_added}]",
-                f"[num_lines_deleted:] [{num_lines_deleted}]",
-                f"[num_files_touched:] [{num_files_touched}]",
-                f"[num_directories_touched:] [{num_directories_touched}]",
-                f"[num_subsystems_touched:] [{num_subsystems_touched}]",
-                f"[change_entropy:] [{change_entropy}]",
-                f"[num_developers_touched_files:] [{num_developers_touched_files}]",
-                f"[time_from_last_change:] [{time_from_last_change}]",
-                f"[num_changes_in_files:] [{num_changes_in_files}]",
-                f"[author_experience:] [{author_experience}]",
-                f"[author_recent_experience:] [{author_recent_experience}]",
-                f"[author_subsystem_experience:] [{author_subsystem_experience}]",
+                meta_data,
                 diff,
             ]
             prompt = "\n".join(lines)
@@ -251,29 +258,22 @@ elif args.mode == "jit_llm_struc":
                 Give a single digit and nothing more, only 0 or 1.
             """)
 
-            lines = [
-                system_prompt,
-                "[drs]",
-                # f"[num_lines_added:] [{num_lines_added}]",
-                # f"[num_lines_deleted:] [{num_lines_deleted}]",
-                # f"[num_files_touched:] [{num_files_touched}]",
-                # f"[num_directories_touched:] [{num_directories_touched}]",
-                # f"[num_subsystems_touched:] [{num_subsystems_touched}]",
-                # f"[change_entropy:] [{change_entropy}]",
-                # f"[num_developers_touched_files:] [{num_developers_touched_files}]",
-                # f"[time_from_last_change:] [{time_from_last_change}]",
-                # f"[num_changes_in_files:] [{num_changes_in_files}]",
-                # f"[author_experience:] [{author_experience}]",
-                # f"[author_recent_experience:] [{author_recent_experience}]",
-                # f"[author_subsystem_experience:] [{author_subsystem_experience}]",
-                diff,
-                # "[/drs]",
-                # f" {response}"
-            ]
+            if args.include_metadata:
+                lines = [
+                    system_prompt,
+                    "[drs]",
+                    meta_data,
+                    diff
+                ]
+            else:
+                lines = [
+                    system_prompt,
+                    "[drs]",
+                    diff
+                ]
 
             prompt = "\n".join(lines).rstrip()
-        else:
-            prompt = diff
+
 
         new_jit_list.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
