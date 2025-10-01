@@ -1532,3 +1532,141 @@ def make_compute_metrics_for_clm_seqcls_autoids(
         return metrics
 
     return compute_metrics
+
+
+def run_final_inference_clm_seqcls(
+    trainer,
+    test_dataset,
+    tokenizer,
+    metrics_dir,
+    repo_root,
+    percentages,
+    *,
+    threshold=None,
+    average="binary",
+    zero_token="0",
+    one_token="1",
+    strict_single_token=True,   # if False, we’ll use the LAST subtoken id for each class
+):
+    """
+    Final inference for CLM-as-seq-cls:
+      - Assumes each example supervises exactly ONE final label token (others = -100).
+      - Reduces logits to the two class-token columns, computes your standard metrics via
+        _compute_metrics_core, and saves per-example results.
+
+    Output file: <metrics_dir>/final_test_results.json
+    """
+
+    print("\n🧪 Running final inference (CLM → seq-cls) on held-out test set...")
+
+    # ----- resolve label token ids once -----
+    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
+    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
+    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
+        raise ValueError(
+            f"Expected single-token labels for {zero_token!r}/{one_token!r}. "
+            "Either add dedicated tokens (e.g., '[/lbl0]','[/lbl1]') or set strict_single_token=False "
+            "to use the LAST subtoken id."
+        )
+    ID0 = ids0[-1] if len(ids0) >= 1 else tokenizer.unk_token_id
+    ID1 = ids1[-1] if len(ids1) >= 1 else tokenizer.unk_token_id
+
+    # ----- keep commit_id order, then drop it before prediction -----
+    commit_ids = None
+    if hasattr(test_dataset, "column_names") and "commit_id" in test_dataset.column_names:
+        commit_ids = test_dataset["commit_id"]
+        ds_for_pred = test_dataset.remove_columns(["commit_id"])
+    else:
+        ds_for_pred = test_dataset
+
+    # ----- run prediction -----
+    pred_out = trainer.predict(ds_for_pred)
+    logits = np.asarray(pred_out.predictions)  # [B, T, V]
+    labels = np.asarray(pred_out.label_ids)    # [B, T]  (-100 except final label)
+
+    if logits.ndim != 3 or labels.ndim != 2:
+        raise ValueError("Expected logits [B,T,V] and labels [B,T] with -100 masking.")
+
+    B, T, V = logits.shape
+    has_label = labels != -100
+    any_label = has_label.any(axis=1)
+    if not np.any(any_label):
+        raise ValueError("No labeled positions found (labels != -100).")
+
+    rows = np.where(any_label)[0]
+    # labeled position t = last True; context position ctx = t-1
+    last_idx = T - 1 - np.argmax(has_label[rows][:, ::-1], axis=1)
+    ctx = last_idx - 1
+    valid_ctx = ctx >= 0
+    if not np.any(valid_ctx):
+        raise ValueError("No valid context positions (ctx=t-1) found.")
+
+    b = rows[valid_ctx]
+    t = last_idx[valid_ctx]
+    ctx = ctx[valid_ctx]
+
+    # targets (vocab ids) and step logits
+    y_ids = labels[b, t]                 # [N]
+    step_logits = logits[b, ctx, :]      # [N, V]
+
+    # open-vocab diag: is argmax in {ID0, ID1}?
+    top_ids = np.argmax(step_logits, axis=1)
+    in_label_set_pred = (top_ids == ID0) | (top_ids == ID1)
+    valid_rate = float(in_label_set_pred.mean()) if in_label_set_pred.size else 0.0
+    num_invalid = int((~in_label_set_pred).sum())
+
+    # filter to rows whose TARGET is in {ID0,ID1} (should be all in a clean pipeline)
+    target_in_set = (y_ids == ID0) | (y_ids == ID1)
+    dropped_non_label_targets = int((~target_in_set).sum())
+    if not np.any(target_in_set):
+        raise ValueError("All targets at the labeled position are outside {ID0,ID1}.")
+
+    y_ids = y_ids[target_in_set]
+    step_logits = step_logits[target_in_set]
+    selected_rows = b[target_in_set]  # indices into original dataset (for commit_ids alignment)
+
+    # reduce to two-class logits and 0/1 labels
+    logits_2 = np.stack([step_logits[:, ID0], step_logits[:, ID1]], axis=1)  # [N,2]
+    y01 = (y_ids == ID1).astype(int)                                         # [N]
+
+    # compute metrics via your core
+    metrics, preds, probs = _compute_metrics_core(
+        logits_2,
+        y01,
+        repo_root=repo_root,
+        threshold=threshold,
+        percentages=percentages,
+        average=average,
+        recall_at_top_k_fn=recall_at_top_k,
+    )
+
+    # enrich metrics with diagnostics
+    metrics.update({
+        "num_samples": int(y01.shape[0]),
+        "valid_rate": valid_rate,
+        "num_invalid": num_invalid,
+        "dropped_non_label_targets": dropped_non_label_targets,
+        "id0": int(ID0),
+        "id1": int(ID1),
+    })
+
+    # build per-example results (aligned to filtered rows)
+    pos_conf = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
+    results = []
+    for i, row_idx in enumerate(selected_rows):
+        results.append({
+            "commit_id":  (commit_ids[row_idx] if commit_ids is not None else None),
+            "true_label": int(y01[i]),
+            "prediction": int(preds[i]),
+            "confidence": float(pos_conf[i]),
+            "raw_top_in_{0,1}": bool(in_label_set_pred[valid_ctx][target_in_set][i]),
+        })
+
+    # save
+    os.makedirs(metrics_dir, exist_ok=True)
+    out_path = os.path.join(metrics_dir, "final_test_results.json")
+    with open(out_path, "w") as f:
+        json.dump({"metrics": metrics, "results": results}, f, indent=4)
+
+    print(f"📄 Final test set results saved to: {out_path}")
+    print(json.dumps(metrics, indent=4))
