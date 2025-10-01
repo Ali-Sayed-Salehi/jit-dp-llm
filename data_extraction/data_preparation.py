@@ -179,18 +179,17 @@ elif args.mode == "jit_llm_struc":
     input_data_path = os.path.join(REPO_PATH, "datasets", DATASET_NAME, f"{DATASET_NAME}_{DATASET_SIZE}_with_struc_diff.jsonl")
     jit_with_diff_df = pd.read_json(input_data_path, lines=True)
     
-    if args.include_metadata:
-        metadata_cols = ["la","ld","nf","nd","ns","ent","ndev","age","nuc","aexp","arexp","asexp"]
-        # Exclude outliers using 5th and 95th percentiles
-        min_max_stats = {
-            col: tuple(jit_with_diff_df[col].clip(lower=jit_with_diff_df[col].quantile(0.05),
-                                                        upper=jit_with_diff_df[col].quantile(0.95)).agg(['min', 'max']))
-            for col in metadata_cols
-        }
+    metadata_cols = ["la","ld","nf","nd","ns","ent","ndev","age","nuc","aexp","arexp","asexp"]
+    # Exclude outliers using 5th and 95th percentiles
+    min_max_stats = {
+        col: tuple(jit_with_diff_df[col].clip(lower=jit_with_diff_df[col].quantile(0.05),
+                                                    upper=jit_with_diff_df[col].quantile(0.95)).agg(['min', 'max']))
+        for col in metadata_cols
+    }
 
-        for col in metadata_cols:
-            min_val, max_val = min_max_stats[col]
-            jit_with_diff_df[f"{col}_bucketized"] = jit_with_diff_df[col].apply(lambda x: normalize_and_bucketize(x, min_val, max_val))
+    for col in metadata_cols:
+        min_val, max_val = min_max_stats[col]
+        jit_with_diff_df[f"{col}_bucketized"] = jit_with_diff_df[col].apply(lambda x: normalize_and_bucketize(x, min_val, max_val))
 
 
     jit_list = jit_with_diff_df.to_dict(orient='records')
@@ -247,7 +246,7 @@ elif args.mode == "jit_llm_struc":
 
         if args.clm_mode:
             system_prompt = textwrap.dedent("""\
-                Consider the metadata and code changes and commit messages, 
+                Consider the code changes and commit messages, 
                 Is this commit likely to cause a bug? If the commit is risky give 1. If not give 0. 
                 Give a single digit and nothing more, only 0 or 1.
             """)
@@ -255,18 +254,18 @@ elif args.mode == "jit_llm_struc":
             lines = [
                 system_prompt,
                 "[drs]",
-                f"[num_lines_added:] [{num_lines_added}]",
-                f"[num_lines_deleted:] [{num_lines_deleted}]",
-                f"[num_files_touched:] [{num_files_touched}]",
-                f"[num_directories_touched:] [{num_directories_touched}]",
-                f"[num_subsystems_touched:] [{num_subsystems_touched}]",
-                f"[change_entropy:] [{change_entropy}]",
-                f"[num_developers_touched_files:] [{num_developers_touched_files}]",
-                f"[time_from_last_change:] [{time_from_last_change}]",
-                f"[num_changes_in_files:] [{num_changes_in_files}]",
-                f"[author_experience:] [{author_experience}]",
-                f"[author_recent_experience:] [{author_recent_experience}]",
-                f"[author_subsystem_experience:] [{author_subsystem_experience}]",
+                # f"[num_lines_added:] [{num_lines_added}]",
+                # f"[num_lines_deleted:] [{num_lines_deleted}]",
+                # f"[num_files_touched:] [{num_files_touched}]",
+                # f"[num_directories_touched:] [{num_directories_touched}]",
+                # f"[num_subsystems_touched:] [{num_subsystems_touched}]",
+                # f"[change_entropy:] [{change_entropy}]",
+                # f"[num_developers_touched_files:] [{num_developers_touched_files}]",
+                # f"[time_from_last_change:] [{time_from_last_change}]",
+                # f"[num_changes_in_files:] [{num_changes_in_files}]",
+                # f"[author_experience:] [{author_experience}]",
+                # f"[author_recent_experience:] [{author_recent_experience}]",
+                # f"[author_subsystem_experience:] [{author_subsystem_experience}]",
                 diff,
                 # "[/drs]",
                 # f" {response}"

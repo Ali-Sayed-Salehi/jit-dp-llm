@@ -19,7 +19,7 @@ from huggingface_hub import login as huggingface_hub_login
 from datasets import load_dataset, DatasetDict, concatenate_datasets, Dataset
 
 import dataclasses
-from typing import Optional
+from typing import Optional, Dict, List, Mapping
 
 from accelerate.utils import is_peft_model
 from packaging import version
@@ -456,10 +456,10 @@ def load_and_split_dataset(
 
     # Apply formatter if provided
     if format_fn is not None:
-        train_dataset = train_dataset.map(format_fn, remove_columns=train_dataset.column_names)
-        eval_dataset  = eval_dataset.map(format_fn, remove_columns=eval_dataset.column_names)
+        train_dataset = train_dataset.map(format_fn, remove_columns=["prompt"])
+        eval_dataset  = eval_dataset.map(format_fn, remove_columns=["prompt"])
         # Keep the commit_id column for traceability
-        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt", "response"])
+        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt"])
 
     return DatasetDict({
         "train": train_dataset,
@@ -788,16 +788,19 @@ class FocalLoss(nn.Module):
         else:
             return loss
 
-def determine_data_collator(task, tokenizer):
+def determine_data_collator(task, tokenizer, clm_for_seq_cls):
     collator = None
 
     if task == "seq_cls":
         collator = DataCollatorWithPadding(tokenizer=tokenizer)
     elif task == "clm":
-        collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False,
-        )
+        if clm_for_seq_cls:
+            collator = DataCollatorWithPadding(tokenizer=tokenizer)
+        else:
+            collator = DataCollatorForLanguageModeling(
+                tokenizer=tokenizer,
+                mlm=False,
+            )
     elif task == "mlm":
         data_collator = DataCollatorForLanguageModeling(
             tokenizer=tokenizer, 
@@ -1343,3 +1346,176 @@ def infer_lora_target_modules(model):
     ]
     targets = [s for s in priority_order if any(s in f for f in found)]
     return targets or "all-linear"
+
+
+def append_drs_and_label_to_tokens(
+    ex: Mapping[str, List[int]],
+    *,
+    tokenizer,
+    label_key: str = "response",
+    drs_token: str = "[/drs]",
+    zero_token: str = " 0",
+    one_token: str = " 1",
+    strict_single_token: bool = True,
+) -> Dict[str, List[int]]:
+    """
+    Append two tokens to an already-tokenized example:
+      1) [/drs]  (looked up via convert_tokens_to_ids; must already be in vocab)
+      2) class label token (id for ' 0' or ' 1')
+
+    Creates `labels` with -100 everywhere except the final (label) token.
+    """
+
+    drs_id = tokenizer.convert_tokens_to_ids(drs_token)
+    if drs_id == tokenizer.unk_token_id:
+        raise ValueError(
+            f"{drs_token!r} is not in the tokenizer vocab. "
+            f"Add it first (tokenizer.add_tokens(['{drs_token}'])) and reload."
+        )
+
+    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
+    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
+    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
+        raise ValueError(
+            f"Expected single-token labels for {zero_token!r}/{one_token!r}, "
+            "but they split into multiple ids. Either choose single-piece tokens "
+            "for your tokenizer or pre-add dedicated tokens (e.g., '<zero>', '<one>') "
+            "and pass those via zero_token/one_token."
+        )
+    ID0 = ids0[0] if len(ids0) >= 1 else tokenizer.unk_token_id
+    ID1 = ids1[0] if len(ids1) >= 1 else tokenizer.unk_token_id
+
+    input_ids: List[int] = list(ex["input_ids"])
+    attn: List[int] = list(ex.get("attention_mask", [1] * len(input_ids)))
+
+    y = int(ex[label_key])  # expects 0 or 1 (bool also fine)
+    if y not in (0, 1):
+        raise ValueError(f"{label_key!r} must be 0 or 1, got {ex[label_key]!r}")
+    label_id = ID1 if y == 1 else ID0
+
+    # append [/drs] then label
+    input_ids.append(drs_id);  attn.append(1)
+    input_ids.append(label_id); attn.append(1)
+
+    # sparse labels: only final label token contributes to loss
+    labels = [-100] * len(input_ids)
+    labels[-1] = label_id
+
+    return {
+        **ex,
+        "input_ids": input_ids,
+        "attention_mask": attn,
+        "labels": labels,
+    }
+
+
+
+def make_compute_metrics_for_clm_seqcls_autoids(
+    *,
+    tokenizer,
+    repo_root,
+    recall_at_top_k_fn,
+    percentages,                 # e.g. [0.05, 0.1]
+    threshold=None,
+    average="binary",
+    zero_token=" 0",
+    one_token=" 1",
+    strict_single_token=True,
+):
+    """
+    Builds a HF `compute_metrics(eval_pred)` for CLM-as-seq-cls WITHOUT passing ID0/ID1.
+    It resolves the two label-token ids from the tokenizer once here.
+    Reports accuracy/precision/recall/f1/roc_auc/pr_auc via your _compute_metrics_core,
+    plus `valid_rate` and `num_invalid` (whether the model’s raw top token ∈ {0,1}).
+    """
+
+    # ---- resolve label token ids once (at factory creation) ----
+    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
+    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
+    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
+        raise ValueError(
+            f"Expected single-token labels for {zero_token!r}/{one_token!r}. "
+            "Use single-piece tokens or pre-add dedicated tokens (e.g., '<zero>', '<one>') "
+            "and pass those as zero_token/one_token."
+        )
+    ID0 = ids0[0] if len(ids0) >= 1 else tokenizer.unk_token_id
+    ID1 = ids1[0] if len(ids1) >= 1 else tokenizer.unk_token_id
+
+    def compute_metrics(eval_pred):
+        # Accept EvalPrediction or tuple
+        if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+            logits_np, labels_np = eval_pred.predictions, eval_pred.label_ids
+        else:
+            logits_np, labels_np = eval_pred
+
+        logits = np.asarray(logits_np)   # [B, T, V]
+        labels = np.asarray(labels_np)   # [B, T] with -100 except final label pos
+
+        if labels.ndim != 2 or logits.ndim != 3:
+            raise ValueError("Expected logits [B,T,V] and labels [B,T] with -100 masking.")
+
+        B, T, V = logits.shape
+        has_label = labels != -100
+        any_label = has_label.any(axis=1)
+        if not np.any(any_label):
+            return {"num_samples": 0}
+
+        rows = np.where(any_label)[0]
+        last_idx = T - 1 - np.argmax(has_label[rows][:, ::-1], axis=1)  # labeled position t
+        ctx = last_idx - 1                                              # model predicts t at t-1
+        valid_ctx = ctx >= 0
+        if not np.any(valid_ctx):
+            return {"num_samples": 0}
+
+        b = rows[valid_ctx]
+        t = last_idx[valid_ctx]
+        ctx = ctx[valid_ctx]
+
+        y_ids = labels[b, t]                 # vocab ids (should be ID0 or ID1)
+        step_logits = logits[b, ctx, :]      # [N, V]
+
+        # Open-vocab diagnostic: is full-vocab argmax in {ID0, ID1}?
+        top_ids = np.argmax(step_logits, axis=1)
+        in_label_set_pred = (top_ids == ID0) | (top_ids == ID1)
+        valid_rate = float(in_label_set_pred.mean()) if in_label_set_pred.size else 0.0
+        num_invalid = int((~in_label_set_pred).sum())
+
+        # Filter to rows whose *target* is in {ID0, ID1} (should be all)
+        target_in_set = (y_ids == ID0) | (y_ids == ID1)
+        dropped_non_label_targets = int((~target_in_set).sum())
+        if not np.any(target_in_set):
+            return {
+                "num_samples": 0,
+                "valid_rate": valid_rate,
+                "num_invalid": num_invalid,
+                "dropped_non_label_targets": dropped_non_label_targets,
+            }
+
+        y_ids = y_ids[target_in_set]
+        step_logits = step_logits[target_in_set]
+
+        # Build 2-class logits [N,2] and 0/1 labels
+        logits_2 = np.stack([step_logits[:, ID0], step_logits[:, ID1]], axis=1)
+        y01 = (y_ids == ID1).astype(int)
+
+        # Use your existing core to compute accuracy/precision/recall/f1/roc_auc/pr_auc etc.
+        metrics, preds, probs = _compute_metrics_core(
+            logits_2,
+            y01,
+            repo_root=repo_root,
+            threshold=threshold,
+            percentages=percentages,
+            average=average,
+            recall_at_top_k_fn=recall_at_top_k_fn,
+        )
+
+        # Attach diagnostics about whether the model’s raw output was in {0,1}
+        metrics.update({
+            "num_samples": int(len(y01)),
+            "valid_rate": valid_rate,
+            "num_invalid": num_invalid,
+            "dropped_non_label_targets": dropped_non_label_targets,
+        })
+        return metrics
+
+    return compute_metrics

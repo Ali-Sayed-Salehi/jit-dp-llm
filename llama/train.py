@@ -103,6 +103,18 @@ def main():
     def custom_metrics_seq_cls(eval_pred):
         return compute_custom_metrics_seq_cls(eval_pred, REPO_PATH, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
 
+    if TASK == "clm" and args.clm_for_seq_cls:
+        clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
+            tokenizer=tokenizer,
+            repo_root=REPO_ROOT,
+            recall_at_top_k_fn=recall_at_top_k,   # your function
+            percentages=[0.05, 0.1, 0.2],
+            threshold=0.5,
+            average="binary",
+            zero_token=" 0",
+            one_token=" 1",
+        )
+
     trainer_callbacks.extend(
         setup_live_metrics(args.live_metrics, live_metrics_path)
     )
@@ -275,8 +287,32 @@ def main():
         print("✅ Chunked dataset features:")
         print(chunked_dataset['train'].features)
 
+    # ------------------------------ clm for seq cls -----------------------------
+    if TASK == "clm" and args.clm_for_seq_cls:
+        final_dataset = final_dataset.map(append_drs_and_label_to_tokens, remove_columns=['response'])
+
+        report = check_drs_append(
+            final_dataset,
+            tokenizer,
+            label_key="response",            # where 0/1 is stored
+            drs_token="[/drs]",
+            zero_token=" 0",
+            one_token=" 1",
+            strict_single_token=True,     # ensure " 0"/" 1" are single pieces
+            max_errors=10,                # show up to 10 bad examples
+            tail_tokens_to_show=8,
+            check_pad_consistency=True,   # ensure attention_mask==0 → pad_token_id
+        )
+
+        # Quick glance:
+        print({k: report[k] for k in ["num_examples","num_ok","num_errors","error_rate","label_counts"]})
+        if report["num_errors"]:
+            from pprint import pprint
+            pprint(report["errors"][0])   # inspect the first problem case
+
+
     # ------------------------------ Data Collator ------------------------------
-    data_collator = determine_data_collator(TASK, tokenizer)
+    data_collator = determine_data_collator(TASK, tokenizer, args.clm_for_seq_cls)
 
     # ------------------------- LORA -------------------------
     if args.lora:
@@ -348,6 +384,8 @@ def main():
         # if imbalance_strategy == "focal_loss" and focal_loss_fct is not None:
         #     trainer_optional_kwargs["focal_loss_fct"] = focal_loss_fct
 
+    if TASK == "clm" and args.clm_for_seq_cls:
+        trainer_optional_kwargs["compute_metrics"] = clm_for_seq_cls_compute_metrics
 
     trainer = Trainer(
         model=model,
