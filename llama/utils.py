@@ -1198,7 +1198,9 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, new_tokens, use_lo
         info: dict with diagnostics
     """
 
-    SPECIAL_TOKENS = [
+    SPECIAL_TOKENS = new_tokens
+
+    ALL_SPECIAL_TOKENS = [
         "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
         "<FILE>", "</FILE>",
         "<ADDED>", "</ADDED>",
@@ -1225,7 +1227,7 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, new_tokens, use_lo
     to_add = [t for t in SPECIAL_TOKENS if t not in existing]
 
     info = {
-        "already_present": sorted(list(existing.intersection(SPECIAL_TOKENS))),
+        "already_present": sorted(list(existing.intersection(ALL_SPECIAL_TOKENS))),
         "added_now": [],
         "resized_embeddings": False,
         "modules_to_save_update": None,
