@@ -268,12 +268,11 @@ elif args.mode == "jit_llm_struc":
                 f"[author_recent_experience:] [{author_recent_experience}]",
                 f"[author_subsystem_experience:] [{author_subsystem_experience}]",
                 diff,
-                "[/drs]",
-                f" {response}"
+                # "[/drs]",
+                # f" {response}"
             ]
 
-            prompt = "\n".join(lines)
-            prompt = prompt.rstrip()
+            prompt = "\n".join(lines).rstrip()
         else:
             prompt = diff
 

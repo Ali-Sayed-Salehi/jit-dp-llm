@@ -237,6 +237,11 @@ def parse_training_args():
         help="Environment variable that point to slurm temporary directory"
     )
     parser.add_argument(
+        "--clm_for_seq_cls", 
+        action="store_true", 
+        help="Do sequence classification by appending the labels to the text and running the finetuning as a clm task."
+        )
+    parser.add_argument(
         "--pooling",
         type=str,
         help="How to pool activations to feed the classifier head. choices= last, max, mean, none"

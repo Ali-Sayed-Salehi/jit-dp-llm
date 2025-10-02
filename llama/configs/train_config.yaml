@@ -28,6 +28,7 @@ eval_steps: 25
 logging_steps: 5
 save_steps: 50
 pooling: last
+clm_for_seq_cls: true
 new_tokens: [
         "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
         "<FILE>", "</FILE>",
