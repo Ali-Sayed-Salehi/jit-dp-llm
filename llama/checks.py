@@ -1,4 +1,7 @@
 from collections import defaultdict
+from typing import Dict, List, Mapping, Optional, Any, Union
+from datasets import Dataset, DatasetDict
+from transformers import PreTrainedTokenizerBase
 
 from utils import *
 
@@ -136,3 +139,223 @@ def count_trainable_params(model, tokenizer=None, task="clm", added_token_ids=No
             "expected_total_effective": theoretical_total,
         },
     }
+
+
+def _check_one_dataset(
+    ds: Dataset,
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    label_key: str = "label",
+    drs_token: str = "[/drs]",
+    zero_token: str = " 0",
+    one_token: str = " 1",
+    strict_single_token: bool = True,
+    max_errors: int = 20,
+    tail_tokens_to_show: int = 8,
+    check_pad_consistency: bool = True,
+) -> Dict[str, Any]:
+    """
+    Validates that each example looks like:
+      input_ids = [..., drs_id, label_id, (pads...)]
+      attention_mask marks both appended tokens as 1
+      labels == -100 everywhere except the final label position (last non-pad)
+      (optional) ex[label_key] ∈ {0,1} and matches label_id
+
+    Returns a dict with summary stats and up to `max_errors` detailed errors.
+    """
+    # --- resolve ids (no caching) ---
+    drs_id = tokenizer.convert_tokens_to_ids(drs_token)
+    if drs_id == tokenizer.unk_token_id:
+        raise ValueError(
+            f"{drs_token!r} is not in the tokenizer vocab. "
+            f"Add it before mapping (tokenizer.add_tokens(['{drs_token}'])) and reload."
+        )
+
+    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
+    ids1 = tokenizer.encode(one_token, add_special_tokens=False)
+    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
+        raise ValueError(
+            f"Expected single-token labels for {zero_token!r}/{one_token!r}, "
+            "but they split into multiple ids. Add dedicated tokens (e.g., '<zero>', '<one>') "
+            "and pass those via zero_token/one_token, or disable strict_single_token."
+        )
+    ID0 = ids0[0] if len(ids0) >= 1 else tokenizer.unk_token_id
+    ID1 = ids1[0] if len(ids1) >= 1 else tokenizer.unk_token_id
+    label_id_map = {0: ID0, 1: ID1}
+
+    n = len(ds)
+    errors: List[Dict[str, Any]] = []
+    num_ok = 0
+    label_counts = {0: 0, 1: 0, "other": 0}
+    last_label_id_counts: Dict[int, int] = {}
+
+    pad_id = tokenizer.pad_token_id
+
+    for idx in range(n):
+        ex = ds[idx]
+        ids: List[int] = list(ex["input_ids"])
+        attn: List[int] = list(ex.get("attention_mask", [1] * len(ids)))
+        lbls: Optional[List[int]] = ex.get("labels", None)
+
+        ok = True
+        notes: List[str] = []
+
+        # Basic shape checks
+        if len(ids) != len(attn):
+            ok = False
+            notes.append(f"length mismatch: len(input_ids)={len(ids)} len(attention_mask)={len(attn)}")
+
+        # Last non-pad index
+        nonpad_len = sum(attn)
+        if nonpad_len < 2:
+            ok = False
+            notes.append(f"nonpad_len={nonpad_len} (need at least 2 to hold [/drs] and label)")
+            last_idx = None
+        else:
+            last_idx = nonpad_len - 1  # index of final non-pad token
+            drs_pos = last_idx - 1     # position expected for [/drs]
+
+            # Bounds
+            if last_idx >= len(ids) or drs_pos < 0:
+                ok = False
+                notes.append(f"indices out of bounds: last_idx={last_idx}, drs_pos={drs_pos}, len={len(ids)}")
+            else:
+                # Check the two appended tokens
+                if ids[drs_pos] != drs_id:
+                    ok = False
+                    notes.append(f"expected input_ids[{drs_pos}] == drs_id ({drs_id}), got {ids[drs_pos]}")
+                # label_id to expect (if we have label_key and it's binary)
+                expected_label_id = None
+                if label_key in ex:
+                    try:
+                        y = int(ex[label_key])
+                        if y in (0, 1):
+                            expected_label_id = label_id_map[y]
+                            label_counts[y] += 1
+                        else:
+                            label_counts["other"] += 1
+                            notes.append(f"{label_key} not in {{0,1}}: {ex[label_key]!r}")
+                    except Exception as e:
+                        label_counts["other"] += 1
+                        notes.append(f"{label_key} parse error: {e!r}")
+                # If we know the expected label id, verify it
+                if expected_label_id is not None and ids[last_idx] != expected_label_id:
+                    ok = False
+                    notes.append(
+                        f"expected input_ids[{last_idx}] == label_id ({expected_label_id}), got {ids[last_idx]}"
+                    )
+
+                # attention_mask must mark both as 1
+                if attn[drs_pos] != 1 or attn[last_idx] != 1:
+                    ok = False
+                    notes.append(f"attention_mask at drs/label not 1: attn[{drs_pos}]={attn[drs_pos]}, attn[{last_idx}]={attn[last_idx]}")
+
+                # Labels checks
+                if lbls is not None:
+                    if len(lbls) != len(ids):
+                        ok = False
+                        notes.append(f"labels length mismatch: len(labels)={len(lbls)} len(input_ids)={len(ids)}")
+                    else:
+                        not_ignored = [i for i, v in enumerate(lbls) if v != -100]
+                        if len(not_ignored) != 1 or not_ignored[0] != last_idx:
+                            ok = False
+                            notes.append(f"labels should supervise exactly and only last_idx={last_idx}, got positions {not_ignored}")
+                        elif lbls[last_idx] != ids[last_idx]:
+                            ok = False
+                            notes.append(f"labels[last_idx] != input_ids[last_idx]: {lbls[last_idx]} vs {ids[last_idx]}")
+
+                # Count which vocab id is at the final position (diagnostics)
+                last_label_id_counts[ids[last_idx]] = last_label_id_counts.get(ids[last_idx], 0) + 1
+
+        # Optional: pad consistency (positions with mask==0 should be pad_token_id, if defined)
+        if check_pad_consistency and pad_id is not None and len(ids) == len(attn):
+            for j, m in enumerate(attn):
+                if m == 0 and ids[j] != pad_id:
+                    ok = False
+                    notes.append(f"pad inconsistency at pos {j}: attention_mask=0 but input_ids[{j}]={ids[j]} != pad_id={pad_id}")
+                    break
+
+        if ok:
+            num_ok += 1
+        else:
+            # Collect debug tail
+            tail_start = max(0, (len(ids) - tail_tokens_to_show))
+            tail_ids = ids[tail_start:]
+            tail_attn = attn[tail_start:]
+            tail_lbls = lbls[tail_start:] if isinstance(lbls, list) else None
+            # Try to decode tail safely (ignore decoding errors)
+            try:
+                decoded_tail = tokenizer.decode(ids[max(0, (nonpad_len - tail_tokens_to_show)): nonpad_len], skip_special_tokens=False)
+            except Exception:
+                decoded_tail = ""
+            errors.append({
+                "index": idx,
+                "notes": notes,
+                "last_idx": last_idx,
+                "tail_input_ids": tail_ids,
+                "tail_attention_mask": tail_attn,
+                "tail_labels": tail_lbls,
+                "decoded_nonpad_tail": decoded_tail,
+            })
+            if len(errors) >= max_errors:
+                break
+
+    return {
+        "num_examples": n,
+        "num_ok": num_ok,
+        "num_errors": len(errors),
+        "error_rate": 0.0 if n == 0 else (n - num_ok) / n,
+        "label_counts": label_counts,
+        "final_token_id_histogram": last_label_id_counts,
+        "drs_token_id": drs_id,
+        "label_token_ids": {"0": ID0, "1": ID1},
+        "pad_token_id": pad_id,
+        "errors": errors,
+    }
+
+def check_drs_append(
+    data: Union[Dataset, DatasetDict],
+    tokenizer: PreTrainedTokenizerBase,
+    **kwargs,
+) -> Dict[str, Any]:
+    if isinstance(data, DatasetDict):
+        out = {"splits": {}}
+        total = ok = err = 0
+        agg_label_counts = {0: 0, 1: 0, "other": 0}
+        agg_final_hist: Dict[int, int] = {}
+        first_split_report = None
+
+        for name, split in data.items():
+            rep = _check_one_dataset(split, tokenizer, **kwargs)
+            out["splits"][name] = rep
+            total += rep["num_examples"]
+            ok    += rep["num_ok"]
+            err   += rep["num_errors"]
+
+            for k, v in rep["label_counts"].items():
+                agg_label_counts[k] = agg_label_counts.get(k, 0) + v
+            for tok_id, count in rep["final_token_id_histogram"].items():
+                agg_final_hist[tok_id] = agg_final_hist.get(tok_id, 0) + count
+
+            if first_split_report is None:
+                first_split_report = rep
+
+        out.update({
+            "num_examples": total,
+            "num_ok": ok,
+            "num_errors": err,
+            "error_rate": 0.0 if total == 0 else (total - ok) / total,
+            "label_counts": agg_label_counts,
+            "final_token_id_histogram": agg_final_hist,
+        })
+
+        # pass through a few reference fields from any split
+        if first_split_report is not None:
+            out.setdefault("drs_token_id", first_split_report["drs_token_id"])
+            out.setdefault("label_token_ids", first_split_report["label_token_ids"])
+            out.setdefault("pad_token_id", first_split_report["pad_token_id"])
+
+        return out
+
+    # Single Dataset → unchanged
+    return _check_one_dataset(data, tokenizer, **kwargs)

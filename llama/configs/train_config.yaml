@@ -21,30 +21,33 @@ resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
 lora_dropout: 0.01
-gradient_accumulation_steps: 128
-train_batch_size: 4
+gradient_accumulation_steps: 256
+train_batch_size: 1
 lr_warmup_ratio: 0.05
 eval_steps: 25
 logging_steps: 5
 save_steps: 50
+eval_accumulation_steps: 1
 pooling: last
+clm_for_seq_cls: true
 new_tokens: [
         "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
         "<FILE>", "</FILE>",
         "<ADDED>", "</ADDED>",
         "<REMOVED>", "</REMOVED>",
-        "[VERY_LOW]", "[LOW]",
-        "[MEDIUM]", "[HIGH]", "[VERY_HIGH]",
-        "[num_lines_added:]",
-        "[num_lines_deleted:]",
-        "[num_files_touched:]",
-        "[num_directories_touched:]",
-        "[num_subsystems_touched:]",
-        "[change_entropy:]",
-        "[num_developers_touched_files:]",
-        "[time_from_last_change:]",
-        "[num_changes_in_files:]",
-        "[author_experience:]",
-        "[author_recent_experience:]",
-        "[author_subsystem_experience:]"
+        # "[VERY_LOW]", "[LOW]",
+        # "[MEDIUM]", "[HIGH]", "[VERY_HIGH]",
+        # "[num_lines_added:]",
+        # "[num_lines_deleted:]",
+        # "[num_files_touched:]",
+        # "[num_directories_touched:]",
+        # "[num_subsystems_touched:]",
+        # "[change_entropy:]",
+        # "[num_developers_touched_files:]",
+        # "[time_from_last_change:]",
+        # "[num_changes_in_files:]",
+        # "[author_experience:]",
+        # "[author_recent_experience:]",
+        # "[author_subsystem_experience:]",
+        "[drs]", "[/drs]"           # Mandatory when clm_for_seq_cls is true
     ]
