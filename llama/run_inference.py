@@ -28,47 +28,8 @@ from utils import (
     determine_tokenizer_truncation,
     register_custom_llama4_if_needed,
     recall_at_top_k,
+    _compute_metrics_core,
 )
-
-
-def compute_seqcls_metrics_from_logits(
-    logits: np.ndarray,
-    labels: np.ndarray,
-    threshold: Optional[float],
-    recall_pcts: List[float]
-):
-    import evaluate
-    from sklearn.metrics import roc_auc_score, average_precision_score
-
-    accuracy = evaluate.load("accuracy")
-    precision = evaluate.load("precision")
-    recall = evaluate.load("recall")
-    f1 = evaluate.load("f1")
-
-    probs = torch.softmax(torch.tensor(logits), dim=-1).cpu().numpy()
-    preds = (probs[:, 1] >= threshold).astype(int) if threshold is not None else np.argmax(probs, axis=1)
-
-    rk = recall_at_top_k(probs[:, 1], labels, percentages=recall_pcts)
-
-    try:
-        roc_auc = roc_auc_score(labels, probs[:, 1])
-    except ValueError:
-        roc_auc = float("nan")
-    try:
-        pr_auc = average_precision_score(labels, probs[:, 1])
-    except ValueError:
-        pr_auc = float("nan")
-
-    metrics = {
-        "accuracy": accuracy.compute(predictions=preds, references=labels)["accuracy"],
-        "precision": precision.compute(predictions=preds, references=labels, average="binary")["precision"],
-        "recall": recall.compute(predictions=preds, references=labels, average="binary")["recall"],
-        "f1": f1.compute(predictions=preds, references=labels, average="binary")["f1"],
-        "roc_auc": float(roc_auc),
-        "pr_auc": float(pr_auc),
-    }
-    metrics.update(rk)
-    return metrics, preds, probs
 
 
 def _is_peft_adapter(path: str) -> bool:
@@ -262,14 +223,20 @@ def run_inference(
         probs_list.append(vec)
 
     probs = np.array(probs_list, dtype=np.float32)
+
+    # Convert probabilities to "logits" for the offline core (stable via log)
     logits = np.log(np.clip(probs, 1e-12, 1.0))
 
     recall_pcts_list = [float(x) for x in recall_pcts.split(",") if x.strip()]
-    metrics, preds, probs_again = compute_seqcls_metrics_from_logits(
-        logits=logits,
-        labels=labels,
-        threshold=threshold,
-        recall_pcts=recall_pcts_list,
+
+    metrics, preds, probs_again = _compute_metrics_core(
+        logits,
+        labels,
+        repo_root=REPO_PATH,                 # ensures local metric loading via _load_metric_local_first
+        threshold=threshold,                 # optional threshold for class 1; else argmax
+        percentages=recall_pcts_list,        # recall@top_k percentages
+        average="binary",
+        recall_at_top_k_fn=recall_at_top_k,
     )
 
     # Optional commit_id
