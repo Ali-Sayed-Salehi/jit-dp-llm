@@ -5,7 +5,7 @@
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=150G
+#SBATCH --mem=100G
 #SBATCH --time=168:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=gpu20
@@ -18,8 +18,8 @@ echo "running the inference script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/run_inference.py \
   --base_model_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-09-11_15-56-45/output/checkpoint-150 \
-  --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_small_llm_struc.jsonl \
+  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-09-29_22-14-38/output/checkpoint-125 \
+  --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
   --mixed_precision bf16 \
   --truncation_len 22000 \
   --quant \
