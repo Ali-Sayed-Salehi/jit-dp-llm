@@ -361,17 +361,17 @@ def main():
     def custom_metrics_seq_cls(eval_pred):
         return compute_custom_metrics_seq_cls(eval_pred, REPO_PATH, threshold=args.threshold, percentages=RECALL_AT_TOP_K_PERCENTAGES)
 
-    if TASK == "clm" and args.clm_for_seq_cls:
-        clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
-            tokenizer=tokenizer,
-            repo_root=REPO_PATH,
-            recall_at_top_k_fn=recall_at_top_k,   # your function
-            percentages=[0.05, 0.1, 0.2],
-            threshold=0.5,
-            average="binary",
-            zero_token="0",
-            one_token="1",
-        )
+    # if TASK == "clm" and args.clm_for_seq_cls:
+    #     clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
+    #         tokenizer=tokenizer,
+    #         repo_root=REPO_PATH,
+    #         recall_at_top_k_fn=recall_at_top_k,
+    #         percentages=[0.05, 0.1, 0.2],
+    #         threshold=0.5,
+    #         average="binary",
+    #         zero_token="0",
+    #         one_token="1",
+    #     )
 
     trainer_callbacks.extend(
         setup_live_metrics(args.live_metrics, live_metrics_path)
@@ -405,8 +405,6 @@ def main():
     trainer.train(resume_from_checkpoint= True if args.continue_from_dir else False)
 
     # ---------------------------- Save ----------------------------
-    # save_model_safely(trainer, finetuned_model_dir)
-
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
     trainer.save_model(finetuned_model_dir)
@@ -425,20 +423,20 @@ def main():
             repo_root=REPO_PATH,
             threshold=args.threshold,
         )
-    elif TASK == "clm" and args.clm_for_seq_cls:
-        run_final_inference_clm_seqcls(
-            trainer=trainer,
-            test_dataset=final_dataset["final_test"],
-            tokenizer=tokenizer,
-            metrics_dir=metrics_dir,
-            repo_root=REPO_PATH,
-            percentages=RECALL_AT_TOP_K_PERCENTAGES,
-            threshold=args.threshold,
-            average="binary",
-            zero_token="0",
-            one_token="1",
-            strict_single_token=True
-        )
+    # elif TASK == "clm" and args.clm_for_seq_cls:
+    #     run_final_inference_clm_seqcls(
+    #         trainer=trainer,
+    #         test_dataset=final_dataset["final_test"],
+    #         tokenizer=tokenizer,
+    #         metrics_dir=metrics_dir,
+    #         repo_root=REPO_PATH,
+    #         percentages=RECALL_AT_TOP_K_PERCENTAGES,
+    #         threshold=args.threshold,
+    #         average="binary",
+    #         zero_token="0",
+    #         one_token="1",
+    #         strict_single_token=True
+    #     )
 
 
 if __name__ == "__main__":
