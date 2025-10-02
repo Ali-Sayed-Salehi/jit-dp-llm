@@ -199,6 +199,11 @@ def parse_training_args():
     parser.add_argument("--lr_warmup_ratio", type=float, help="Learning rate warmup ratio")
     parser.add_argument("--train_batch_size", type=int, help="per device training batch size")
     parser.add_argument(
+        "--eval_accumulation_steps", 
+        type=int, 
+        help="Number of predictions steps to accumulate the output tensors for, before moving the results to the CPU."
+        )
+    parser.add_argument(
         "--continue_from_dir", 
         type=str, 
         help="""Resume training from this checkpoint directory. 

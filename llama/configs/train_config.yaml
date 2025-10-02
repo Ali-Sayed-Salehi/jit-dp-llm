@@ -27,6 +27,7 @@ lr_warmup_ratio: 0.05
 eval_steps: 25
 logging_steps: 5
 save_steps: 50
+eval_accumulation_steps: 1
 pooling: last
 clm_for_seq_cls: true
 new_tokens: [

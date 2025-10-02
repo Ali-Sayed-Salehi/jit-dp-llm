@@ -128,7 +128,7 @@ def main():
         log_level="info",
         log_level_replica="warning",
         remove_unused_columns=False,
-        eval_accumulation_steps=5 if TASK == "clm" else None,
+        eval_accumulation_steps=args.eval_accumulation_steps if TASK == "clm" else None,
         # lr_scheduler_type="cosine",
         warmup_ratio=args.lr_warmup_ratio,
         label_smoothing_factor=0.0 if TASK == "clm" else 0.05,
