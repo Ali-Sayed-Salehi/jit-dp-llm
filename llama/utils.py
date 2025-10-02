@@ -225,19 +225,21 @@ def parse_training_args():
         choices=["seq_cls", "clm"],
         help="sequence classification or causal language modelling."
     )
-
-    # ---- NEW: list of new tokens; missing or empty -> [] ----
     parser.add_argument(
         "--new_tokens",
         action=ParseList,
         nargs="*",                 # zero or more values allowed on CLI
         help="List of new tokens (space- or comma-separated). Empty or missing becomes []."
     )
-
     parser.add_argument(
         "--slurm_tmpdir_env",
         type=str,
         help="Environment variable that point to slurm temporary directory"
+    )
+    parser.add_argument(
+        "--pooling",
+        type=str,
+        help="How to pool activations to feed the classifier head. choices= last, max, mean, none"
     )
 
     args = parser.parse_args()

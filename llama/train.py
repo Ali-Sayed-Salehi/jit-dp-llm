@@ -20,6 +20,7 @@ from peft import (
 
 from utils import *
 from checks import *
+from custom_llama import *
 
 
 def main():
@@ -54,6 +55,9 @@ def main():
 
     ModelClass = TASK_TO_MODEL_CLASS[TASK]
     TrainerClass = TASK_TO_TRAINER_CLASS[TASK]
+
+    if args.pooling:
+        ModelClass = LlamaForSequenceClassificationMaxPoolMeanLast
 
     # ---------------------------- distributed setup  ----------------------------
     local_rank = os.environ.get("LOCAL_RANK", 0)
@@ -164,7 +168,6 @@ def main():
         optional_kwargs["problem_type"] = "single_label_classification"
         # optional_kwargs["architectures"] = ["LlamaForSequenceClassification"]
 
-
     if args.flash_attn_2 and not BERT:
         optional_kwargs["attn_implementation"] = "flash_attention_2"
 
@@ -174,6 +177,10 @@ def main():
         torch_dtype=model_dtype,
         **optional_kwargs   
     )
+
+    if args.pooling:
+        model.config.pooling = args.pooling
+        print (f"✅ Using {args.pooling}-pooling for activation pooling.")
 
     print(model)
 
