@@ -603,14 +603,24 @@ def format_for_classification(example):
     else:
         raise KeyError(f"Unrecognized example keys: {list(example.keys())}")
 
-def determine_format_fn(task, clm_for_seq_cls):
+def format_for_clm_for_seq_cls(example):
+    if "text" in example and "label" in example:
+        # IMDb case
+        return {"text": example["text"], "orig-labels": int(example["label"])}
+    elif "prompt" in example and "response" in example:
+        # Custom dataset case
+        return {"text": example["prompt"], "orig-labels": int(example["response"])}
+    else:
+        raise KeyError(f"Unrecognized example keys: {list(example.keys())}")
+
+def determine_format_fn(task, clm_for_seq_cls=False):
     format_funct = None
 
     if task == "seq_cls":
         format_funct = format_for_classification
     elif task == "clm":
         if clm_for_seq_cls:
-            format_funct = format_for_classification
+            format_funct = format_for_clm_for_seq_cls
         else:
             format_funct = format_for_lm
     else:
@@ -626,7 +636,7 @@ def apply_class_imbalance_strategy(
     alpha: float = 0.25,
     gamma: float = 2.0,
     sampling_strategy=None,
-    label_col: str = "labels"
+    label_col: str = "orig-labels"
 ):
     """
     sampling_strategy (used when strategy is 'oversampling' or 'undersampling'):
@@ -702,7 +712,7 @@ def apply_class_imbalance_strategy(
             "final_test": test_dataset
         })
 
-        after_dist = compute_class_distribution(balanced_dataset)
+        after_dist = compute_class_distribution(balanced_dataset, label_col)
         print(f"📊 Class distribution after {strategy}:")
         for split, stats in after_dist.items():
             print(f"  {split}: {stats}")
@@ -718,11 +728,11 @@ def apply_class_imbalance_strategy(
 
 
 
-def compute_class_distribution(dataset_dict: DatasetDict) -> dict:
+def compute_class_distribution(dataset_dict: DatasetDict, label_col: str = "orig-labels") -> dict:
     distribution = {}
 
     for split_name, split_dataset in dataset_dict.items():
-        labels = split_dataset["labels"]
+        labels = split_dataset[label_col]
         label_counts = Counter(labels)
         total = sum(label_counts.values())
         pos_count = label_counts.get(1, 0)
@@ -1355,7 +1365,7 @@ def append_drs_and_label_to_tokens(
     ex: Mapping[str, List[int]],
     *,
     tokenizer,
-    label_key: str = "labels",
+    label_key: str = "orig-labels",
     drs_token: str = "[/drs]",
     zero_token: str = "0",
     one_token: str = "1",
@@ -1421,8 +1431,8 @@ def make_compute_metrics_for_clm_seqcls_autoids(
     percentages,                 # e.g. [0.05, 0.1]
     threshold=None,
     average="binary",
-    zero_token=" 0",
-    one_token=" 1",
+    zero_token="0",
+    one_token="1",
     strict_single_token=True,
 ):
     """

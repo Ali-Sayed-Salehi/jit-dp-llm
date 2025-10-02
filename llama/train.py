@@ -224,7 +224,8 @@ def main():
             seed=42,
             alpha=FL_ALPHA,
             gamma=FL_GAMMA,
-            sampling_strategy=args.resampling_ratio
+            sampling_strategy=args.resampling_ratio,
+            label_col="orig-labels"
         )
 
         # Prepare loss function if needed
@@ -268,12 +269,12 @@ def main():
 
     # ------------------------------ clm for seq cls -----------------------------
     if TASK == "clm" and args.clm_for_seq_cls:
-        final_dataset = final_dataset.map(append_drs_and_label_to_tokens, fn_kwargs=dict(tokenizer=tokenizer))
+        final_dataset = final_dataset.map(append_drs_and_label_to_tokens, fn_kwargs=dict(tokenizer=tokenizer, label_key="orig-labels"))
 
         report = check_drs_append(
             final_dataset,
             tokenizer,
-            label_key="labels",            # where 0/1 is stored
+            label_key="orig-labels",            # where 0/1 is stored
             drs_token="[/drs]",
             zero_token="0",
             one_token="1",
@@ -289,6 +290,8 @@ def main():
             from pprint import pprint
             pprint(report["errors"][0])   # inspect the first problem case
 
+    print("Final dataset features:")
+    print(final_dataset['train'].features)
 
     # ------------------------------ Data Collator ------------------------------
     data_collator = determine_data_collator(TASK, tokenizer, args.clm_for_seq_cls)
@@ -361,13 +364,13 @@ def main():
     if TASK == "clm" and args.clm_for_seq_cls:
         clm_for_seq_cls_compute_metrics = make_compute_metrics_for_clm_seqcls_autoids(
             tokenizer=tokenizer,
-            repo_root=REPO_ROOT,
+            repo_root=REPO_PATH,
             recall_at_top_k_fn=recall_at_top_k,   # your function
             percentages=[0.05, 0.1, 0.2],
             threshold=0.5,
             average="binary",
-            zero_token=" 0",
-            one_token=" 1",
+            zero_token="0",
+            one_token="1",
         )
 
     trainer_callbacks.extend(

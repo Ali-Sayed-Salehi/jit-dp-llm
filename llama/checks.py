@@ -1,4 +1,7 @@
 from collections import defaultdict
+from typing import Dict, List, Mapping, Optional, Any, Union
+from datasets import Dataset, DatasetDict
+from transformers import PreTrainedTokenizerBase
 
 from utils import *
 
@@ -137,11 +140,6 @@ def count_trainable_params(model, tokenizer=None, task="clm", added_token_ids=No
         },
     }
 
-
-
-from typing import Dict, List, Mapping, Optional, Any, Union
-from datasets import Dataset, DatasetDict
-from transformers import PreTrainedTokenizerBase
 
 def _check_one_dataset(
     ds: Dataset,
@@ -315,26 +313,49 @@ def _check_one_dataset(
         "errors": errors,
     }
 
-
 def check_drs_append(
     data: Union[Dataset, DatasetDict],
     tokenizer: PreTrainedTokenizerBase,
     **kwargs,
 ) -> Dict[str, Any]:
-    """
-    Wrapper that accepts either a Dataset or a DatasetDict (with splits).
-    Returns a summary (and per-split summaries for DatasetDict).
-    """
     if isinstance(data, DatasetDict):
         out = {"splits": {}}
+        total = ok = err = 0
+        agg_label_counts = {0: 0, 1: 0, "other": 0}
+        agg_final_hist: Dict[int, int] = {}
+        first_split_report = None
+
         for name, split in data.items():
-            out["splits"][name] = _check_one_dataset(split, tokenizer, **kwargs)
-        # aggregate simple totals
-        total = sum(v["num_examples"] for v in out["splits"].values())
-        ok = sum(v["num_ok"] for v in out["splits"].values())
-        err = sum(v["num_errors"] for v in out["splits"].values())
-        out.update({"num_examples": total, "num_ok": ok, "num_errors": err,
-                    "error_rate": 0.0 if total == 0 else (total - ok) / total})
+            rep = _check_one_dataset(split, tokenizer, **kwargs)
+            out["splits"][name] = rep
+            total += rep["num_examples"]
+            ok    += rep["num_ok"]
+            err   += rep["num_errors"]
+
+            for k, v in rep["label_counts"].items():
+                agg_label_counts[k] = agg_label_counts.get(k, 0) + v
+            for tok_id, count in rep["final_token_id_histogram"].items():
+                agg_final_hist[tok_id] = agg_final_hist.get(tok_id, 0) + count
+
+            if first_split_report is None:
+                first_split_report = rep
+
+        out.update({
+            "num_examples": total,
+            "num_ok": ok,
+            "num_errors": err,
+            "error_rate": 0.0 if total == 0 else (total - ok) / total,
+            "label_counts": agg_label_counts,
+            "final_token_id_histogram": agg_final_hist,
+        })
+
+        # pass through a few reference fields from any split
+        if first_split_report is not None:
+            out.setdefault("drs_token_id", first_split_report["drs_token_id"])
+            out.setdefault("label_token_ids", first_split_report["label_token_ids"])
+            out.setdefault("pad_token_id", first_split_report["pad_token_id"])
+
         return out
-    else:
-        return _check_one_dataset(data, tokenizer, **kwargs)
+
+    # Single Dataset → unchanged
+    return _check_one_dataset(data, tokenizer, **kwargs)
