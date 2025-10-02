@@ -386,8 +386,8 @@ def main():
         # if imbalance_strategy == "focal_loss" and focal_loss_fct is not None:
         #     trainer_optional_kwargs["focal_loss_fct"] = focal_loss_fct
 
-    if TASK == "clm" and args.clm_for_seq_cls:
-        trainer_optional_kwargs["compute_metrics"] = clm_for_seq_cls_compute_metrics
+    # if TASK == "clm" and args.clm_for_seq_cls:
+    #     trainer_optional_kwargs["compute_metrics"] = clm_for_seq_cls_compute_metrics
 
     trainer = Trainer(
         model=model,
