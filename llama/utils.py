@@ -287,6 +287,9 @@ def parse_training_args():
 
     if args.truncation_len and args.chunking_len and args.truncation_len < args.chunking_len:
         raise ValueError(f"truncation_len ({args.truncation_len}) cannot be less than chunking_len ({args.chunking_len})")
+    
+    if args.clm_for_seq_cls and args.task_type != "clm":
+        raise ValueError(f"clm_for_seq_cls only works with clm task type. task_type: {args.task_type}, clm_for_seq_cls: {args.clm_for_seq_cls}")
 
     # --- Print effective args ---
     print("\n===== Effective Training Arguments =====")
@@ -667,7 +670,7 @@ def apply_class_imbalance_strategy(
     eval_dataset = dataset["test"]
     test_dataset = dataset["final_test"]
 
-    before_dist = compute_class_distribution(dataset)
+    before_dist = compute_class_distribution(dataset, label_col)
     print("📊 Class distribution before balancing:")
     for split, stats in before_dist.items():
         print(f"  {split}: {stats}")
@@ -1304,24 +1307,6 @@ def add_or_detect_special_tokens(tokenizer, model, task: str, new_tokens, use_lo
     # Small debug dump
     print("🔎 Special tokens status:", info)
     return info
-
-
-
-def resolve_tokenizer_dir(model_path: str, continue_from_dir: str | None) -> str:
-    """
-    Resolve the directory to load the tokenizer from.
-    
-    - Defaults to model_path.
-    - If continue_from_dir is given, looks for the first checkpoint-* subdirectory.
-    """
-    tokenizer_load_dir = model_path
-    if continue_from_dir and os.path.isdir(continue_from_dir):
-        for d in os.listdir(continue_from_dir):
-            if d.startswith("checkpoint-"):
-                tokenizer_load_dir = os.path.join(continue_from_dir, d)
-                break
-    print(f"-> Loading tokenizer from {tokenizer_load_dir}")
-    return tokenizer_load_dir
 
 
 def infer_lora_target_modules(model):

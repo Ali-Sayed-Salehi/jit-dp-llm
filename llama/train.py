@@ -55,7 +55,7 @@ def main():
     ModelClass = TASK_TO_MODEL_CLASS[TASK]
     TrainerClass = TASK_TO_TRAINER_CLASS[TASK]
 
-    if args.pooling:
+    if args.pooling and TASK == "seq_cls":
         ModelClass = LlamaForSequenceClassificationMaxPoolMeanLast
 
     # ---------------------------- distributed setup  ----------------------------
@@ -169,7 +169,7 @@ def main():
         **optional_kwargs   
     )
 
-    if args.pooling:
+    if args.pooling and TASK == "seq_cls":
         model.config.pooling = args.pooling
         print (f"✅ Using {args.pooling}-pooling for activation pooling.")
 
@@ -180,10 +180,8 @@ def main():
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # ------------------------- Tokenizer -------------------------
-    tokenizer_load_dir = resolve_tokenizer_dir(MODEL_PATH, args.continue_from_dir)
-
     tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_load_dir, 
+        MODEL_PATH, 
         local_files_only=True, 
         trust_remote_code=True, 
         use_fast=True
@@ -225,7 +223,7 @@ def main():
             alpha=FL_ALPHA,
             gamma=FL_GAMMA,
             sampling_strategy=args.resampling_ratio,
-            label_col="orig-labels"
+            label_col="labels" if TASK == "seq_cls" else "orig-labels"
         )
 
         # Prepare loss function if needed
