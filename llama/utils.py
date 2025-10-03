@@ -19,7 +19,7 @@ from huggingface_hub import login as huggingface_hub_login
 from datasets import load_dataset, DatasetDict, concatenate_datasets, Dataset
 
 import dataclasses
-from typing import Optional, Dict, List, Mapping
+from typing import Optional, Dict, List, Mapping, Any, Tuple
 
 from accelerate.utils import is_peft_model
 from packaging import version
@@ -39,6 +39,7 @@ from transformers import (
     Trainer,
     DataCollatorForLanguageModeling,
     DataCollatorWithPadding,
+    DataCollatorForSeq2Seq,
     TrainerCallback,
     PreTrainedModel,
     TrainingArguments
@@ -46,6 +47,7 @@ from transformers import (
 
 import evaluate
 from attach_classification_head import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
+
 
 
 def determine_tokenizer_truncation(
@@ -806,29 +808,34 @@ class FocalLoss(nn.Module):
         else:
             return loss
 
-def determine_data_collator(task, tokenizer, clm_for_seq_cls):
-    collator = None
-
+def determine_data_collator(task, tokenizer, clm_for_seq_cls=False, pad_to_multiple_of=8):
     if task == "seq_cls":
-        collator = DataCollatorWithPadding(tokenizer=tokenizer)
+        return DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=pad_to_multiple_of)
+
     elif task == "clm":
         if clm_for_seq_cls:
-            collator = DataCollatorWithPadding(tokenizer=tokenizer)
+            # Pads labels with -100; does NOT regenerate labels
+            return DataCollatorForSeq2Seq(
+                tokenizer=tokenizer,
+                label_pad_token_id=-100,
+                pad_to_multiple_of=pad_to_multiple_of,
+            )
         else:
-            collator = DataCollatorForLanguageModeling(
+            # standard CLM pretraining
+            return DataCollatorForLanguageModeling(
                 tokenizer=tokenizer,
                 mlm=False,
             )
+
     elif task == "mlm":
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer, 
-            mlm=True, 
-            mlm_probability=0.15
+        return DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=True,
+            mlm_probability=0.15,
         )
+
     else:
         raise ValueError(f"Unknown task type: {task}")
-    
-    return collator
 
 
 def _np_softmax(x):
@@ -1441,99 +1448,30 @@ def make_compute_metrics_for_clm_seqcls_autoids(
     strict_single_token=True,
 ):
     """
-    Builds a HF `compute_metrics(eval_pred)` for CLM-as-seq-cls.
-    It resolves the two label-token ids from the tokenizer once here.
-    Reports accuracy/precision/recall/f1/roc_auc/pr_auc via _compute_metrics_core,
-    plus `valid_rate` and `num_invalid` (whether the model’s raw top token ∈ {0,1}).
+    Builds a HF `compute_metrics(eval_pred)` for CLM-as-seq-cls, but delegates
+    all the real work to `_compute_metrics_core_clm_seqcls` to avoid duplication.
     """
-
-    # ---- resolve label token ids once (at factory creation) ----
-    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
-    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
-    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
-        raise ValueError(
-            f"Expected single-token labels for {zero_token!r}/{one_token!r}. "
-            "Use single-piece tokens or pre-add dedicated tokens (e.g., '<zero>', '<one>') "
-            "and pass those as zero_token/one_token."
-        )
-    ID0 = ids0[0] if len(ids0) >= 1 else tokenizer.unk_token_id
-    ID1 = ids1[0] if len(ids1) >= 1 else tokenizer.unk_token_id
-
     def compute_metrics(eval_pred):
         # Accept EvalPrediction or tuple
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
-            logits_np, labels_np = eval_pred.predictions, eval_pred.label_ids
+            logits_btV, labels_bt = eval_pred.predictions, eval_pred.label_ids
         else:
-            logits_np, labels_np = eval_pred
+            logits_btV, labels_bt = eval_pred
 
-        logits = np.asarray(logits_np)   # [B, T, V]
-        labels = np.asarray(labels_np)   # [B, T] with -100 except final label pos
-
-        if labels.ndim != 2 or logits.ndim != 3:
-            raise ValueError("Expected logits [B,T,V] and labels [B,T] with -100 masking.")
-
-        B, T, V = logits.shape
-        has_label = labels != -100
-        any_label = has_label.any(axis=1)
-        if not np.any(any_label):
-            return {"num_samples": 0}
-
-        rows = np.where(any_label)[0]
-        last_idx = T - 1 - np.argmax(has_label[rows][:, ::-1], axis=1)  # labeled position t
-        ctx = last_idx - 1                                              # model predicts t at t-1
-        valid_ctx = ctx >= 0
-        if not np.any(valid_ctx):
-            return {"num_samples": 0}
-
-        b = rows[valid_ctx]
-        t = last_idx[valid_ctx]
-        ctx = ctx[valid_ctx]
-
-        y_ids = labels[b, t]                 # vocab ids (should be ID0 or ID1)
-        step_logits = logits[b, ctx, :]      # [N, V]
-
-        # Open-vocab diagnostic: is full-vocab argmax in {ID0, ID1}?
-        top_ids = np.argmax(step_logits, axis=1)
-        in_label_set_pred = (top_ids == ID0) | (top_ids == ID1)
-        valid_rate = float(in_label_set_pred.mean()) if in_label_set_pred.size else 0.0
-        num_invalid = int((~in_label_set_pred).sum())
-
-        # Filter to rows whose *target* is in {ID0, ID1} (should be all)
-        target_in_set = (y_ids == ID0) | (y_ids == ID1)
-        dropped_non_label_targets = int((~target_in_set).sum())
-        if not np.any(target_in_set):
-            return {
-                "num_samples": 0,
-                "valid_rate": valid_rate,
-                "num_invalid": num_invalid,
-                "dropped_non_label_targets": dropped_non_label_targets,
-            }
-
-        y_ids = y_ids[target_in_set]
-        step_logits = step_logits[target_in_set]
-
-        # Build 2-class logits [N,2] and 0/1 labels
-        logits_2 = np.stack([step_logits[:, ID0], step_logits[:, ID1]], axis=1)
-        y01 = (y_ids == ID1).astype(int)
-
-        # Use the existing core to compute accuracy/precision/recall/f1/roc_auc/pr_auc etc.
-        metrics, preds, probs = _compute_metrics_core(
-            logits_2,
-            y01,
+        # Route through the shared core
+        metrics, _, _, _, _, _ = _compute_metrics_core_clm_seqcls(
+            logits_btV=np.asarray(logits_btV),
+            labels_bt=np.asarray(labels_bt),
+            tokenizer=tokenizer,
             repo_root=repo_root,
-            threshold=threshold,
             percentages=percentages,
-            average=average,
             recall_at_top_k_fn=recall_at_top_k_fn,
+            threshold=threshold,
+            average=average,
+            zero_token=zero_token,
+            one_token=one_token,
+            strict_single_token=strict_single_token,
         )
-
-        # Attach diagnostics about whether the model’s raw output was in {0,1}
-        metrics.update({
-            "num_samples": int(len(y01)),
-            "valid_rate": valid_rate,
-            "num_invalid": num_invalid,
-            "dropped_non_label_targets": dropped_non_label_targets,
-        })
         return metrics
 
     return compute_metrics
@@ -1552,31 +1490,19 @@ def run_final_inference_clm_seqcls(
     zero_token="0",
     one_token="1",
     strict_single_token=True,   # if False, we’ll use the LAST subtoken id for each class
+    recall_at_top_k_fn=None,    # pass the same fn you used for training metrics
 ):
     """
-    Final inference for CLM-as-seq-cls:
-      - Assumes each example supervises exactly ONE final label token (others = -100).
-      - Reduces logits to the two class-token columns, computes your standard metrics via
-        _compute_metrics_core, and saves per-example results.
-
+    Final inference for CLM-as-seq-cls using the shared `_compute_metrics_core_clm_seqcls`:
+      - Runs prediction once.
+      - Reduces logits to the two class-token columns in the core.
+      - Computes metrics via `_compute_metrics_core`.
+      - Saves per-example results aligned to the filtered rows the core used.
     Output file: <metrics_dir>/final_test_results.json
     """
-
     print("\n🧪 Running final inference (CLM → seq-cls) on held-out test set...")
 
-    # ----- resolve label token ids once -----
-    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
-    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
-    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
-        raise ValueError(
-            f"Expected single-token labels for {zero_token!r}/{one_token!r}. "
-            "Either add dedicated tokens (e.g., '[/lbl0]','[/lbl1]') or set strict_single_token=False "
-            "to use the LAST subtoken id."
-        )
-    ID0 = ids0[-1] if len(ids0) >= 1 else tokenizer.unk_token_id
-    ID1 = ids1[-1] if len(ids1) >= 1 else tokenizer.unk_token_id
-
-    # ----- keep commit_id order, then drop it before prediction -----
+    # Keep commit_id order (if present), but remove it for the model call
     commit_ids = None
     if hasattr(test_dataset, "column_names") and "commit_id" in test_dataset.column_names:
         commit_ids = test_dataset["commit_id"]
@@ -1584,10 +1510,98 @@ def run_final_inference_clm_seqcls(
     else:
         ds_for_pred = test_dataset
 
-    # ----- run prediction -----
+    # ---- run prediction ----
     pred_out = trainer.predict(ds_for_pred)
-    logits = np.asarray(pred_out.predictions)  # [B, T, V]
-    labels = np.asarray(pred_out.label_ids)    # [B, T]  (-100 except final label)
+    logits_btV = np.asarray(pred_out.predictions)  # [B, T, V]
+    labels_bt  = np.asarray(pred_out.label_ids)    # [B, T]  (-100 except final label)
+
+    # ---- compute via shared core ----
+    metrics, preds, probs, selected_rows, y01, in_label_set_pred = _compute_metrics_core_clm_seqcls(
+        logits_btV=logits_btV,
+        labels_bt=labels_bt,
+        tokenizer=tokenizer,
+        repo_root=repo_root,
+        percentages=percentages,
+        recall_at_top_k_fn=recall_at_top_k_fn,
+        threshold=threshold,
+        average=average,
+        zero_token=zero_token,
+        one_token=one_token,
+        strict_single_token=strict_single_token,
+    )
+
+    # ---- build per-example results (only for selected_rows that passed core filters) ----
+    pos_conf = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
+    results = []
+    for i, row_idx in enumerate(selected_rows):
+        results.append({
+            "commit_id":  (commit_ids[row_idx] if commit_ids is not None else None),
+            "true_label": int(y01[i]),
+            "prediction": int(preds[i]),
+            "confidence": float(pos_conf[i]),
+            # Note: in_label_set_pred is computed *before* the target-in-set filter in core;
+            # we index it to the same subset via `i` because core already aligned it.
+            "raw_top_in_{0,1}": bool(in_label_set_pred[i]),
+        })
+
+    # ---- save ----
+    os.makedirs(metrics_dir, exist_ok=True)
+    out_path = os.path.join(metrics_dir, "final_test_results.json")
+    with open(out_path, "w") as f:
+        json.dump({"metrics": metrics, "results": results}, f, indent=4)
+
+    print(f"📄 Final test set results saved to: {out_path}")
+    print(json.dumps(metrics, indent=4))
+
+
+
+def _resolve_label_ids(
+    tokenizer,
+    zero_token: str,
+    one_token: str,
+    strict_single_token: bool = True,
+) -> Tuple[int, int]:
+    """
+    Resolve label token ids. If strict_single_token=False, use LAST subtoken id.
+    """
+    ids0 = tokenizer.encode(zero_token, add_special_tokens=False)
+    ids1 = tokenizer.encode(one_token,  add_special_tokens=False)
+    if strict_single_token and not (len(ids0) == 1 and len(ids1) == 1):
+        raise ValueError(
+            f"Expected single-token labels for {zero_token!r}/{one_token!r}. "
+            "Use dedicated tokens (e.g., '[/lbl0]','[/lbl1]') or set strict_single_token=False "
+            "to use the LAST subtoken id."
+        )
+    if len(ids0) == 0 or len(ids1) == 0:
+        raise ValueError("zero_token/one_token produced no ids; check tokenizer and tokens.")
+    ID0 = ids0[-1]
+    ID1 = ids1[-1]
+    return ID0, ID1
+
+
+def _compute_metrics_core_clm_seqcls(
+    *,
+    logits_btV: np.ndarray,      # [B, T, V]
+    labels_bt: np.ndarray,       # [B, T] with -100 except final label position
+    tokenizer,
+    repo_root: str,
+    percentages: List[float],
+    recall_at_top_k_fn,
+    threshold: Optional[float] = None,
+    average: str = "binary",
+    zero_token: str = "0",
+    one_token: str = "1",
+    strict_single_token: bool = True,
+) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Reduce CLM logits to a 2-class problem at the single supervised step and
+    compute offline metrics via your `_compute_metrics_core`.
+
+    Returns:
+      metrics, preds, probs, selected_rows, y01, in_label_set_pred
+    """
+    logits = np.asarray(logits_btV)   # [B, T, V]
+    labels = np.asarray(labels_bt)    # [B, T]
 
     if logits.ndim != 3 or labels.ndim != 2:
         raise ValueError("Expected logits [B,T,V] and labels [B,T] with -100 masking.")
@@ -1599,9 +1613,8 @@ def run_final_inference_clm_seqcls(
         raise ValueError("No labeled positions found (labels != -100).")
 
     rows = np.where(any_label)[0]
-    # labeled position t = last True; context position ctx = t-1
-    last_idx = T - 1 - np.argmax(has_label[rows][:, ::-1], axis=1)
-    ctx = last_idx - 1
+    last_idx = T - 1 - np.argmax(has_label[rows][:, ::-1], axis=1)   # labeled position t
+    ctx = last_idx - 1                                               # predict t using logits at t-1
     valid_ctx = ctx >= 0
     if not np.any(valid_ctx):
         raise ValueError("No valid context positions (ctx=t-1) found.")
@@ -1610,17 +1623,19 @@ def run_final_inference_clm_seqcls(
     t = last_idx[valid_ctx]
     ctx = ctx[valid_ctx]
 
-    # targets (vocab ids) and step logits
-    y_ids = labels[b, t]                 # [N]
+    y_ids = labels[b, t]                 # [N] vocab ids of targets
     step_logits = logits[b, ctx, :]      # [N, V]
 
-    # open-vocab diag: is argmax in {ID0, ID1}?
+    # Resolve label ids
+    ID0, ID1 = _resolve_label_ids(tokenizer, zero_token, one_token, strict_single_token)
+
+    # Open-vocab diagnostic: argmax(full vocab) in {ID0, ID1}?
     top_ids = np.argmax(step_logits, axis=1)
     in_label_set_pred = (top_ids == ID0) | (top_ids == ID1)
     valid_rate = float(in_label_set_pred.mean()) if in_label_set_pred.size else 0.0
     num_invalid = int((~in_label_set_pred).sum())
 
-    # filter to rows whose TARGET is in {ID0,ID1} (should be all in a clean pipeline)
+    # Filter rows whose *target* is in {ID0,ID1}
     target_in_set = (y_ids == ID0) | (y_ids == ID1)
     dropped_non_label_targets = int((~target_in_set).sum())
     if not np.any(target_in_set):
@@ -1628,13 +1643,13 @@ def run_final_inference_clm_seqcls(
 
     y_ids = y_ids[target_in_set]
     step_logits = step_logits[target_in_set]
-    selected_rows = b[target_in_set]  # indices into original dataset (for commit_ids alignment)
+    selected_rows = b[target_in_set]  # indices into original dataset
 
-    # reduce to two-class logits and 0/1 labels
+    # Two-class logits and binary labels
     logits_2 = np.stack([step_logits[:, ID0], step_logits[:, ID1]], axis=1)  # [N,2]
     y01 = (y_ids == ID1).astype(int)                                         # [N]
 
-    # compute metrics via your core
+    # Use your OFFLINE core
     metrics, preds, probs = _compute_metrics_core(
         logits_2,
         y01,
@@ -1642,10 +1657,10 @@ def run_final_inference_clm_seqcls(
         threshold=threshold,
         percentages=percentages,
         average=average,
-        recall_at_top_k_fn=recall_at_top_k,
+        recall_at_top_k_fn=recall_at_top_k_fn,
     )
 
-    # enrich metrics with diagnostics
+    # Attach diagnostics
     metrics.update({
         "num_samples": int(y01.shape[0]),
         "valid_rate": valid_rate,
@@ -1655,23 +1670,4 @@ def run_final_inference_clm_seqcls(
         "id1": int(ID1),
     })
 
-    # build per-example results (aligned to filtered rows)
-    pos_conf = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
-    results = []
-    for i, row_idx in enumerate(selected_rows):
-        results.append({
-            "commit_id":  (commit_ids[row_idx] if commit_ids is not None else None),
-            "true_label": int(y01[i]),
-            "prediction": int(preds[i]),
-            "confidence": float(pos_conf[i]),
-            "raw_top_in_{0,1}": bool(in_label_set_pred[valid_ctx][target_in_set][i]),
-        })
-
-    # save
-    os.makedirs(metrics_dir, exist_ok=True)
-    out_path = os.path.join(metrics_dir, "final_test_results.json")
-    with open(out_path, "w") as f:
-        json.dump({"metrics": metrics, "results": results}, f, indent=4)
-
-    print(f"📄 Final test set results saved to: {out_path}")
-    print(json.dumps(metrics, indent=4))
+    return metrics, preds, probs, selected_rows, y01, in_label_set_pred
