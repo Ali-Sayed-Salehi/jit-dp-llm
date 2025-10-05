@@ -4,7 +4,7 @@
 #SBATCH --output=/home/alis/links/scratch/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
-#SBATCH --time=00:14:00
+#SBATCH --time=00:30:00
 #SBATCH --account=def-pcr
 #SBATCH --partition=debug
 

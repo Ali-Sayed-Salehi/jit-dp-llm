@@ -215,21 +215,20 @@ def main():
         format_fn=format_func
     )
 
-    if args.class_imbalance_fix:
-        dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
-            dataset=dataset,
-            strategy=args.class_imbalance_fix,
-            seed=42,
-            alpha=FL_ALPHA,
-            gamma=FL_GAMMA,
-            sampling_strategy=args.resampling_ratio,
-            label_col="labels" if TASK == "seq_cls" else "orig-labels"
-        )
+    dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
+        dataset=dataset,
+        strategy=args.class_imbalance_fix,
+        seed=42,
+        alpha=FL_ALPHA,
+        gamma=FL_GAMMA,
+        sampling_strategy=args.resampling_ratio,
+        label_col="labels" if TASK == "seq_cls" else "orig-labels"
+    )
 
-        # Prepare loss function if needed
-        focal_loss_fct = None
-        if args.class_imbalance_fix == "focal_loss":
-            focal_loss_fct = FocalLoss(**focal_loss_dict)
+    # Prepare loss function if needed
+    focal_loss_fct = None
+    if args.class_imbalance_fix == "focal_loss":
+        focal_loss_fct = FocalLoss(**focal_loss_dict)
 
     # ------------------------- tokenize -------------------------
     should_truncate, tokenizer_max_len = determine_tokenizer_truncation(
@@ -342,8 +341,8 @@ def main():
         run_timestamp=run_timestamp,
         args=args,
         training_args=training_args,
-        class_distribution=class_distribution if TASK == "seq_cls" and args.class_imbalance_fix else None,
-        original_class_distribution=original_class_distribution if TASK == "seq_cls" and args.class_imbalance_fix else None,
+        class_distribution=class_distribution,
+        original_class_distribution=original_class_distribution,
         truncation_len=tokenizer_max_len,
         chunking_len=args.chunking_len if TASK == "clm" else None,
         dtype=DTYPE,

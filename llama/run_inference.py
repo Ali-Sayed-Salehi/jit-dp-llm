@@ -334,7 +334,6 @@ def run_inference(
         truncation_len=truncation_len,
         chunking_len=None,
     )
-    print("Truncation:", tokenizer_max_len)
 
     # Register custom config (BASE for adapter case)
     config_source = base_model_path if used_adapter else model_path
@@ -435,6 +434,7 @@ def run_inference(
             "model_path": model_path,
             "dataset_path": dataset_path,
             "quant": quant_4bit,
+            "threshold": threshold,
             "used_samples": int(len(texts)),
             "metrics": metrics,
             "samples": samples,
@@ -534,6 +534,7 @@ def run_inference(
         "model_path": model_path,
         "dataset_path": dataset_path,
         "quant": quant_4bit,
+        "threshold": threshold,
         "used_samples": int(len(texts)),
         "label_order": ordered_labels,
         "metrics": metrics,
@@ -587,21 +588,8 @@ def parse_args():
 
     a = p.parse_args()
 
-    print("Parsed arguments.")
-    print("model_path:", a.model_path)
-    print("base_model_path:", a.base_model_path)
-    print("dataset_path:", a.dataset_path)
-    print("output_dir:", a.output_dir)
-    print("mixed_precision:", a.mixed_precision)
-    print("truncation_len:", a.truncation_len)
-    print("threshold:", a.threshold)
-    print("recall_pcts:", a.recall_pcts)
-    print("quant:", a.quant)
-    print("debug:", a.debug)
-    print("clm_for_seq_cls:", a.clm_for_seq_cls)
-    print("zero_token:", a.zero_token, "one_token:", a.one_token, "drs_token:", a.drs_token)
-    print("strict_single_token:", a.strict_single_token)
-    print("per_device_eval_batch_size:", a.per_device_eval_batch_size)
+    print("Effective arguments:")
+    pprint.pprint(vars(a), sort_dicts=False)
 
     if a.threshold is not None and not (0.0 <= a.threshold <= 1.0):
         raise ValueError("--threshold must be in [0,1].")

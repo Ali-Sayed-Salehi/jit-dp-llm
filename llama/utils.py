@@ -862,11 +862,15 @@ def _compute_metrics_core(
     percentages=None,
     average="binary",
     recall_at_top_k_fn=None,
+    compute_tuned: bool = False,
 ):
     """
     Shared, CPU-only metrics computation.
     Loads metrics internally via _load_metric_local_first.
     Returns (metrics_dict, predictions, probs).
+
+    If compute_tuned=True, also sweeps thresholds to report the best achievable F1
+    without changing the returned preds.
     """
     if percentages is None:
         raise ValueError("You must specify percentages for recall_at_top_k.")
@@ -878,6 +882,7 @@ def _compute_metrics_core(
 
     probs = _np_softmax(logits.copy())
 
+    # Operating-point predictions: either fixed threshold or argmax
     if threshold is not None:
         preds = (probs[:, 1] >= float(threshold)).astype(int)
     else:
@@ -886,6 +891,7 @@ def _compute_metrics_core(
     class_counts = Counter(preds)
     output_distribution = {f"pred_class_{k}": int(v) for k, v in sorted(class_counts.items())}
 
+    # Threshold-free metrics
     try:
         roc_auc = roc_auc_score(labels, probs[:, 1])
     except ValueError:
@@ -895,12 +901,14 @@ def _compute_metrics_core(
     except ValueError:
         pr_auc = float("nan")
 
+    # Recall@Top-K (provided by caller)
     recall_at_k_metrics = recall_at_top_k_fn(probs[:, 1], labels, percentages=percentages)
 
-    acc_h  = _load_metric_local_first("accuracy",  repo_root)
-    pre_h  = _load_metric_local_first("precision", repo_root)
-    rec_h  = _load_metric_local_first("recall",    repo_root)
-    f1_h   = _load_metric_local_first("f1",        repo_root)
+    # Point metrics at the chosen operating point
+    acc_h = _load_metric_local_first("accuracy",  repo_root)
+    pre_h = _load_metric_local_first("precision", repo_root)
+    rec_h = _load_metric_local_first("recall",    repo_root)
+    f1_h  = _load_metric_local_first("f1",        repo_root)
 
     m_acc = acc_h.compute(predictions=preds, references=labels).get("accuracy")
     m_pre = pre_h.compute(predictions=preds, references=labels, average=average).get("precision")
@@ -917,6 +925,31 @@ def _compute_metrics_core(
         **output_distribution,
         **recall_at_k_metrics,
     }
+
+    # ------------------------------------------------------
+    # Optional: F1 threshold tuning (evaluation-only)
+    # ------------------------------------------------------
+    if compute_tuned:
+        from sklearn.metrics import precision_recall_curve
+
+        try:
+            prec_arr, rec_arr, thr_arr = precision_recall_curve(labels, probs[:, 1])
+            # thresholds aligns with all but last PR points
+            prec_n = prec_arr[:-1]
+            rec_n  = rec_arr[:-1]
+            f1_arr = 2.0 * prec_n * rec_n / (prec_n + rec_n + 1e-12)
+            if f1_arr.size > 0:
+                best_idx = int(np.nanargmax(f1_arr))
+                metrics.update({
+                    "f1_tuned":              float(f1_arr[best_idx]),
+                    "f1_tuned_threshold":    float(thr_arr[best_idx]),
+                    "precision_at_f1_tuned": float(prec_n[best_idx]),
+                    "recall_at_f1_tuned":    float(rec_n[best_idx]),
+                })
+        except Exception:
+            # Leave tuned metrics absent if something goes wrong (e.g., single-class labels)
+            pass
+
     return metrics, preds, probs
 
 
@@ -939,6 +972,7 @@ def compute_custom_metrics_seq_cls(
         percentages=percentages,
         average=average,
         recall_at_top_k_fn=recall_at_top_k,
+        compute_tuned=True
     )
     return metrics
 
