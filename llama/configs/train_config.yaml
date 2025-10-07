@@ -11,7 +11,7 @@ truncation_len: 40000       # 40000     # 22000
 chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
-selection_metric: f1       #f1   # recall@top_30%  -  only for seq_ls
+selection_metric: roc_auc       #f1   # recall@top_30%  -  only for seq_ls
 slurm_tmpdir_env: SLURM_TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 1e-4  
@@ -30,6 +30,8 @@ save_steps: 50
 eval_accumulation_steps: 1
 pooling: last
 clm_for_seq_cls: true
+dataset_cron_split: true
+balance_eval_dataset: true
 new_tokens: [
         "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
         "<FILE>", "</FILE>",

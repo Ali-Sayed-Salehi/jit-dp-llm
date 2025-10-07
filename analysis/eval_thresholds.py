@@ -38,6 +38,8 @@ def reweight_to_prevalence(TP:int, FP:int, FN:int, TN:int, pi_obs:float, pi_tgt:
     """
     Importance-weight the confusion matrix to simulate a target prevalence.
     Recall stays the same; precision/F1/accuracy change under reweighting.
+    Uses Positive predictive value (PPV) formula:
+    https://en.wikipedia.org/wiki/Positive_and_negative_predictive_values
     """
     if not (0.0 < pi_obs < 1.0):
         # Degenerate case (all positives or all negatives in data)

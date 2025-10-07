@@ -11,13 +11,13 @@ fsdp_config:
   fsdp_sharding_strategy: FULL_SHARD
   fsdp_state_dict_type: SHARDED_STATE_DICT
   fsdp_sync_module_states: true
-  fsdp_use_orig_params: true
+  fsdp_use_orig_params: false
   # transformer_layer_cls_to_wrap: LlamaDecoderLayer   # for LLaMA-family
 machine_rank: 0
 main_training_function: main
 mixed_precision: 'no'
 num_machines: 1
-num_processes: 4
+num_processes: 1
 rdzv_backend: static
 same_network: true
 tpu_env: []

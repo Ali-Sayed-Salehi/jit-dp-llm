@@ -253,6 +253,12 @@ def parse_training_args():
         type=str,
         help="How to pool activations to feed the classifier head. choices= last, max, mean, none"
     )
+    parser.add_argument("--dataset_cron_split", action="store_true", help="Splits training, eval, and final test splits chronologically.")
+    parser.add_argument(
+        "--balance_eval_dataset", 
+        action="store_true", 
+        help="Apply the same class imbalance fix that is applied to training set to the eval set."
+        )
 
     args = parser.parse_args()
 
@@ -280,7 +286,7 @@ def parse_training_args():
 
     VALID_SELECTION_METRICS = {
         "recall@top_5%", "recall@top_10%", "recall@top_30%",
-        "f1", "precision", "recall", "accuracy", None
+        "f1", "precision", "recall", "accuracy", "roc_auc", "pr_auc", None
     }
     if args.selection_metric not in VALID_SELECTION_METRICS:
         raise ValueError(f"Unsupported selection_metric '{args.selection_metric}'. Must be one of {VALID_SELECTION_METRICS}")
@@ -392,9 +398,18 @@ def load_and_split_dataset(
     slurm_tmpdir,
     debug=False,
     seed=42,
-    format_fn=None
+    format_fn=None,
+    cron_split=True,
 ):
+    """
+    Load dataset and split into train/eval/final_test. 
+    The input dataset file should have a chronological order of rows.
 
+    Args:
+        cron_split (bool): 
+            True  -> keep input order and take contiguous 80/10/10 (chronological-style).
+            False -> shuffle the entire dataset first (seeded), then split 80/10/10.
+    """
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
 
@@ -404,7 +419,7 @@ def load_and_split_dataset(
         # Add length field using raw text length
         full_dataset = full_dataset.map(lambda ex: {"length": len(ex["text"])})
 
-        # Sort and take top 7000
+        # Sort and take top 7000 (kept as-is to preserve existing behavior)
         full_dataset = full_dataset.sort("length", reverse=True)
         final_dataset = full_dataset.select(range(min(7000, len(full_dataset))))
     else:
@@ -418,14 +433,10 @@ def load_and_split_dataset(
             src = Path(dataset_path).resolve()
             repo = Path(repo_path).resolve()
 
-            # Decide how to place the file inside TMPDIR:
-            # - If src is inside repo, keep its relative path under repo
-            # - Otherwise, flatten (just copy filename into TMPDIR)
             try:
                 src_relative_to_repo = src.relative_to(repo)
                 rel_parent = src_relative_to_repo.parent  # e.g., datasets/apachejit
             except ValueError:
-                # Not under repo; don't try to recreate the whole absolute path
                 rel_parent = Path("")
 
             dest_dir = Path(slurm_tmpdir) / rel_parent
@@ -444,14 +455,22 @@ def load_and_split_dataset(
 
         final_dataset = load_dataset("json", data_files=dataset_copy_path, split="train")
 
+    # Optionally shuffle entire dataset BEFORE splitting (IID-style)
+    if cron_split:
+        print("⏱️ Using chronological (contiguous) 80/10/10 split (default).")
+        dataset_for_split = final_dataset
+    else:
+        print("🔀 Using non-chronological split: shuffling full dataset before 80/10/10.")
+        dataset_for_split = final_dataset.shuffle(seed=seed)
+
     # Split 80% train, 10% eval, 10% test
-    n_total = len(final_dataset)
+    n_total = len(dataset_for_split)
     n_train = int(n_total * 0.8)
     n_eval  = int(n_total * 0.1)
 
-    train_dataset = final_dataset.select(range(0, n_train))
-    eval_dataset  = final_dataset.select(range(n_train, n_train + n_eval))
-    test_dataset  = final_dataset.select(range(n_train + n_eval, n_total))
+    train_dataset = dataset_for_split.select(range(0, n_train))
+    eval_dataset  = dataset_for_split.select(range(n_train, n_train + n_eval))
+    test_dataset  = dataset_for_split.select(range(n_train + n_eval, n_total))
 
     # Optional debug downsampling
     if debug:
@@ -459,7 +478,7 @@ def load_and_split_dataset(
         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
         test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
 
-    # Shuffle each split independently
+    # Shuffle each split independently for training randomness
     train_dataset = train_dataset.shuffle(seed=seed)
     eval_dataset  = eval_dataset.shuffle(seed=seed + 1)
     test_dataset  = test_dataset.shuffle(seed=seed + 2)
@@ -639,6 +658,29 @@ def determine_format_fn(task, clm_for_seq_cls=False):
     return format_funct
 
 
+
+def _resample_split(hf_ds, *, strategy_name, samp_strategy, label_column, rnd_seed):
+    """Return a resampled Hugging Face Dataset for a single split."""
+
+    df = pd.DataFrame(hf_ds)
+    if label_column not in df.columns:
+        raise KeyError(f"Label column '{label_column}' not found in dataset split.")
+
+    X = df.drop(columns=[label_column])
+    y = df[label_column]
+
+    if strategy_name == "oversampling":
+        sampler = RandomOverSampler(random_state=rnd_seed, sampling_strategy=samp_strategy)
+    else:
+        sampler = RandomUnderSampler(random_state=rnd_seed, sampling_strategy=samp_strategy)
+
+    X_resampled, y_resampled = sampler.fit_resample(X, y)
+
+    resampled_df = X_resampled.copy()
+    resampled_df[label_column] = y_resampled
+    return Dataset.from_pandas(resampled_df, preserve_index=False)
+    
+
 def apply_class_imbalance_strategy(
     dataset: DatasetDict,
     strategy: str = "none",
@@ -646,7 +688,8 @@ def apply_class_imbalance_strategy(
     alpha: float = 0.25,
     gamma: float = 2.0,
     sampling_strategy=None,
-    label_col: str = "orig-labels"
+    label_col: str = "orig-labels",
+    balance_eval: bool = False,
 ):
     """
     sampling_strategy (used when strategy is 'oversampling' or 'undersampling'):
@@ -664,22 +707,26 @@ def apply_class_imbalance_strategy(
     Notes:
     - For oversampling, float must be in (0, 1]; use dict/callable if you want a class to exceed the majority.
     - For multiclass with floats, prefer dict/callable for full control.
+    - If balance_eval=True and strategy is (over|under)sampling, the same resampling is applied to the eval split.
     """
 
     train_dataset = dataset["train"]
-    eval_dataset = dataset["test"]
-    test_dataset = dataset["final_test"]
+    eval_dataset  = dataset["test"]
+    test_dataset  = dataset["final_test"]
 
     before_dist = compute_class_distribution(dataset, label_col)
     print("📊 Class distribution before balancing:")
     for split, stats in before_dist.items():
         print(f"  {split}: {stats}")
 
+    # ---- strategy branches ----
     if strategy == "focal_loss":
         print("🔥 Using Focal Loss for class imbalance.")
         label_counts = Counter(train_dataset[label_col])
         alpha_dict = {k: alpha for k in label_counts.keys()}
-        return dataset, None, {"alpha": alpha_dict, "gamma": gamma}, before_dist, before_dist
+        # No resampling; eval distribution unchanged even if balance_eval=True.
+        after_dist = before_dist
+        return dataset, None, {"alpha": alpha_dict, "gamma": gamma}, before_dist, after_dist
 
     elif strategy == "weighted_loss":
         print("🔄 Using Weighted Cross Entropy Loss.")
@@ -689,37 +736,43 @@ def apply_class_imbalance_strategy(
         weights = [total / label_counts[i] for i in sorted(label_counts)]
         for i, weight in enumerate(weights):
             print(f"  Class {i} weight: {weight:.4f}")
-        return dataset, weights, None, before_dist, before_dist
+        # No resampling; eval distribution unchanged even if balance_eval=True.
+        after_dist = before_dist
+        return dataset, weights, None, before_dist, after_dist
 
     elif strategy in {"oversampling", "undersampling"}:
         if sampling_strategy is None:
-            # default behavior matches your previous code: fully balance classes
-            sampling_strategy = "auto"  # imblearn will balance all classes
+            # default behavior: fully balance classes
+            sampling_strategy = "auto"
 
         print(f"{'📈' if strategy=='oversampling' else '📉'} Applying {strategy} with sampling_strategy={sampling_strategy!r}")
 
-        df = pd.DataFrame(train_dataset)
-        if label_col not in df.columns:
-            raise KeyError(f"Label column '{label_col}' not found in the training dataset.")
+        # Always resample TRAIN
+        train_dataset_balanced = _resample_split(
+            train_dataset,
+            strategy_name=strategy,
+            samp_strategy=sampling_strategy,
+            label_column=label_col,
+            rnd_seed=seed,
+        )
 
-        X = df.drop(columns=[label_col])
-        y = df[label_col]
-
-        if strategy == "oversampling":
-            sampler = RandomOverSampler(random_state=seed, sampling_strategy=sampling_strategy)
+        # Optionally resample EVAL the same way
+        if balance_eval:
+            print("⚖️  balance_eval=True -> applying the same resampling to the eval split.")
+            eval_dataset_balanced = _resample_split(
+                eval_dataset,
+                strategy_name=strategy,
+                samp_strategy=sampling_strategy,
+                label_column=label_col,
+                rnd_seed=seed + 1,
+            )
         else:
-            sampler = RandomUnderSampler(random_state=seed, sampling_strategy=sampling_strategy)
-
-        X_resampled, y_resampled = sampler.fit_resample(X, y)
-
-        resampled_df = X_resampled.copy()
-        resampled_df[label_col] = y_resampled
-        train_dataset_balanced = Dataset.from_pandas(resampled_df, preserve_index=False)
+            eval_dataset_balanced = eval_dataset
 
         balanced_dataset = DatasetDict({
             "train": train_dataset_balanced,
-            "test": eval_dataset,
-            "final_test": test_dataset
+            "test": eval_dataset_balanced,
+            "final_test": test_dataset,
         })
 
         after_dist = compute_class_distribution(balanced_dataset, label_col)
@@ -731,7 +784,8 @@ def apply_class_imbalance_strategy(
 
     elif strategy == "none":
         print("🟢 No class imbalance fix applied.")
-        return dataset, None, None, before_dist, before_dist
+        after_dist = before_dist
+        return dataset, None, None, before_dist, after_dist
 
     else:
         raise ValueError(f"Unsupported class imbalance strategy: {strategy}")

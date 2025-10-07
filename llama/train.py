@@ -212,7 +212,8 @@ def main():
         repo_path=REPO_PATH,
         slurm_tmpdir=slurm_tmpdir,
         debug=DEBUG,
-        format_fn=format_func
+        format_fn=format_func,
+        cron_split=args.dataset_cron_split
     )
 
     dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(
@@ -222,7 +223,8 @@ def main():
         alpha=FL_ALPHA,
         gamma=FL_GAMMA,
         sampling_strategy=args.resampling_ratio,
-        label_col="labels" if TASK == "seq_cls" else "orig-labels"
+        label_col="labels" if TASK == "seq_cls" else "orig-labels",
+        balance_eval=args.balance_eval_dataset
     )
 
     # Prepare loss function if needed

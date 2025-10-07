@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=train-tril-clm-for-seqcls
+#SBATCH --job-name=train-clm-for-seq-cls-2
 #SBATCH --output=/home/alis/links/scratch/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1

@@ -477,9 +477,7 @@ def run_inference(
 
     # Inference with tqdm
     probs_list = []
-    for idx, text in enumerate(tqdm(texts, desc="Running inference", unit="sample")):
-        if idx % 500 == 0:
-            print("At sample:", idx)
+    for text in tqdm(texts, desc="Running inference", unit="sample"):
         out = clf(text, truncation=should_trunc, max_length=tokenizer_max_len, top_k=None)
         if isinstance(out, dict):
             scores = [out]
