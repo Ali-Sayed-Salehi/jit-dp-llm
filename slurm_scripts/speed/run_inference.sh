@@ -18,7 +18,7 @@ echo "running the inference script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/run_inference.py \
   --base_model_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-09-29_22-14-38/output/checkpoint-125 \
+  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-09-29_22-14-38/output/checkpoint-425 \
   --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
   --mixed_precision bf16 \
   --truncation_len 22000 \
