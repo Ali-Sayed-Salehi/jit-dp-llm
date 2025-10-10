@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=run-inference-speed
+#SBATCH --job-name=inference-debug
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
@@ -23,6 +23,6 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/run_inference.py \
   --mixed_precision bf16 \
   --truncation_len 22000 \
   --quant \
-  # --debug
+  --debug
 
 echo "inference finished"

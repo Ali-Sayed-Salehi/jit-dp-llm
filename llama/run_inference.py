@@ -415,14 +415,18 @@ def run_inference(
         else:
             commit_ids = [None] * len(y_true)
 
-        pos_conf = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
+        p_pos = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
+        p_neg = probs[:, 0] if probs.shape[1] > 1 else (1.0 - p_pos)  # safety if shape==1
+
+        conf_pred = np.where(preds == 1, p_pos, p_neg)
+
         samples = []
         for i in range(len(y_true)):
             samples.append({
                 "commit_id": commit_ids[i],
                 "true_label": int(y_true[i]),
                 "prediction": int(preds[i]),
-                "confidence": float(pos_conf[i]),
+                "confidence": float(conf_pred[i]),  # <- predicted-class probability
                 "raw_top_in_{0,1}": bool(top_in_set_flags[i]),
             })
         print("Per-sample results built. Total:", len(samples))
