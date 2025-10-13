@@ -28,6 +28,7 @@ LLMs/**/*
 /docker_jobs
 .nfs*
 /llama/configs/train_config_local.yaml
+/analysis/results/
 
 
 # cache
