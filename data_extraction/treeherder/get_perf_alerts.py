@@ -117,11 +117,11 @@ for alert_summary in filtered_alert_summaries_list:
         if not alert.get('is_regression'):
              continue
         
-        alert_test_suite = alert['series_signature'].get('suite')
+        # alert_test_suite = alert['series_signature'].get('suite')
         alert_single_test = alert['series_signature'].get('test')
 
-        if alert_test_suite:
-             regression_tests_set.add(alert_test_suite)
+        # if alert_test_suite:
+        #      regression_tests_set.add(alert_test_suite)
 
         if alert_single_test:
              regression_tests_set.add(alert_single_test)
