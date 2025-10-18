@@ -13,6 +13,13 @@ import sys
 import argparse
 import re
 
+# TODO: modify this file so that instead of it getting the diffs from conduit API it would get the from the local mercurial repo. It should clone the 
+# Mozilla Autoland repo in a separate directory where the script resides, and get the pushes that reference that bug id in their changeset messages. 
+# Don't include changesets that are reverts. These have the word "Revert" at the beginning of their changeset message.
+# Each bugzilla ticket from perf_bugs.csv might have multiple pushes associated with it. For each bug, I want the combined code change
+# diff from the all the pushes and the concatenated changeset messages from all the pushes and changesets.
+# Do this in a way that's efficient and can be continued in case of interruptions cause we have tens of thousands of bugzilla bugs. 
+
 def remove_bug_prefix(text):
     return re.sub(r"^Bug\s*\d+[^\w]*\s*", "", text, flags=re.IGNORECASE)
 
