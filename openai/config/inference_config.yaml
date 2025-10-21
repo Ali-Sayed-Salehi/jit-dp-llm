@@ -1,0 +1,45 @@
+
+# ──────────────────────────────────────────────────────────────────────────────
+# file: config/inference_config.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+# Place this at: repo_root/openai/config/inference_config.yaml
+# You can override the path by setting env var: RAG_CONFIG_PATH=/abs/path/to/your.yaml
+# NOTE: paths are relative to the working directory from which you run the inference.py script
+
+# One of: build | predict
+cmd: predict
+
+# Which embedder for both build and predict phases
+#   sentence: SentenceTransformers
+#   openai  : OpenAI embeddings API
+embedder: sentence
+st_model: sentence-transformers/all-MiniLM-L6-v2
+openai_embedding_model: text-embedding-3-small
+
+# Build settings (used when cmd: build)
+build:
+  data: datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl     # path to JSONL with {prompt, response}
+  persist: openai/rag_index           # path for Chroma index directory
+  id_field: null                 # optional field name in JSONL for row ids
+
+# Predict settings (used when cmd: predict)
+predict:
+  # Where to read targets from (same JSONL used for build, usually)
+  data: datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
+
+  # Use the last N rows of the dataset as inference targets
+  n_last: 10
+
+  # Debug mode: if true, ignore n_last and pick ONE random row
+  # from the last 10% of the file (seed is optional, for reproducibility)
+  debug: false
+  debug_seed: null
+
+  persist: openai/rag_index           # must match the path used in build
+  k: 2
+  llm: openai                    # one of: openai | gemini | hf-local
+  openai_model: gpt-4o-mini
+  gemini_model: gemini-2-flash
+  hf_model_dir: LLMs/snapshots/meta-llama/Llama-3.1-70B
+  hf_dtype: null                 # e.g., float16, bfloat16
+  hf_max_new: 256

@@ -44,3 +44,11 @@ treeherder-client
 unidiff
 dotenv
 hf_transfer
+
+#RAG
+chromadb 
+sentence-transformers 
+pydantic 
+python-dotenv 
+tiktoken
+google-generativeai
