@@ -10,33 +10,46 @@ import pandas as pd
 # =========================
 # Defaults / knobs
 # =========================
-RANDOM_SEED            = 42
-YEAR_DAYS              = 365
-PUSH_RATE_PER_HOUR     = 8.0                    # avg pushes/hour (Poisson)
-DEFECT_RATE            = 0.01                   # 1% true culprit pushes
+RANDOM_SEED                   = 42
+YEAR_DAYS                     = 365
+PUSH_RATE_PER_HOUR            = 8.0     # avg pushes/hour (Poisson)
+DEFECT_RATE                   = 0.01    # 1% true culprit pushes
 
-TEST_COST              = 1.0                    # cost per scheduled/triggered test
-BACKFILL_COST          = 1.0                    # cost per backfill "step"
-TEST_EXEC_HOURS        = 0.5                    # runtime of a single perf test run (hours)
+TEST_COST                     = 1.0     # cost per scheduled/triggered test
+BACKFILL_COST                 = 1.0     # cost per backfill "step"
+TEST_EXEC_HOURS               = 0.5     # runtime of a single perf test run (hours)
 
-# Predictor driven by AUC (Option A); we will TUNE τ per AUC
-TARGET_ROC_AUC         = 0.8                   # simulated predictor quality
+# Predictor quality; we will TUNE τ per AUC
+TARGET_ROC_AUC                = 0.8
 
-# Scheduled test frequency for the proposed policy (real time, not windowed)
-TEST_INTERVAL_HOURS    = 4                    # can be < 4 now, e.g., 0.5 or 0.25
-BASELINE_TEST_INTERVAL = 4
-# Threshold sweep to auto-pick best τ (per AUC & frequency)
-THRESHOLD_GRID         = np.linspace(0.5, 0.99, 25)
+# Baseline fixed schedule for comparison
+BASELINE_TEST_INTERVAL        = 4.0     # hours
+
+# Proposed policy schedule (used if OPTIMIZE_TEST_INTERVAL_HOURS=False)
+TEST_INTERVAL_HOURS           = 100.0   # can be <4 now, e.g., 0.5 or 0.25
+
+# Optional: also optimize TEST_INTERVAL_HOURS over a grid
+OPTIMIZE_TEST_INTERVAL_HOURS  = True
+
+# Much denser grid of intervals (hours) from 6 minutes up to 1 week
+TEST_INTERVAL_GRID = np.linspace(0.1, 168.0, 100)  # from 0.1 h to 168 h (≈ 1 week)
+
+# Constraint for both τ and TEST_INTERVAL optimization:
+# Reject candidates whose max_time_to_exact_hours exceeds this cap.
+MAX_MAX_TIME_TO_DETECT       = 18     # hours (user-specified)
+
+# Grid to auto-pick best τ (per AUC & frequency)
+THRESHOLD_GRID                = np.linspace(0.5, 0.99, 25)
 
 # Backfill cost model overhead per located culprit
-BISECT_VERIFY_OVERHEAD = 2
-MIN_BISECT_COST        = 0
+BISECT_VERIFY_OVERHEAD        = 2
+MIN_BISECT_COST               = 0
 
-SIM_START              = pd.Timestamp("2024-01-01 00:00:00Z")
-SIM_END                = SIM_START + pd.Timedelta(hours=YEAR_DAYS * 24)
+SIM_START                     = pd.Timestamp("2024-01-01 00:00:00Z")
+SIM_END                       = SIM_START + pd.Timedelta(hours=YEAR_DAYS * 24)
 
 # Risk-bisection smoothing (avoid zero-prob partitions)
-RISK_FLOOR_EPS         = 1e-9
+RISK_FLOOR_EPS                = 1e-9
 # =========================
 
 rng = np.random.default_rng(RANDOM_SEED)
@@ -115,16 +128,13 @@ def generate_pushes_for_year() -> Tuple[List[Push], pd.Timestamp]:
     Return (pushes_sorted_by_time, sim_end_time).
     """
     total_hours = YEAR_DAYS * 24
-    pushes: List[Push] = []
     labels, times, files_list, lines_list, hours_list = [], [], [], [], []
 
-    gi = 0
     for h in range(total_hours):
         base = SIM_START + pd.Timedelta(hours=h)
         n_pushes = rng.poisson(PUSH_RATE_PER_HOUR)
         if n_pushes > 0:
-            # Uniform offsets within the hour (in seconds)
-            offsets = rng.uniform(0, 3600, size=n_pushes)
+            offsets = rng.uniform(0, 3600, size=n_pushes)  # seconds within hour
             offsets.sort()
             for o in offsets:
                 ts = base + pd.Timedelta(seconds=float(o))
@@ -142,7 +152,7 @@ def generate_pushes_for_year() -> Tuple[List[Push], pd.Timestamp]:
     y_arr = np.array(labels, dtype=int)
     scores = make_scores_from_auc(y_arr, TARGET_ROC_AUC, rng) if len(y_arr) > 0 else np.array([], dtype=float)
 
-    pushes = []
+    pushes: List[Push] = []
     for i in range(len(y_arr)):
         pushes.append(Push(
             global_idx=i,
@@ -154,9 +164,7 @@ def generate_pushes_for_year() -> Tuple[List[Push], pd.Timestamp]:
             score=float(scores[i]),
         ))
 
-    # Ensure chronological order (should already be sorted by construction)
     pushes.sort(key=lambda p: p.ts)
-    # Reassign global_idx to match time order
     for i, p in enumerate(pushes):
         p.global_idx = i
 
@@ -172,7 +180,6 @@ def iter_defect_indices_in_span(pushes: List[Push], a_last_test_idx: int, b_curr
             yield gi
 
 def last_push_idx_at_or_before(push_ts: List[pd.Timestamp], t: pd.Timestamp) -> int:
-    """Return the index of the last push with timestamp <= t, or -1 if none."""
     pos = bisect.bisect_right(push_ts, t) - 1
     return pos if pos >= 0 else -1
 
@@ -186,7 +193,7 @@ def make_schedule_times(every_hours: float, start: pd.Timestamp, end: pd.Timesta
         t += pd.Timedelta(hours=every_hours)
     return times
 
-# ---------- Multi-culprit bisection helpers (unchanged) ----------
+# ---------- Multi-culprit bisection helpers ----------
 
 def uniform_bisect_steps_for_culprit(span_len: int, culprit_pos: int) -> int:
     if span_len <= 1:
@@ -210,8 +217,6 @@ def multi_culprit_uniform_bisect_steps(
 ) -> Tuple[int, Dict[int, int]]:
     L = start_idx + 1
     R = end_idx
-    if R <= L:
-        return 0, {}
     defects = sorted([d for d in defect_indices if L <= d <= R])
     if not defects:
         return 0, {}
@@ -269,9 +274,6 @@ def multi_culprit_risk_bisect_steps(
 ) -> Tuple[int, Dict[int, int]]:
     L = start_idx + 1
     R = end_idx
-    if R <= L:
-        return 0, {}
-
     defects = sorted([d for d in defect_indices if L <= d <= R])
     if not defects:
         return 0, {}
@@ -295,7 +297,7 @@ def multi_culprit_risk_bisect_steps(
 
     return total_steps, per_defect_steps
 
-# ---------- Baseline (fixed-interval only) with multi-culprit uniform bisection ----------
+# ---------- Baseline (fixed-interval only) ----------
 
 def simulate_baseline(pushes: List[Push], interval_hours: float) -> Dict[str, float]:
     scheduled_tests = 0
@@ -331,8 +333,10 @@ def simulate_baseline(pushes: List[Push], interval_hours: float) -> Dict[str, fl
 
     total_cost = scheduled_tests * TEST_COST + backfill_tests * BACKFILL_COST
     avg_det = float(np.mean(detection_latencies_hours)) if detection_latencies_hours else 0.0
+    med_det = float(np.median(detection_latencies_hours)) if detection_latencies_hours else 0.0
     max_det = float(np.max(detection_latencies_hours)) if detection_latencies_hours else 0.0
     avg_exact = float(np.mean(exact_latencies_hours)) if exact_latencies_hours else 0.0
+    med_exact = float(np.median(exact_latencies_hours)) if exact_latencies_hours else 0.0
     max_exact = float(np.max(exact_latencies_hours)) if exact_latencies_hours else 0.0
 
     return dict(
@@ -345,12 +349,14 @@ def simulate_baseline(pushes: List[Push], interval_hours: float) -> Dict[str, fl
         detections=detections,
         delayed_detections=0,
         avg_detect_hours=avg_det,
+        median_detect_hours=med_det,
         max_detect_hours=max_det,
         avg_time_to_exact_hours=avg_exact,
+        median_time_to_exact_hours=med_exact,
         max_time_to_exact_hours=max_exact,
     )
 
-# ---------- Proposed (scheduled + commit-triggered) with multi-culprit risk bisection ----------
+# ---------- Proposed (scheduled + commit-triggered) ----------
 
 def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_interval_hours: float) -> Dict[str, float]:
     scheduled_tests = 0
@@ -361,15 +367,13 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
     detection_latencies_hours: List[float] = []
     exact_latencies_hours: List[float] = []
 
-    last_test_idx = -1  # global push index of last test boundary
-
+    last_test_idx = -1
     push_ts = [p.ts for p in pushes]
     schedule_times = make_schedule_times(test_interval_hours, SIM_START, SIM_END)
     next_sched_i = 0
 
-    # Iterate pushes in time; fire due scheduled tests before each push; then handle predictor trigger
+    # Iterate pushes in time; run due scheduled tests before each push; then predictor-triggered
     for gi, push in enumerate(pushes):
-        # Flush any scheduled tests that occur before or at this push
         while next_sched_i < len(schedule_times) and schedule_times[next_sched_i] <= push.ts:
             t = schedule_times[next_sched_i]
             next_sched_i += 1
@@ -392,7 +396,6 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
                     backfill_tests += int(span_steps)
                 last_test_idx = b_idx
 
-        # Predictor-triggered on this push
         if push.score >= threshold:
             predictor_tests += 1
             detection_time = push.ts
@@ -411,7 +414,6 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
                 backfill_tests += int(span_steps)
             last_test_idx = gi
 
-    # Flush remaining scheduled tests after last push until SIM_END
     while next_sched_i < len(schedule_times):
         t = schedule_times[next_sched_i]
         next_sched_i += 1
@@ -436,9 +438,13 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
 
     total_scheduled = scheduled_tests + predictor_tests
     total_cost = total_scheduled * TEST_COST + backfill_tests * BACKFILL_COST
+
     avg_det = float(np.mean(detection_latencies_hours)) if detection_latencies_hours else 0.0
+    med_det = float(np.median(detection_latencies_hours)) if detection_latencies_hours else 0.0
     max_det = float(np.max(detection_latencies_hours)) if detection_latencies_hours else 0.0
+
     avg_exact = float(np.mean(exact_latencies_hours)) if exact_latencies_hours else 0.0
+    med_exact = float(np.median(exact_latencies_hours)) if exact_latencies_hours else 0.0
     max_exact = float(np.max(exact_latencies_hours)) if exact_latencies_hours else 0.0
 
     return dict(
@@ -452,20 +458,82 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
         detections=detections,
         delayed_detections=0,
         avg_detect_hours=avg_det,
+        median_detect_hours=med_det,
         max_detect_hours=max_det,
         avg_time_to_exact_hours=avg_exact,
+        median_time_to_exact_hours=med_exact,
         max_time_to_exact_hours=max_exact,
     )
 
-# ---------- Auto-tune τ for given AUC & test interval ----------
+# ---------- Optimization helpers with constraint ----------
 
-def pick_best_threshold(pushes: List[Push], test_interval_hours: float, grid: np.ndarray) -> Dict[str, float]:
-    best = None
+def _feasible_under_max_time(res: Dict[str, float], cap_hours: float) -> bool:
+    return res.get("max_time_to_exact_hours", float("inf")) <= cap_hours
+
+def pick_best_threshold(
+    pushes: List[Push],
+    test_interval_hours: float,
+    grid: np.ndarray,
+    max_time_cap: float
+) -> Dict[str, float]:
+    """
+    Search τ to minimize total_tests subject to max_time_to_exact_hours <= max_time_cap.
+    If no τ is feasible, pick the one with smallest violation (min max_time_to_exact_hours)
+    and include a 'constraint_violated': True flag.
+    """
+    best_feasible = None
+    best_infeasible = None  # track smallest max_time_to_exact for fallback
+
     for tau in grid:
         res = simulate_proposed_streaming(pushes, threshold=float(tau), test_interval_hours=test_interval_hours)
-        if (best is None) or (res["total_tests"] < best["total_tests"]):
-            best = {"tau": float(tau), **res}
-    return best
+        if _feasible_under_max_time(res, max_time_cap):
+            if (best_feasible is None) or (res["total_tests"] < best_feasible["total_tests"]):
+                best_feasible = {"tau": float(tau), **res}
+        else:
+            if (best_infeasible is None) or (res["max_time_to_exact_hours"] < best_infeasible["max_time_to_exact_hours"]):
+                best_infeasible = {"tau": float(tau), **res}
+
+    if best_feasible is not None:
+        best_feasible["constraint_violated"] = False
+        return best_feasible
+
+    if best_infeasible is not None:
+        best_infeasible["constraint_violated"] = True
+        return best_infeasible
+
+    return {"tau": float(grid[0]), "constraint_violated": True}
+
+def pick_best_interval_and_threshold(
+    pushes: List[Push],
+    interval_grid: List[float],
+    tau_grid: np.ndarray,
+    max_time_cap: float
+) -> Dict[str, float]:
+    """
+    Jointly optimize TEST_INTERVAL_HOURS and τ under the same max_time_to_exact constraint.
+    Minimize total_tests; prefer feasible candidates. If none feasible, pick least-violating.
+    """
+    best_feasible = None
+    best_infeasible = None
+
+    for interval in interval_grid:
+        tau_res = pick_best_threshold(pushes, interval, tau_grid, max_time_cap)
+        candidate = {"test_interval_hours": float(interval), **tau_res}
+        if not tau_res.get("constraint_violated", False):
+            if (best_feasible is None) or (candidate["total_tests"] < best_feasible["total_tests"]):
+                best_feasible = candidate
+        else:
+            if (best_infeasible is None) or (candidate["max_time_to_exact_hours"] < best_infeasible["max_time_to_exact_hours"]):
+                best_infeasible = candidate
+
+    if best_feasible is not None:
+        return best_feasible
+
+    return best_infeasible if best_infeasible is not None else {
+        "test_interval_hours": float(interval_grid[0]),
+        "tau": float(tau_grid[0]),
+        "constraint_violated": True
+    }
 
 # ---------- Main ----------
 
@@ -488,47 +556,67 @@ def main():
     print(f"Total pushes: {total_pushes} | True defects: {total_defects} "
           f"({100.0*total_defects/max(1,total_pushes):.2f}%)")
     print(f"Target ROC AUC: {TARGET_ROC_AUC:.3f} | Realized ROC AUC (synthetic): {realized_auc:.3f}")
-    print(f"Scheduled interval: every {TEST_INTERVAL_HOURS}h (no windowing)")
+    print(f"Baseline interval: every {BASELINE_TEST_INTERVAL}h")
+    print(f"Constraint: max_time_to_exact_hours ≤ {MAX_MAX_TIME_TO_DETECT:.2f}h")
     print(f"Test runtime: {TEST_EXEC_HOURS} hours per run\n")
 
-    # Baseline (e.g., 4h) - multi-culprit uniform bisection, fixed cadence only
-    base_interval = BASELINE_TEST_INTERVAL
-    base = simulate_baseline(pushes, interval_hours=base_interval)
+    # Baseline for comparison
+    base = simulate_baseline(pushes, interval_hours=BASELINE_TEST_INTERVAL)
 
-    # Tune threshold for proposed streaming policy (multi-culprit risk-aware backfill)
-    best = pick_best_threshold(pushes, TEST_INTERVAL_HOURS, THRESHOLD_GRID)
+    # Optimize (interval + tau) or just tau at fixed interval
+    if OPTIMIZE_TEST_INTERVAL_HOURS:
+        best_joint = pick_best_interval_and_threshold(
+            pushes,
+            TEST_INTERVAL_GRID,
+            THRESHOLD_GRID,
+            MAX_MAX_TIME_TO_DETECT
+        )
+        best = best_joint
+        chosen_interval = best_joint.get("test_interval_hours", TEST_INTERVAL_HOURS)
+        chosen_tau = best_joint.get("tau", None)
+    else:
+        chosen_interval = TEST_INTERVAL_HOURS
+        best = pick_best_threshold(pushes, chosen_interval, THRESHOLD_GRID, MAX_MAX_TIME_TO_DETECT)
+        chosen_tau = best.get("tau", None)
 
+    # Pretty results
     print("=== Results ===")
     def line(d: Dict[str, float]) -> str:
         return (f"{d['policy']:>36} | scheduled={d['scheduled_tests']:>6} "
                 f"| (fixed={d.get('fixed_schedule_tests',0):>4}, trig={d.get('predictor_triggered_tests',0):>4}) "
                 f"| backfill={d['backfill_tests']:>6} | total_tests={d['total_tests']:>7} "
                 f"| cost={d['total_cost']:>9.1f} | detections={d['detections']:>6} "
-                f"| avg_detect_h={d.get('avg_detect_hours',0):>5.2f} | max_detect_h={d.get('max_detect_hours',0):>5.2f} "
-                f"| avg_exact_h={d.get('avg_time_to_exact_hours',0):>5.2f} | max_exact_h={d.get('max_time_to_exact_hours',0):>5.2f}")
+                f"| avg_detect_h={d.get('avg_detect_hours',0):>5.2f} | median_detect_h={d.get('median_detect_hours',0):>5.2f} | max_detect_h={d.get('max_detect_hours',0):>5.2f} "
+                f"| avg_exact_h={d.get('avg_time_to_exact_hours',0):>5.2f} | median_exact_h={d.get('median_time_to_exact_hours',0):>5.2f} | max_exact_h={d.get('max_time_to_exact_hours',0):>5.2f}")
 
     print(line(base))
-    print(f"{'AUTO τ pick':>36} | τ*={best['tau']:.3f}")
+
+    constraint_note = ""
+    if best.get("constraint_violated", False):
+        constraint_note = "  [WARNING: constraint not satisfied; chose least-violating candidate]"
+
+    if chosen_tau is not None:
+        print(f"{'AUTO pick':>36} | interval={chosen_interval}h | τ*={chosen_tau:.3f}{constraint_note}")
+    else:
+        print(f"{'AUTO pick':>36} | interval={chosen_interval}h{constraint_note}")
+
     print(line(best))
 
+    # Savings vs baseline
     saved_tests = base["total_tests"] - best["total_tests"]
     saved_cost  = base["total_cost"]  - best["total_cost"]
-    print("\n=== Savings vs baseline (with τ* and interval={}h) ===".format(TEST_INTERVAL_HOURS))
-    print(f"Saved tests: {saved_tests:.1f} (positive = fewer tests than baseline)")
-    print(f"Saved cost : {saved_cost:.1f}")
-    print(f"Avg detect hours: baseline={base['avg_detect_hours']:.2f} vs proposed={best['avg_detect_hours']:.2f}")
-    print(f"Avg time to exact: baseline={base['avg_time_to_exact_hours']:.2f} vs proposed={best['avg_time_to_exact_hours']:.2f}")
-
-    # Sweep table for context
-    sweep = []
-    for tau in THRESHOLD_GRID:
-        res = simulate_proposed_streaming(pushes, threshold=float(tau), test_interval_hours=TEST_INTERVAL_HOURS)
-        sweep.append({"threshold": float(tau), **res})
-    df = pd.DataFrame(sweep).sort_values("threshold")
-    print("\n=== Threshold sweep (proposed streaming) ===")
-    print(df[["threshold","scheduled_tests","fixed_schedule_tests","predictor_triggered_tests",
-              "backfill_tests","total_tests","detections",
-              "avg_detect_hours","max_detect_hours","avg_time_to_exact_hours","max_time_to_exact_hours","total_cost"]].to_string(index=False))
+    print("\n=== Savings vs baseline (with τ* and interval={}h) ===".format(chosen_interval))
+    print(f"Saved tests           : {saved_tests:.1f} (positive = fewer tests than baseline)")
+    print(f"Saved cost            : {saved_cost:.1f}")
+    # Mean comparisons
+    print(f"Mean detect hours     : baseline={base['avg_detect_hours']:.2f} vs proposed={best['avg_detect_hours']:.2f}")
+    print(f"Mean time to exact    : baseline={base['avg_time_to_exact_hours']:.2f} vs proposed={best['avg_time_to_exact_hours']:.2f}")
+    # Median comparisons
+    print(f"Median detect hours   : baseline={base['median_detect_hours']:.2f} vs proposed={best['median_detect_hours']:.2f}")
+    print(f"Median time to exact  : baseline={base['median_time_to_exact_hours']:.2f} vs proposed={best['median_time_to_exact_hours']:.2f}")
+    # Max comparisons
+    print(f"Max detect hours      : baseline={base['max_detect_hours']:.2f} vs proposed={best['max_detect_hours']:.2f}")
+    print(f"Max time to exact     : baseline={base['max_time_to_exact_hours']:.2f} vs proposed={best['max_time_to_exact_hours']:.2f}")
 
 if __name__ == "__main__":
     main()
