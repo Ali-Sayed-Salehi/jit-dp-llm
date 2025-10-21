@@ -356,78 +356,9 @@ def simulate_baseline(pushes: List[Push], interval_hours: float) -> Dict[str, fl
         max_time_to_exact_hours=max_exact,
     )
 
-# ---------- Proposed (scheduled + single-commit triggers) ----------
-
-def _untested_segments(tested: List[bool], L: int, R: int) -> List[Tuple[int, int]]:
-    """
-    From (L..R) inclusive, return contiguous (start, end) segments where tested[i] == False.
-    """
-    segs: List[Tuple[int, int]] = []
-    i = max(L, 0)
-    while i <= R:
-        # skip tested ones
-        while i <= R and tested[i]:
-            i += 1
-        if i > R:
-            break
-        start = i
-        while i <= R and not tested[i]:
-            i += 1
-        end = i - 1
-        if start <= end:
-            segs.append((start, end))
-    return segs
-
-def _process_scheduled_batch_over_untested_segments(
-    pushes: List[Push],
-    segments: List[Tuple[int, int]],
-    detection_time: pd.Timestamp
-) -> Tuple[int, List[float], List[float]]:
-    """
-    Run risk-bisection per untested contiguous segment, processing newer segments first.
-    Returns (backfill_steps, detection_latencies, exact_latencies)
-    """
-    backfill_steps_total = 0
-    det_lats: List[float] = []
-    exact_lats: List[float] = []
-
-    # Process latest segments first (higher indices first), like usual latest-first search
-    segments_sorted = sorted(segments, key=lambda ab: ab[1], reverse=True)
-
-    for (seg_L, seg_R) in segments_sorted:
-        # defects within this segment
-        defect_indices = [i for i in range(seg_L, seg_R + 1) if pushes[i].is_defect]
-        if not defect_indices:
-            continue
-
-        # risk-bisect within this contiguous segment
-        # re-use helper by pretending the "span" is seg_L-1 .. seg_R
-        span_steps, per_defect_steps_local = multi_culprit_risk_bisect_steps(
-            pushes, seg_L - 1, seg_R, defect_indices
-        )
-
-        # For each defect, the total steps until it's pinpointed include prior segments' steps (already accumulated)
-        for defect_idx in defect_indices:
-            dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
-            if dt_hours >= 0:
-                det_lats.append(dt_hours)
-                steps_to_this = backfill_steps_total + per_defect_steps_local.get(defect_idx, span_steps)
-                exact_lats.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
-
-        backfill_steps_total += int(span_steps)
-
-    return backfill_steps_total, det_lats, exact_lats
+# ---------- Proposed (scheduled + commit-triggered) ----------
 
 def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_interval_hours: float) -> Dict[str, float]:
-    """
-    Modified policy:
-    - If a commit is flagged (score >= τ), we run a test ONLY for that single commit.
-      If it's defective, it's detected immediately (no bisection/backfill, no span advance).
-      We mark that commit as 'tested' so scheduled batches skip it later.
-    - Scheduled batch tests at fixed intervals operate only over commits that have NOT
-      already been individually tested, bisection/backfill is done only within those
-      untested contiguous sub-segments.
-    """
     scheduled_tests = 0
     predictor_tests = 0
     backfill_tests = 0
@@ -436,74 +367,74 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
     detection_latencies_hours: List[float] = []
     exact_latencies_hours: List[float] = []
 
+    last_test_idx = -1
     push_ts = [p.ts for p in pushes]
     schedule_times = make_schedule_times(test_interval_hours, SIM_START, SIM_END)
     next_sched_i = 0
 
-    # Track which commits were already covered by single-commit predictor tests
-    tested_single = [False] * len(pushes)
-
-    # This marks how far scheduled batches have covered (in time/index).
-    last_sched_cover_idx = -1
-
-    # Iterate by push arrival; before each push, run any due scheduled batch test
+    # Iterate pushes in time; run due scheduled tests before each push; then predictor-triggered
     for gi, push in enumerate(pushes):
-        # run all due scheduled batches before this push
         while next_sched_i < len(schedule_times) and schedule_times[next_sched_i] <= push.ts:
             t = schedule_times[next_sched_i]
             next_sched_i += 1
+            scheduled_tests += 1
             b_idx = last_push_idx_at_or_before(push_ts, t)
-            if b_idx > last_sched_cover_idx:
-                scheduled_tests += 1
-                # Build untested contiguous segments within (last_sched_cover_idx+1 .. b_idx)
-                segs = _untested_segments(tested_single, last_sched_cover_idx + 1, b_idx)
-
-                if segs:
-                    seg_backfill, seg_dets, seg_exact = _process_scheduled_batch_over_untested_segments(
-                        pushes, segs, detection_time=t
+            if b_idx > last_test_idx:
+                detection_time = t
+                defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, b_idx))
+                if defect_indices:
+                    span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
+                        pushes, last_test_idx, b_idx, defect_indices
                     )
-                    backfill_tests += seg_backfill
-                    detection_latencies_hours.extend(seg_dets)
-                    exact_latencies_hours.extend(seg_exact)
-                    if seg_dets:
-                        detections += 1
+                    for defect_idx in defect_indices:
+                        dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
+                        if dt_hours >= 0:
+                            detection_latencies_hours.append(dt_hours)
+                            steps_to_this = per_defect_steps.get(defect_idx, span_steps)
+                            exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
+                    detections += 1
+                    backfill_tests += int(span_steps)
+                last_test_idx = b_idx
 
-                # scheduled batch now covers up to b_idx
-                last_sched_cover_idx = b_idx
-
-        # Predictor-triggered single-commit test
         if push.score >= threshold:
             predictor_tests += 1
-            tested_single[gi] = True  # mark as covered to skip in later batches
-
-            if push.is_defect:
-                # Immediate detection of the culprit commit; no bisection/backfill
-                detection_time = push.ts
-                dt_hours = (detection_time - push.ts).total_seconds() / 3600.0
-                dt_hours = max(0.0, dt_hours)  # should be 0
-                detection_latencies_hours.append(dt_hours)
-                exact_latencies_hours.append(dt_hours)  # no extra steps
+            detection_time = push.ts
+            defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, gi))
+            if defect_indices:
+                span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
+                    pushes, last_test_idx, gi, defect_indices
+                )
+                for defect_idx in defect_indices:
+                    dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
+                    if dt_hours >= 0:
+                        detection_latencies_hours.append(dt_hours)
+                        steps_to_this = per_defect_steps.get(defect_idx, span_steps)
+                        exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
                 detections += 1
-                # NOTE: We do NOT advance last_sched_cover_idx here; only scheduled batches do.
+                backfill_tests += int(span_steps)
+            last_test_idx = gi
 
-    # Process any remaining scheduled batches after the last push
     while next_sched_i < len(schedule_times):
         t = schedule_times[next_sched_i]
         next_sched_i += 1
+        scheduled_tests += 1
         b_idx = last_push_idx_at_or_before(push_ts, t)
-        if b_idx > last_sched_cover_idx:
-            scheduled_tests += 1
-            segs = _untested_segments(tested_single, last_sched_cover_idx + 1, b_idx)
-            if segs:
-                seg_backfill, seg_dets, seg_exact = _process_scheduled_batch_over_untested_segments(
-                    pushes, segs, detection_time=t
+        if b_idx > last_test_idx:
+            detection_time = t
+            defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, b_idx))
+            if defect_indices:
+                span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
+                    pushes, last_test_idx, b_idx, defect_indices
                 )
-                backfill_tests += seg_backfill
-                detection_latencies_hours.extend(seg_dets)
-                exact_latencies_hours.extend(seg_exact)
-                if seg_dets:
-                    detections += 1
-            last_sched_cover_idx = b_idx
+                for defect_idx in defect_indices:
+                    dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
+                    if dt_hours >= 0:
+                        detection_latencies_hours.append(dt_hours)
+                        steps_to_this = per_defect_steps.get(defect_idx, span_steps)
+                        exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
+                detections += 1
+                backfill_tests += int(span_steps)
+            last_test_idx = b_idx
 
     total_scheduled = scheduled_tests + predictor_tests
     total_cost = total_scheduled * TEST_COST + backfill_tests * BACKFILL_COST
@@ -517,7 +448,7 @@ def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_inter
     max_exact = float(np.max(exact_latencies_hours)) if exact_latencies_hours else 0.0
 
     return dict(
-        policy=f"proposed_stream_singlecommit_{test_interval_hours}h_tau_{threshold}",
+        policy=f"proposed_stream_{test_interval_hours}h_tau_{threshold}",
         scheduled_tests=total_scheduled,
         fixed_schedule_tests=scheduled_tests,
         predictor_triggered_tests=predictor_tests,
