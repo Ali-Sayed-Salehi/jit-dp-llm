@@ -1,21 +1,29 @@
 import requests
 from pprint import pprint
-import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import time
 import pandas as pd
 import ast
 from collections import Counter
 from dotenv import load_dotenv
 import os
-import sys
 
-# - from mozilla_perf/alerts_with_bug_and_test_info_path.csv taken from treeherder module, get products and components that are important for performance
-# - Get all the bugs in the last year that have the same product and components from above
-# - For each regression bug, inspect its "regressed by" field and create a new list of bugs called "regressor_bugs"
-# - For each bug in the last year with relevant components, if the bug also exists in regressor_bugs.csv, mark the "caused perf regression" as true
-# - For each bug, have these columns bug id, summary, caused perf regression, product, component and name this list bugs.csv
+"""
+Fetches recent Bugzilla bugs and links them with performance regressions from Treeherder.
+
+Flow:
+1. Uses the Bugzilla API to fetch bugs created within TIMESPAN_IN_DAYS.
+2. Saves all raw bugs to datasets/mozilla_perf/all_bugs.csv.
+3. Loads the Treeherder alerts_with_bug_and_test_info.csv for existing performance regressions.
+4. Matches each regression bug with its regressor bugs using Bugzilla’s 'regressed_by' field.
+5. Collects product and component info to focus on relevant areas.
+6. Produces a final CSV (perf_bugs.csv) labeling each bug as:
+   - Performance regressor (caused a regression)
+   - Performance regression (was regressed)
+   - Includes regressed tests, alert IDs, and metadata.
+"""
+
+
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 secrets_path = os.path.join(REPO_PATH, "secrets", ".env")
@@ -28,7 +36,7 @@ BUGZILLA_API = f"{BUGZILLA_API_URL}/bug"
 FIELDS = ["id", "summary", "regressed_by", "product", "component", "creation_time"]
 LIMIT = 150  # Page size
 
-TIMESPAN_IN_DAYS = 365
+TIMESPAN_IN_DAYS = 60
 
 offset = 0
 all_bugs_list = []
