@@ -30,4 +30,5 @@ echo "running the data extraction script . . ."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_alerts.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/get_bug_diffs.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/fetch_all_commit.py
 echo "extraction finished"

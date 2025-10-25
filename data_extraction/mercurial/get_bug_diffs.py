@@ -1,68 +1,168 @@
 #!/usr/bin/env python3
-import os
-import sys
 import csv
+import json
+import os
+import re
 import subprocess
-import json  # added
+import sys
+from typing import List, Dict, Optional
+from datetime import datetime, timezone, timedelta
 
-# ======= CONSTANTS (edit these if needed) =======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-CSV_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs.csv")
-AUTOLAND_URL = "https://hg-edge.mozilla.org/integration/autoland"
-DEST_ROOT = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "repos")
-DEST_REPO = os.path.join(DEST_ROOT, "autoland")
-OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "autoland_commits.jsonl")
-# ================================================
+COMMITS_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
+PERF_BUGS_CSV = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs.csv")
+HG_REPO = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "repos", "autoland")
+OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "bug_diffs.jsonl")
 
-def run(cmd, cwd=None, stdout=None):
+BUG_RE = re.compile(r"^\s*Bug\s+(\d+)\s*[-:]?\s*", re.IGNORECASE)
+REVERT_RE = re.compile(r"^\s*(revert|backed out)\b", re.IGNORECASE)
+DIFFREV_LINE_RE = re.compile(r"^\s*Differential\s+Revision:\s*\S+\s*$", re.IGNORECASE)
+
+def load_commits(path: str) -> List[Dict]:
+    commits: List[Dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                commits.append(json.loads(line))
+            except Exception:
+                pass
+    return commits
+
+def bug_id_from_desc(desc: Optional[str]) -> Optional[str]:
+    s = desc or ""
+    if REVERT_RE.match(s):
+        return None
+    m = BUG_RE.match(s)
+    return m.group(1) if m else None
+
+def clean_desc(desc: str) -> str:
+    """Remove 'Bug <id>' prefix and 'Differential Revision: ...' lines from commit message."""
+    text = BUG_RE.sub("", desc or "").strip()
+    lines = [ln for ln in text.splitlines() if not DIFFREV_LINE_RE.match(ln)]
+    return "\n".join(lines).strip()
+
+def run(*args: str, cwd: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(list(args), cwd=cwd, check=check,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+def unified_range_diff(oldest_node: str, newest_node: str, node_to_p1: Dict[str, Optional[str]]) -> str:
+    """
+    Compute unified diff from the FIRST PARENT of oldest_node to newest_node.
+    Prefer parent hash from all_commits.jsonl; fall back to Mercurial's p1() if missing.
+    """
+    p1 = node_to_p1.get(oldest_node)
+    if p1:
+        cp = run("hg", "diff", "-r", p1, "-r", newest_node, cwd=HG_REPO, check=False)
+    else:
+        # Fallback keeps behavior identical if parent data is unavailable
+        cp = run("hg", "diff", "-r", f"p1({oldest_node})", "-r", newest_node, cwd=HG_REPO, check=False)
+    return cp.stdout.decode("utf-8", errors="replace") if cp.stdout else ""
+
+def contiguous_prev_same_bug(commits: List[Dict], start_idx: int, bug_id: str) -> List[str]:
+    """From start_idx (newest match), walk backward collecting contiguous commits for the same bug."""
+    nodes: List[str] = []
+    if bug_id_from_desc(commits[start_idx].get("desc", "")) == bug_id:
+        nodes.append(commits[start_idx]["node"])
+    j = start_idx - 1
+    while j >= 0:
+        if bug_id_from_desc(commits[j].get("desc", "")) == bug_id:
+            nodes.append(commits[j]["node"])
+            j -= 1
+        else:
+            break
+    return nodes  # order: newest -> older ... oldest
+
+def hgdate_to_iso(date_field) -> str:
+    """Convert Mercurial 'date' array [epoch_seconds, tz_offset_seconds] to ISO-8601."""
+    if not isinstance(date_field, (list, tuple)) or len(date_field) != 2:
+        return ""
+    epoch, tzoff = date_field
     try:
-        subprocess.run(cmd, cwd=cwd, check=True, stdout=stdout)
-    except FileNotFoundError:
-        print("Error: 'hg' not found. Install Mercurial and ensure it's on PATH.", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"Command failed: {' '.join(cmd)}", file=sys.stderr)
-        sys.exit(e.returncode)
+        tz = timezone(timedelta(seconds=int(tzoff)))
+        return datetime.fromtimestamp(float(epoch), tz).isoformat(timespec="seconds")
+    except Exception:
+        try:
+            return datetime.utcfromtimestamp(float(epoch)).replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+        except Exception:
+            return ""
 
 def main():
-    # Minimal CSV read (just to ensure it exists and is readable)
-    if not os.path.isfile(CSV_PATH):
-        print(f"Error: CSV not found at {CSV_PATH}", file=sys.stderr)
+    if not os.path.isdir(HG_REPO):
+        print("Mercurial repo missing.", file=sys.stderr)
         sys.exit(1)
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        _ = csv.DictReader(f)
-    print("Loaded perf_bugs.csv")
 
-    # Ensure destination directory exists
-    os.makedirs(DEST_ROOT, exist_ok=True)
+    commits = load_commits(COMMITS_JSONL)
+    node_to_idx = {c["node"]: i for i, c in enumerate(commits)}
+    node_to_desc = {c["node"]: c.get("desc", "") for c in commits}
+    node_to_date = {c["node"]: c.get("date") for c in commits}  # [epoch, tzoff]
+    node_to_epoch = {}
+    for n, d in node_to_date.items():
+        if isinstance(d, (list, tuple)) and len(d) == 2:
+            try:
+                node_to_epoch[n] = float(d[0])
+            except Exception:
+                node_to_epoch[n] = float("-inf")
+        else:
+            node_to_epoch[n] = float("-inf")
+    # Build first-parent map from all_commits.jsonl
+    node_to_p1: Dict[str, Optional[str]] = {c["node"]: (c.get("parents") or [None])[0] for c in commits}
 
-    # Clone or update autoland
-    if not os.path.isdir(DEST_REPO):
-        print(f"Cloning Autoland into: {DEST_REPO}")
-        run(["hg", "clone", AUTOLAND_URL, DEST_REPO])
-    else:
-        print(f"Repo exists at {DEST_REPO}; pulling updates.")
-        run(["hg", "pull", "-u"], cwd=DEST_REPO)
+    rows: List[Dict] = []
 
-    # Export all commits (hash + message) as JSONL
-    os.makedirs(os.path.dirname(OUT_JSONL), exist_ok=True)
-    print(f"Writing all commits (JSONL) to {OUT_JSONL} ...")
+    with open(PERF_BUGS_CSV, "r", encoding="utf-8") as f_in:
+        for row in csv.DictReader(f_in):
+            bug_id = (row.get("bug_id") or "").strip()
+            if not bug_id:
+                continue
 
-    # Get structured JSON from Mercurial and convert to JSONL
-    result = subprocess.run(
-        ["hg", "log", "-Tjson", "-r", "all()"],
-        cwd=DEST_REPO,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    changesets = json.loads(result.stdout.decode("utf-8"))
+            is_regressor = str(row.get("bug_is_perf_regressor", "")).lower() == "true"
 
-    with open(OUT_JSONL, "w", encoding="utf-8") as out:
-        for cs in changesets:
-            json.dump({"hash": cs.get("node"), "message": cs.get("desc", "")}, out, ensure_ascii=False)
-            out.write("\n")
+            if is_regressor:
+                regrev = (row.get("regressor_revision") or "").strip()
+                if not regrev:
+                    continue
+                seq = contiguous_prev_same_bug(commits, node_to_idx[regrev], bug_id)
+                if not seq:
+                    continue
+                newest, oldest = seq[0], seq[-1]
+                block_nodes = list(reversed(seq))  # oldest -> newest
+            else:
+                idxs = [i for i, c in enumerate(commits) if bug_id_from_desc(c.get("desc", "")) == bug_id]
+                if not idxs:
+                    continue
+                newest_idx = max(idxs)
+                seq = contiguous_prev_same_bug(commits, newest_idx, bug_id)
+                if not seq:
+                    continue
+                newest, oldest = seq[0], seq[-1]
+                block_nodes = list(reversed(seq))  # oldest -> newest
 
-    print("Done.")
+            # unified diff for the contiguous block using first-parent from JSONL
+            diff_text = unified_range_diff(oldest, newest, node_to_p1)
+            if not diff_text.strip():
+                continue
+
+            messages = [clean_desc(node_to_desc.get(n, "")) for n in block_nodes]
+            combined_msg = "\n".join(m for m in messages if m).strip()
+
+            last_commit_date_iso = hgdate_to_iso(node_to_date.get(newest))
+            last_commit_epoch = node_to_epoch.get(newest, float("-inf"))
+
+            rows.append({
+                "bug_id": bug_id,
+                "diff": diff_text,
+                "commit_message": combined_msg,
+                "revision": newest,
+                "last_commit_date": last_commit_date_iso,
+                "_sort_epoch": last_commit_epoch,
+            })
+
+    rows.sort(key=lambda r: r.get("_sort_epoch", float("-inf")))
+
+    with open(OUT_JSONL, "w", encoding="utf-8") as f_out:
+        for r in rows:
+            r.pop("_sort_epoch", None)
+            f_out.write(json.dumps(r) + "\n")
 
 if __name__ == "__main__":
     main()
