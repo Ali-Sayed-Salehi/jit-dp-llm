@@ -3,14 +3,15 @@ import os
 import sys
 import csv
 import subprocess
+import json  # added
 
 # ======= CONSTANTS (edit these if needed) =======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CSV_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs.csv")
-AUTOLAND_URL = "https://hg.mozilla.org/integration/autoland"
+AUTOLAND_URL = "https://hg-edge.mozilla.org/integration/autoland"
 DEST_ROOT = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "repos")
 DEST_REPO = os.path.join(DEST_ROOT, "autoland")
-OUT_JSONL = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "commits.jsonl")
+OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "autoland_commits.jsonl")
 # ================================================
 
 def run(cmd, cwd=None, stdout=None):
@@ -29,8 +30,8 @@ def main():
         print(f"Error: CSV not found at {CSV_PATH}", file=sys.stderr)
         sys.exit(1)
     with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-    print(f"Loaded perf_bugs.csv")
+        _ = csv.DictReader(f)
+    print("Loaded perf_bugs.csv")
 
     # Ensure destination directory exists
     os.makedirs(DEST_ROOT, exist_ok=True)
@@ -46,10 +47,20 @@ def main():
     # Export all commits (hash + message) as JSONL
     os.makedirs(os.path.dirname(OUT_JSONL), exist_ok=True)
     print(f"Writing all commits (JSONL) to {OUT_JSONL} ...")
-    # Each line is: {"hash": "<node>", "message": "<desc>"}
-    template = r'{json(dict("hash", node, "message", desc))}\n'
-    with open(OUT_JSONL, "wb") as f:
-        run(["hg", "log", "-T", template, "-r", "all()"], cwd=DEST_REPO, stdout=f)
+
+    # Get structured JSON from Mercurial and convert to JSONL
+    result = subprocess.run(
+        ["hg", "log", "-Tjson", "-r", "all()"],
+        cwd=DEST_REPO,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    changesets = json.loads(result.stdout.decode("utf-8"))
+
+    with open(OUT_JSONL, "w", encoding="utf-8") as out:
+        for cs in changesets:
+            json.dump({"hash": cs.get("node"), "message": cs.get("desc", "")}, out, ensure_ascii=False)
+            out.write("\n")
 
     print("Done.")
 
