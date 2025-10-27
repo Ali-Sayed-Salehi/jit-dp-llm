@@ -12,7 +12,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 COMMITS_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
 PERF_BUGS_CSV = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs.csv")
 HG_REPO = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "repos", "autoland")
-OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "bug_diffs.jsonl")
+OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs_with_diff.jsonl")
 
 BUG_RE = re.compile(r"^\s*Bug\s+(\d+)\s*[-:]?\s*", re.IGNORECASE)
 REVERT_RE = re.compile(r"^\s*(revert|backed out)\b", re.IGNORECASE)
@@ -54,7 +54,6 @@ def unified_range_diff(oldest_node: str, newest_node: str, node_to_p1: Dict[str,
     if p1:
         cp = run("hg", "diff", "-r", p1, "-r", newest_node, cwd=HG_REPO, check=False)
     else:
-        # Fallback keeps behavior identical if parent data is unavailable
         cp = run("hg", "diff", "-r", f"p1({oldest_node})", "-r", newest_node, cwd=HG_REPO, check=False)
     return cp.stdout.decode("utf-8", errors="replace") if cp.stdout else ""
 
@@ -91,25 +90,19 @@ def main():
         print("Mercurial repo missing.", file=sys.stderr)
         sys.exit(1)
 
+    # Ensure output directory exists and truncate output file at start.
+    os.makedirs(os.path.dirname(OUT_JSONL), exist_ok=True)
+
     commits = load_commits(COMMITS_JSONL)
     node_to_idx = {c["node"]: i for i, c in enumerate(commits)}
     node_to_desc = {c["node"]: c.get("desc", "") for c in commits}
     node_to_date = {c["node"]: c.get("date") for c in commits}  # [epoch, tzoff]
-    node_to_epoch = {}
-    for n, d in node_to_date.items():
-        if isinstance(d, (list, tuple)) and len(d) == 2:
-            try:
-                node_to_epoch[n] = float(d[0])
-            except Exception:
-                node_to_epoch[n] = float("-inf")
-        else:
-            node_to_epoch[n] = float("-inf")
+
     # Build first-parent map from all_commits.jsonl
     node_to_p1: Dict[str, Optional[str]] = {c["node"]: (c.get("parents") or [None])[0] for c in commits}
 
-    rows: List[Dict] = []
-
-    with open(PERF_BUGS_CSV, "r", encoding="utf-8") as f_in:
+    # Open once and write each result as it is processed.
+    with open(OUT_JSONL, "w", encoding="utf-8") as f_out, open(PERF_BUGS_CSV, "r", encoding="utf-8") as f_in:
         for row in csv.DictReader(f_in):
             bug_id = (row.get("bug_id") or "").strip()
             if not bug_id:
@@ -117,25 +110,24 @@ def main():
 
             is_regressor = str(row.get("bug_is_perf_regressor", "")).lower() == "true"
 
+            newest_idx = None
             if is_regressor:
                 regrev = (row.get("regressor_revision") or "").strip()
-                if not regrev:
+                if not regrev or regrev not in node_to_idx:
+                    print(f"regressor revision {regrev} not found in autoland commits.")
                     continue
-                seq = contiguous_prev_same_bug(commits, node_to_idx[regrev], bug_id)
-                if not seq:
-                    continue
-                newest, oldest = seq[0], seq[-1]
-                block_nodes = list(reversed(seq))  # oldest -> newest
+                newest_idx = node_to_idx[regrev]
             else:
                 idxs = [i for i, c in enumerate(commits) if bug_id_from_desc(c.get("desc", "")) == bug_id]
                 if not idxs:
                     continue
                 newest_idx = max(idxs)
-                seq = contiguous_prev_same_bug(commits, newest_idx, bug_id)
-                if not seq:
-                    continue
-                newest, oldest = seq[0], seq[-1]
-                block_nodes = list(reversed(seq))  # oldest -> newest
+
+            seq = contiguous_prev_same_bug(commits, newest_idx, bug_id)
+            if not seq:
+                continue
+            newest, oldest = seq[0], seq[-1]
+            block_nodes = list(reversed(seq))  # oldest -> newest
 
             # unified diff for the contiguous block using first-parent from JSONL
             diff_text = unified_range_diff(oldest, newest, node_to_p1)
@@ -146,23 +138,17 @@ def main():
             combined_msg = "\n".join(m for m in messages if m).strip()
 
             last_commit_date_iso = hgdate_to_iso(node_to_date.get(newest))
-            last_commit_epoch = node_to_epoch.get(newest, float("-inf"))
 
-            rows.append({
+            record = {
                 "bug_id": bug_id,
                 "diff": diff_text,
                 "commit_message": combined_msg,
                 "revision": newest,
                 "last_commit_date": last_commit_date_iso,
-                "_sort_epoch": last_commit_epoch,
-            })
+            }
 
-    rows.sort(key=lambda r: r.get("_sort_epoch", float("-inf")))
-
-    with open(OUT_JSONL, "w", encoding="utf-8") as f_out:
-        for r in rows:
-            r.pop("_sort_epoch", None)
-            f_out.write(json.dumps(r) + "\n")
+            f_out.write(json.dumps(record) + "\n")
+            f_out.flush()
 
 if __name__ == "__main__":
     main()

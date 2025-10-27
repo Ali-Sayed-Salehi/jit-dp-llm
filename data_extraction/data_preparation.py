@@ -142,16 +142,17 @@ elif args.mode == "mozilla_perf_struc":
     bugs_with_diff_df = pd.read_json(input_data_path, lines=True)
     bugs_list = bugs_with_diff_df.to_dict(orient='records')
 
+    # TODO: sort by date
+
     if DEBUG:
         bugs_list = bugs_list[:10]
 
     dataset = []
 
     for bug in bugs_list:
-        raw_diff = bug.get('raw_diff')
+        raw_diff = bug.get('diff')
         diff = diff_to_structured_xml(raw_diff)
-        titles = bug.get('titles', "")
-        summaries = bug.get('summaries', "")
+        commit_message = bug.get('commit_message', "")
 
         lines = [
             "<TITLE>",
