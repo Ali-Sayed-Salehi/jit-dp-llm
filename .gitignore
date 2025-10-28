@@ -29,6 +29,7 @@ LLMs/**/*
 .nfs*
 /llama/configs/train_config_local.yaml
 /analysis/results/
+**/autoland/
 
 
 # cache

@@ -9,20 +9,30 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import time
 import ast
-import sys
 import os
 
-# - Get all the perf alert summaries for the last year
-# - For each alert summary, get the perf tests that detected a regression
-# - remove alerts summaries that are not regressions or are invalid
-# - Get all the bugs from relevant alert summaries
-# - make a csv file from these bugs and name it regressions.csv
+"""
+Fetches recent performance alert summaries from Treeherder and extracts regression info.
+
+Flow:
+1. Connects to the Treeherder API and downloads recent alert summaries until reaching the
+   given timespan (TIMESPAN_IN_DAYS).
+2. Saves all raw alerts to datasets/mozilla_perf/alert_summaries.csv.
+3. Filters only alerts linked to bugs with regression-related statuses (fixed, wontfix, backedout).
+4. For each alert, collects regressed tests and platforms from its details.
+5. Creates a compact CSV (alerts_with_bug_and_test_info.csv) with:
+   - Bug ID
+   - Regressed perf tests
+   - Alert summary ID
+This CSV is used later to link regressions with Bugzilla bugs.
+"""
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 client = TreeherderClient()
 
-TIMESPAN_IN_DAYS = 365
+TIMESPAN_IN_YEARS = 3
+TIMESPAN_IN_DAYS = TIMESPAN_IN_YEARS * 365
 COLUMNS = ["regression bug id"]
 
 ALERT_SUMMARY_STATUS_DICT = {
@@ -44,7 +54,9 @@ INCLUDED_ALERT_SUMMARY_STATUSES = {
 }
 
 alert_summary_params = {
-    "page": 1
+    "page": 1,
+    # "hide_improvements": True,
+    "hide_related_and_invalid": True
 }
 
 now = datetime.now()
@@ -53,33 +65,43 @@ threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
 alert_push_time = now
 uri = "performance/alertsummary"
 
-alert_summaries_list = []
+# === NEW: set output path and ensure directory exists ===
+alert_summaries_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alert_summaries.csv")
+os.makedirs(os.path.dirname(alert_summaries_path), exist_ok=True)
+write_header = not os.path.exists(alert_summaries_path)
 
-# get alert summaries
-while (alert_push_time >= threshold_time):
-
+# get alert summaries (stream to CSV as we go)
+while alert_push_time >= threshold_time:
     alert_summaries_response_dict = client._get_json(uri, **alert_summary_params)
-    alert_summaries_list.extend(alert_summaries_response_dict["results"])
+    results = alert_summaries_response_dict.get("results", [])
 
-    next_url = alert_summaries_response_dict['next']
-    next_page = next_url.split('page=')[1]
-    alert_summary_params['page'] = next_page
+    if not results:
+        break
 
-    alert_push_time_epoch = alert_summaries_response_dict['results'][-1]['push_timestamp']
+    # append page results immediately
+    pd.DataFrame(results).to_csv(
+        alert_summaries_path,
+        mode="a",
+        header=write_header,
+        index=False
+    )
+    write_header = False  # only write header once
+
+    # pagination + loop control
+    next_url = alert_summaries_response_dict.get("next")
+    if not next_url:
+        break
+    next_page = next_url.split("page=")[1]
+    alert_summary_params["page"] = next_page
+
+    alert_push_time_epoch = results[-1]["push_timestamp"]
     alert_push_time = datetime.fromtimestamp(alert_push_time_epoch)
 
-    time.sleep(0.5)
-
-# print("alert summaries:\n")
-# pprint(alert_summaries_list)
-# print("\n")
-
-alert_summaries_df = pd.DataFrame(alert_summaries_list)
-alert_summaries_path =  os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alert_summaries.csv")
-alert_summaries_df.to_csv(alert_summaries_path, index=False)
+    # time.sleep(1)
 
 print(f"✅ Alert summaries saved to {alert_summaries_path}")
 
+# read back for processing
 alert_summaries_df = pd.read_csv(alert_summaries_path)
 
 alert_summaries_df['alerts'] = alert_summaries_df['alerts'].apply(ast.literal_eval)
@@ -90,22 +112,16 @@ alert_summaries_list = alert_summaries_df.to_dict(orient='records')
 
 filtered_alert_summaries_list = []
 
-# filter alert summaries to only include regressions    
+# filter alert summaries to only include regressions
 for alert_summary in alert_summaries_list:
     if alert_summary['status'] not in INCLUDED_ALERT_SUMMARY_STATUSES:
-            continue
-
+        continue
     filtered_alert_summaries_list.append(alert_summary)
-
-# print("filtered_alert_summaries_list:\n")
-# pprint(filtered_alert_summaries_list)
-# print("\n")
 
 # add relevant perf tests to alert summaries
 alert_summaries_with_added_info_list = []
 
 for alert_summary in filtered_alert_summaries_list:
-            
     single_alerts_list = []
     regression_tests_set = set()
 
@@ -113,49 +129,40 @@ for alert_summary in filtered_alert_summaries_list:
     single_alerts_list.extend(alert_summary['related_alerts'])
 
     for alert in single_alerts_list:
-
         if not alert.get('is_regression'):
-             continue
-        
-        alert_test_suite = alert['series_signature'].get('suite')
+            continue
+
+        alert_machine_platform = alert['series_signature'].get('machine_platform')
         alert_single_test = alert['series_signature'].get('test')
 
-        if alert_test_suite:
-             regression_tests_set.add(alert_test_suite)
+        if alert_machine_platform or alert_single_test:
+            regression_tests_set.add((alert_single_test, alert_machine_platform))
 
-        if alert_single_test:
-             regression_tests_set.add(alert_single_test)
-
-
-    alert_summary['tests_list'] = list(regression_tests_set)
-
+    alert_summary['tests_list'] = [{"test": test, "platform": platform} for test, platform in regression_tests_set]
     alert_summaries_with_added_info_list.append(alert_summary)
 
-# print("alert_summaries_with_added_info_list:\n")
-# pprint(alert_summaries_with_added_info_list)
-# print("\n")
-
-# extract needed columns 
+# extract needed columns
 regression_bug_ids_list = []
 alert_summary_ids_list = []
 regression_tests_list = []
+regressor_revisions_list = []
 
 for alert_summary in alert_summaries_with_added_info_list:
-     regression_bug_id = alert_summary.get('bug_number')
-     if regression_bug_id:
-          regression_bug_ids_list.append(regression_bug_id)
-          alert_summary_ids_list.append(alert_summary.get("id"))
-          regression_tests_list.append(alert_summary.get("tests_list"))
-          
-# print("regression_bug_ids_list:\n")
-# pprint(regression_bug_ids_list)
-# print("\n")
+    regression_bug_id = alert_summary.get('bug_number')
+    if regression_bug_id:
+        regression_bug_ids_list.append(regression_bug_id)
+        alert_summary_ids_list.append(alert_summary.get("id"))
+        regression_tests_list.append(alert_summary.get("tests_list"))
+        regressor_revisions_list.append(alert_summary.get('revision'))
 
-regressions_df = pd.DataFrame({'regression_bug_id': regression_bug_ids_list, 
-                               'reg_perf_tests_list': regression_tests_list,
-                               'perf_reg_alert_summary_id': alert_summary_ids_list})
+regressions_df = pd.DataFrame({
+    'regression_bug_id': regression_bug_ids_list,
+    'reg_perf_tests_list': regression_tests_list,
+    'perf_reg_alert_summary_id': alert_summary_ids_list,
+    'regressor_push_head_revision': regressor_revisions_list
+})
 
-alerts_with_bug_and_test_info_path =  os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alerts_with_bug_and_test_info.csv")
+alerts_with_bug_and_test_info_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alerts_with_bug_and_test_info.csv")
 regressions_df.to_csv(alerts_with_bug_and_test_info_path, index=False)
 
 print(f"✅ Bug ids, perf tests, perf alert summary ids saved to {alerts_with_bug_and_test_info_path}")

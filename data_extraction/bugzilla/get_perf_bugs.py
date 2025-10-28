@@ -1,25 +1,33 @@
 import requests
 from pprint import pprint
-import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import time
 import pandas as pd
 import ast
 from collections import Counter
 from dotenv import load_dotenv
 import os
-import sys
 
-# - from mozilla_perf/alerts_with_bug_and_test_info_path.csv taken from treeherder module, get products and components that are important for performance
-# - Get all the bugs in the last year that have the same product and components from above
-# - For each regression bug, inspect its "regressed by" field and create a new list of bugs called "regressor_bugs"
-# - For each bug in the last year with relevant components, if the bug also exists in regressor_bugs.csv, mark the "caused perf regression" as true
-# - For each bug, have these columns bug id, summary, caused perf regression, product, component and name this list bugs.csv
+"""
+Fetches recent Bugzilla bugs and links them with performance regressions from Treeherder.
+
+Flow:
+1. Uses the Bugzilla API to fetch bugs created within TIMESPAN_IN_DAYS.
+2. Saves all raw bugs to datasets/mozilla_perf/all_bugs.csv.
+3. Loads the Treeherder alerts_with_bug_and_test_info.csv for existing performance regressions.
+4. Matches each regression bug with its regressor bugs using Bugzilla’s 'regressed_by' field.
+5. Collects product and component info to focus on relevant areas.
+6. Produces a final CSV (perf_bugs.csv) labeling each bug as:
+   - Performance regressor (caused a regression)
+   - Performance regression (was regressed)
+   - Includes regressed tests, alert IDs, and metadata.
+"""
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 secrets_path = os.path.join(REPO_PATH, "secrets", ".env")
 load_dotenv(dotenv_path=secrets_path)
+
+all_bugs_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "all_bugs.csv")
 
 API_KEY = os.getenv("BUGZILLA_API_KEY")
 BUGZILLA_API_URL = "https://bugzilla.mozilla.org/rest"
@@ -28,13 +36,17 @@ BUGZILLA_API = f"{BUGZILLA_API_URL}/bug"
 FIELDS = ["id", "summary", "regressed_by", "product", "component", "creation_time"]
 LIMIT = 150  # Page size
 
-TIMESPAN_IN_DAYS = 365
+START_DATE_ISO = "2024-10-10T00:00:00Z"   # <-- set the date you want
+threshold_time = START_DATE_ISO
+
+# TIMESPAN_IN_YEARS = 10
+# TIMESPAN_IN_DAYS = TIMESPAN_IN_YEARS * 365
 
 offset = 0
 all_bugs_list = []
 
 now = datetime.now()
-threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
+# threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
 
 # get all the bugs in the last year
 while True:
@@ -59,7 +71,6 @@ while True:
 
 all_bugs_df = pd.DataFrame(all_bugs_list)
 
-all_bugs_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "all_bugs.csv")
 all_bugs_df.to_csv(all_bugs_path, index=False)
 
 print(f"✅ Saved all the bugs from Bugzilla to {all_bugs_path}")
@@ -104,15 +115,17 @@ for bug in regressions_list:
         continue
 
     regressor_bug_ids_list = regression_bug.get('regressed_by')
+    
+    # Regression is the regressor (the perf regression message is posted to the regressor bug ticket)
     if not regressor_bug_ids_list:
-        regressions_without_regressor.append(regression_bug_id)
-        continue
+        regressor_bug_ids_list.append(regression_bug_id)
 
     for bug_id in regressor_bug_ids_list:
         regressor_bug = {"bug_id": bug_id, 
                             "regressed_perf_tests": bug['reg_perf_tests_list'], 
                             "regressed_product": regression_bug['product'], 
-                            "regressed_component": regression_bug['component']}
+                            "regressed_component": regression_bug['component'],
+                            "regressor_revision": bug['regressor_push_head_revision']}
 
         all_regressor_bugs_list.append(regressor_bug)
 
@@ -168,9 +181,12 @@ for bug in all_bugs_list:
     regressed_perf_tests_list = []
     perf_reg_alert_summary_id = 0
 
+    regressor_revision = None
+
     if bug_is_perf_regressor:
-        bug_with_regressed_perf_tests = all_regressor_bugs_dict.get(bug_id)
-        regressed_perf_tests_list = bug_with_regressed_perf_tests.get('regressed_perf_tests')
+        regressor_bug = all_regressor_bugs_dict.get(bug_id)
+        regressed_perf_tests_list = regressor_bug.get('regressed_perf_tests')
+        regressor_revision = regressor_bug.get('regressor_revision')
 
     if bug_is_perf_regression:
         regression_bug = regressions_dict.get(bug_id)
@@ -181,6 +197,7 @@ for bug in all_bugs_list:
                            'bug_is_perf_regressor': bug_is_perf_regressor,
                            'bug_is_perf_regression': bug_is_perf_regression,
                            'regressed_perf_tests': regressed_perf_tests_list,
+                           'regressor_revision': regressor_revision,
                            'perf_reg_alert_summary_id': perf_reg_alert_summary_id, 
                            'product': bug_product,
                            'component': bug_component,

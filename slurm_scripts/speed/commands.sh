@@ -15,11 +15,13 @@ source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/train_prepar
 
 
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/token_length_violin.py \
---dataset /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
---model /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
---configs /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/seq_len_confis.jsonl \
---field prompt \
---logy \
---output /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/violin_plot
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/token_length_violin.py \
+# --dataset /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
+# --model /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+# --configs /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/seq_len_confis.jsonl \
+# --field prompt \
+# --logy \
+# --output /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/violin_plot
 
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py

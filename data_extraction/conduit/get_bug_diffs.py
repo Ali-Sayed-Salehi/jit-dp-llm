@@ -13,6 +13,8 @@ import sys
 import argparse
 import re
 
+
+
 def remove_bug_prefix(text):
     return re.sub(r"^Bug\s*\d+[^\w]*\s*", "", text, flags=re.IGNORECASE)
 
