@@ -145,6 +145,7 @@ def main():
                 "commit_message": combined_msg,
                 "revision": newest,
                 "last_commit_date": last_commit_date_iso,
+                "regressor": is_regressor
             }
 
             f_out.write(json.dumps(record) + "\n")

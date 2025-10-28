@@ -142,7 +142,7 @@ elif args.mode == "mozilla_perf_struc":
     bugs_with_diff_df = pd.read_json(input_data_path, lines=True)
     bugs_list = bugs_with_diff_df.to_dict(orient='records')
 
-    # TODO: sort by date
+    bugs_list.sort(key=lambda r: datetime.fromisoformat(r["last_commit_date"]))
 
     if DEBUG:
         bugs_list = bugs_list[:10]
@@ -153,23 +153,18 @@ elif args.mode == "mozilla_perf_struc":
         raw_diff = bug.get('diff')
         diff = diff_to_structured_xml(raw_diff)
         commit_message = bug.get('commit_message', "")
+        commit_id = bug.get('revision')
+        response = "1" if commit.get('regressor') else "0"
 
         lines = [
-            "<TITLE>",
-            titles,
-            "</TITLE>",
-            "<SUMMARIES>",
-            summaries,
-            "</SUMMARIES>",
-            "<DIFF>",
-            diff,
-            "</DIFF>"
+            "<COMMIT_MESSAGE>",
+            commit_message,
+            "</COMMIT_MESSAGE>",
+            diff
         ]
         prompt = "\n".join(lines)
 
-        response = "1" if bug.get('bug_is_perf_regressor') else "0"
-
-        dataset.append({'prompt': prompt, 'response': response})
+        dataset.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
     dataset_df = pd.DataFrame(dataset)
     output_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "perf_llm_struc.jsonl")
