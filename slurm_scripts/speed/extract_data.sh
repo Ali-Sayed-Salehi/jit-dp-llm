@@ -25,6 +25,9 @@ echo "running the data extraction script . . ."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/github_api/javalang_structured_diff.py apache flink 999baceff36165d950a61dd9cc4342f252e64837 --ast
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/github_api/javalang_structured_diff.py apache hbase 2c799fb70aa47f9109714dc410862af24b4a0321 --ast
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode jit_llm_struc --dataset_name apachejit --dataset_size total --include_metadata
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode jit_llm_struc --dataset_name apachejit --dataset_size total --clm_mode --include_metadata
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode jit_llm_struc --dataset_name apachejit --dataset_size total --clm_mode --include_metadata
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_bug_diffs.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_alerts.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/get_bug_diffs.py
 echo "extraction finished"

@@ -44,6 +44,7 @@ treeherder-client
 unidiff
 dotenv
 hf_transfer
+mercurial
 
 #RAG
 chromadb 
