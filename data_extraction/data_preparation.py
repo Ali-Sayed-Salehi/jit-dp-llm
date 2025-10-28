@@ -4,6 +4,7 @@ import sys
 import os
 import argparse
 import textwrap
+from datetime import datetime
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(REPO_PATH)
@@ -154,7 +155,7 @@ elif args.mode == "mozilla_perf_struc":
         diff = diff_to_structured_xml(raw_diff)
         commit_message = bug.get('commit_message', "")
         commit_id = bug.get('revision')
-        response = "1" if commit.get('regressor') else "0"
+        response = "1" if bug.get('regressor') else "0"
 
         lines = [
             "<COMMIT_MESSAGE>",

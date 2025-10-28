@@ -8,17 +8,6 @@ REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def diff_to_structured_xml(diff_string):
-    """
-    Converts a multi-file unified diff string into structured XML-like diff format,
-    including full file additions, deletions, renames, and binary file changes.
-
-    Format change: <FILE> is opened without attributes, and the filename is printed
-    on the next line:
-        <FILE>
-          path/to/file
-          ...
-        </FILE>
-    """
     lines = diff_string.strip().splitlines()
     output = []
 
@@ -71,13 +60,29 @@ def diff_to_structured_xml(diff_string):
         rename_to = None
         pending_rename = False
 
+
     for line in lines:
+
+        # =========================
+        # Mercurial support
+        # =========================
+        if line.startswith("diff -r"):
+            flush_file()
+            # Expected format: diff -r <rev1> -r <rev2> <file>
+            parts = line.split()
+            if len(parts) >= 5:
+                current_file = parts[-1]
+                output.append("<FILE>")
+                output.append(f"  {current_file}")
+            continue
+        # =========================
+
         if line.startswith("diff --git"):
             flush_file()
             match = re.match(r'diff --git a/(.+?) b/(.+)', line)
             if match:
                 current_file = match.group(2)
-                output.append(f"<FILE>")
+                output.append("<FILE>")
                 output.append(f"  {current_file}")
 
         elif line.startswith("rename from "):
@@ -86,10 +91,9 @@ def diff_to_structured_xml(diff_string):
 
         elif line.startswith("rename to "):
             rename_to = line[len("rename to "):].strip()
-            # If this file wasn't introduced by 'diff --git', open it now.
             if not current_file:
                 current_file = rename_to
-                output.append(f"<FILE>")
+                output.append("<FILE>")
                 output.append(f"  {current_file}")
 
         elif line.startswith("--- "):
@@ -100,44 +104,10 @@ def diff_to_structured_xml(diff_string):
             if line.strip() == "+++ /dev/null":
                 is_file_deleted = True
 
-        elif line.startswith("index "):
-            if "0000000000000000000000000000000000000000" in line:
-                if is_file_added:
-                    pending_binary_status = "added"
-                elif is_file_deleted:
-                    pending_binary_status = "removed"
-                else:
-                    pending_binary_status = "changed"
-
         elif line.startswith("Binary files "):
             flush_block()
-            match = re.match(r'Binary files (.+) and (.+) differ', line)
-            if match:
-                left = match.group(1).strip()
-                right = match.group(2).strip()
-                if left == '/dev/null':
-                    pending_binary_status = "added"
-                elif right == '/dev/null':
-                    pending_binary_status = "removed"
-                else:
-                    pending_binary_status = "changed"
+            pending_binary_status = "changed"
             flush_file()
-
-        elif line.startswith("GIT binary patch"):
-            flush_block()
-            in_git_binary_patch = True
-            continue
-
-        elif in_git_binary_patch:
-            if line.strip() == "":
-                continue
-            if pending_binary_status is None:
-                if is_file_added:
-                    pending_binary_status = "added"
-                elif is_file_deleted:
-                    pending_binary_status = "removed"
-                else:
-                    pending_binary_status = "changed"
 
         elif line.startswith("@@"):
             flush_block()
@@ -146,12 +116,10 @@ def diff_to_structured_xml(diff_string):
             try:
                 old_line = int(parts[1].split(',')[0][1:])
                 new_line = int(parts[2].split(',')[0][1:])
-            except (IndexError, ValueError):
+            except Exception:
                 old_line = new_line = None
 
         elif line.startswith("-"):
-            if not in_hunk and not is_file_deleted:
-                continue
             if current_block_type != "REMOVED":
                 flush_block()
                 current_block_type = "REMOVED"
@@ -160,8 +128,6 @@ def diff_to_structured_xml(diff_string):
                 old_line += 1
 
         elif line.startswith("+"):
-            if not in_hunk and not is_file_added:
-                continue
             if current_block_type != "ADDED":
                 flush_block()
                 current_block_type = "ADDED"
@@ -176,22 +142,21 @@ def diff_to_structured_xml(diff_string):
     return "\n".join(output)
 
 
-
 def main():
-
     input_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "perf_bugs_with_diff.jsonl")
-    bugs_with_diff_df = pd.read_json(input_data_path, lines=True)
-    bugs_list = bugs_with_diff_df.to_dict(orient='records')
+    bugs_df = pd.read_json(input_data_path, lines=True)
+    bugs_list = bugs_df.to_dict(orient='records')
 
-    diff_content = bugs_list[160].get('raw_diff')
+    diff_content = bugs_list[160].get("diff")
 
     with open("raw_output.txt", "w", encoding="utf-8") as f:
         f.write(diff_content)
 
     structured_output = diff_to_structured_xml(diff_content)
-    
+
     with open("xml_output.xml", "w", encoding="utf-8") as f:
         f.write(structured_output)
+
 
 if __name__ == "__main__":
     main()
