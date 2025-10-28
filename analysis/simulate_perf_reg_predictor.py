@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import math
 import random
+import bisect
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 import numpy as np
@@ -11,19 +12,19 @@ import pandas as pd
 # =========================
 RANDOM_SEED            = 42
 YEAR_DAYS              = 365
-WINDOW_HOURS           = 4                      # base time bin
 PUSH_RATE_PER_HOUR     = 8.0                    # avg pushes/hour (Poisson)
 DEFECT_RATE            = 0.01                   # 1% true culprit pushes
 
 TEST_COST              = 1.0                    # cost per scheduled/triggered test
-BACKFILL_COST          = 1.0                   # cost per backfill "step"
+BACKFILL_COST          = 1.0                    # cost per backfill "step"
 TEST_EXEC_HOURS        = 0.5                    # runtime of a single perf test run (hours)
 
 # Predictor driven by AUC (Option A); we will TUNE τ per AUC
-TARGET_ROC_AUC         = 0.7                   # simulated predictor quality
+TARGET_ROC_AUC         = 0.8                   # simulated predictor quality
 
-# Scheduled test frequency for the proposed policy:
-TEST_INTERVAL_HOURS    = 4                      # e.g., 8h (can change to 6, 12, ...)
+# Scheduled test frequency for the proposed policy (real time, not windowed)
+TEST_INTERVAL_HOURS    = 4                    # can be < 4 now, e.g., 0.5 or 0.25
+BASELINE_TEST_INTERVAL = 4
 # Threshold sweep to auto-pick best τ (per AUC & frequency)
 THRESHOLD_GRID         = np.linspace(0.5, 0.99, 25)
 
@@ -32,6 +33,7 @@ BISECT_VERIFY_OVERHEAD = 2
 MIN_BISECT_COST        = 0
 
 SIM_START              = pd.Timestamp("2024-01-01 00:00:00Z")
+SIM_END                = SIM_START + pd.Timedelta(hours=YEAR_DAYS * 24)
 
 # Risk-bisection smoothing (avoid zero-prob partitions)
 RISK_FLOOR_EPS         = 1e-9
@@ -79,20 +81,11 @@ def dprime_from_auc(target_auc: float) -> float:
 class Push:
     global_idx: int
     ts: pd.Timestamp
-    window_idx: int
     is_defect: bool
     files_changed: int
     lines_changed: int
     hour: int
     score: float
-
-@dataclass
-class Window:
-    idx: int
-    start: pd.Timestamp
-    end: pd.Timestamp
-    push_indices: List[int]
-    culprit_indices: List[int]
 
 # ---------- AUC-driven score generator ----------
 
@@ -114,71 +107,62 @@ def auc_from_scores(y_true, scores) -> float:
     U = rank_sum_pos - n1*(n1+1)/2.0
     return float(U / (n0 * n1))
 
-# ---------- Synthetic data generation ----------
+# ---------- Synthetic data generation (continuous time) ----------
 
-def generate_pushes_for_year() -> Tuple[List[Push], List[Window]]:
-    n_windows = (YEAR_DAYS * 24) // WINDOW_HOURS
-    windows: List[Window] = []
+def generate_pushes_for_year() -> Tuple[List[Push], pd.Timestamp]:
+    """
+    Generate a year's worth of pushes as a Poisson process per hour.
+    Return (pushes_sorted_by_time, sim_end_time).
+    """
+    total_hours = YEAR_DAYS * 24
     pushes: List[Push] = []
+    labels, times, files_list, lines_list, hours_list = [], [], [], [], []
 
-    cur = SIM_START
-    global_idx = 0
-
-    all_labels, all_times, all_windows = [], [], []
-    all_files, all_lines, all_hours = [], [], []
-
-    for w in range(n_windows):
-        start = cur
-        end = cur + pd.Timedelta(hours=WINDOW_HOURS)
-        mean_pushes = PUSH_RATE_PER_HOUR * WINDOW_HOURS
-        n_pushes = rng.poisson(mean_pushes)
-
-        idxs, culprits = [], []
-
+    gi = 0
+    for h in range(total_hours):
+        base = SIM_START + pd.Timedelta(hours=h)
+        n_pushes = rng.poisson(PUSH_RATE_PER_HOUR)
         if n_pushes > 0:
-            offsets = rng.uniform(0, WINDOW_HOURS * 3600, size=n_pushes)
+            # Uniform offsets within the hour (in seconds)
+            offsets = rng.uniform(0, 3600, size=n_pushes)
             offsets.sort()
             for o in offsets:
-                ts = start + pd.Timedelta(seconds=float(o))
+                ts = base + pd.Timedelta(seconds=float(o))
                 hour = int(ts.tz_convert("UTC").hour) if ts.tzinfo else int(ts.hour)
                 files_changed = int(max(1, rng.poisson(5)))
                 lines_changed = int(max(1, rng.lognormal(mean=4.0, sigma=0.6)))
                 is_defect = bool(rng.random() < DEFECT_RATE)
 
-                all_labels.append(1 if is_defect else 0)
-                all_times.append(ts)
-                all_windows.append(w)
-                all_files.append(files_changed)
-                all_lines.append(lines_changed)
-                all_hours.append(hour)
+                times.append(ts)
+                labels.append(1 if is_defect else 0)
+                files_list.append(files_changed)
+                lines_list.append(lines_changed)
+                hours_list.append(hour)
 
-                idxs.append(global_idx)
-                if is_defect:
-                    culprits.append(global_idx)
-                global_idx += 1
-
-        windows.append(Window(idx=w, start=start, end=end, push_indices=idxs, culprit_indices=culprits))
-        cur = end
-
-    y_arr = np.array(all_labels, dtype=int)
+    y_arr = np.array(labels, dtype=int)
     scores = make_scores_from_auc(y_arr, TARGET_ROC_AUC, rng) if len(y_arr) > 0 else np.array([], dtype=float)
 
     pushes = []
     for i in range(len(y_arr)):
         pushes.append(Push(
             global_idx=i,
-            ts=all_times[i],
-            window_idx=all_windows[i],
+            ts=times[i],
             is_defect=bool(y_arr[i]),
-            files_changed=all_files[i],
-            lines_changed=all_lines[i],
-            hour=all_hours[i],
+            files_changed=files_list[i],
+            lines_changed=lines_list[i],
+            hour=hours_list[i],
             score=float(scores[i]),
         ))
 
-    return pushes, windows
+    # Ensure chronological order (should already be sorted by construction)
+    pushes.sort(key=lambda p: p.ts)
+    # Reassign global_idx to match time order
+    for i, p in enumerate(pushes):
+        p.global_idx = i
 
-# ---------- Helpers: iterate defects in a span ----------
+    return pushes, SIM_END
+
+# ---------- Helpers ----------
 
 def iter_defect_indices_in_span(pushes: List[Push], a_last_test_idx: int, b_current_idx: int):
     if b_current_idx is None or b_current_idx <= a_last_test_idx:
@@ -187,13 +171,24 @@ def iter_defect_indices_in_span(pushes: List[Push], a_last_test_idx: int, b_curr
         if pushes[gi].is_defect:
             yield gi
 
-# ---------- Multi-culprit bisection helpers ----------
+def last_push_idx_at_or_before(push_ts: List[pd.Timestamp], t: pd.Timestamp) -> int:
+    """Return the index of the last push with timestamp <= t, or -1 if none."""
+    pos = bisect.bisect_right(push_ts, t) - 1
+    return pos if pos >= 0 else -1
+
+def make_schedule_times(every_hours: float, start: pd.Timestamp, end: pd.Timestamp) -> List[pd.Timestamp]:
+    if every_hours <= 0:
+        return []
+    times = []
+    t = start + pd.Timedelta(hours=every_hours)
+    while t <= end:
+        times.append(t)
+        t += pd.Timedelta(hours=every_hours)
+    return times
+
+# ---------- Multi-culprit bisection helpers (unchanged) ----------
 
 def uniform_bisect_steps_for_culprit(span_len: int, culprit_pos: int) -> int:
-    """
-    Classic midpoint bisection. Return integer #probes to isolate culprit_pos
-    in an array of length span_len (positions [0..span_len-1]).
-    """
     if span_len <= 1:
         return 0
     l, r = 0, span_len - 1
@@ -213,12 +208,6 @@ def multi_culprit_uniform_bisect_steps(
     end_idx: int,
     defect_indices: List[int],
 ) -> Tuple[int, Dict[int, int]]:
-    """
-    Find *all* culprits with classic midpoint bisection (integer probes).
-    Strategy: repeatedly target the latest remaining culprit; after finding it,
-    shrink the right boundary and continue until no culprits remain.
-    Returns (total_steps_including_overhead, per_defect_cumulative_steps).
-    """
     L = start_idx + 1
     R = end_idx
     if R <= L:
@@ -231,7 +220,7 @@ def multi_culprit_uniform_bisect_steps(
     per_defect_steps: Dict[int, int] = {}
 
     while defects:
-        culprit = max(defects)  # latest-first; use min(defects) for earliest-first
+        culprit = max(defects)  # latest-first
         span_len = R - L + 1
         culprit_pos = culprit - L
 
@@ -247,10 +236,6 @@ def multi_culprit_uniform_bisect_steps(
     return total_steps, per_defect_steps
 
 def risk_bisect_steps_for_culprit(scores: np.ndarray, culprit_pos: int) -> int:
-    """
-    Integer number of probes to isolate 'culprit_pos' using risk-median splits.
-    'scores' are candidate scores for a contiguous window [L..R] (time-ordered).
-    """
     n = int(scores.size)
     if n <= 1:
         return 0
@@ -265,7 +250,7 @@ def risk_bisect_steps_for_culprit(scores: np.ndarray, culprit_pos: int) -> int:
 
         c = np.cumsum(window)
         k_rel = int(np.searchsorted(c, 0.5, side="left"))
-        if k_rel >= (r - l):           # ensure strict split
+        if k_rel >= (r - l):
             k_rel = r - l - 1
         k = l + k_rel
 
@@ -278,18 +263,10 @@ def risk_bisect_steps_for_culprit(scores: np.ndarray, culprit_pos: int) -> int:
 
 def multi_culprit_risk_bisect_steps(
     pushes: List['Push'],
-    start_idx: int,           # last tested boundary (global idx)
-    end_idx: int,             # detection boundary (global idx)
-    defect_indices: List[int] # all true defects in (start_idx, end_idx]
+    start_idx: int,
+    end_idx: int,
+    defect_indices: List[int]
 ) -> Tuple[int, Dict[int, int]]:
-    """
-    Find *all* culprits by repeatedly risk-bisecting:
-    - In each pass, target the latest remaining culprit (closest to detection).
-    - After 'finding' it, shrink the window's right bound to just before it.
-    Returns:
-      total_integer_steps (including overhead per culprit),
-      per_defect_steps: {defect_global_idx: cumulative_steps_until_that_culprit}
-    """
     L = start_idx + 1
     R = end_idx
     if R <= L:
@@ -303,7 +280,7 @@ def multi_culprit_risk_bisect_steps(
     per_defect_steps: Dict[int, int] = {}
 
     while defects:
-        culprit = max(defects)  # latest-first; switch to min(defects) for earliest-first
+        culprit = max(defects)  # latest-first
         scores = np.array([pushes[i].score for i in range(L, R + 1)], dtype=float)
         culprit_pos = culprit - L
 
@@ -318,42 +295,39 @@ def multi_culprit_risk_bisect_steps(
 
     return total_steps, per_defect_steps
 
-# ---------- Baseline (test every 4h) with multi-culprit uniform bisection ----------
+# ---------- Baseline (fixed-interval only) with multi-culprit uniform bisection ----------
 
-def simulate_baseline(pushes: List[Push], windows: List[Window]) -> Dict[str, float]:
+def simulate_baseline(pushes: List[Push], interval_hours: float) -> Dict[str, float]:
     scheduled_tests = 0
-    backfill_tests = 0  # integer
+    backfill_tests = 0
     detections = 0
 
     detection_latencies_hours: List[float] = []
     exact_latencies_hours: List[float] = []
 
     last_test_idx = -1
-    for w in range(len(windows)):
+    push_ts = [p.ts for p in pushes]
+    schedule_times = make_schedule_times(interval_hours, SIM_START, SIM_END)
+
+    for t in schedule_times:
         scheduled_tests += 1
-        # scheduled test at end of this window, span up to last push in window
-        b_idx = windows[w].push_indices[-1] if windows[w].push_indices else last_test_idx
+        b_idx = last_push_idx_at_or_before(push_ts, t)
         if b_idx > last_test_idx:
-            detection_time = windows[w].end
+            detection_time = t
             defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, b_idx))
             if defect_indices:
-                # Multi-culprit uniform bisection
                 span_steps, per_defect_steps = multi_culprit_uniform_bisect_steps(
                     pushes, last_test_idx, b_idx, defect_indices
                 )
-
-                # Latency accounting for each culprit (uses cumulative steps to that culprit)
                 for defect_idx in defect_indices:
                     dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
                     if dt_hours >= 0:
                         detection_latencies_hours.append(dt_hours)
                         steps_to_this = per_defect_steps.get(defect_idx, span_steps)
                         exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
-
                 detections += 1
                 backfill_tests += int(span_steps)
-
-            last_test_idx = b_idx  # move the boundary to here
+            last_test_idx = b_idx
 
     total_cost = scheduled_tests * TEST_COST + backfill_tests * BACKFILL_COST
     avg_det = float(np.mean(detection_latencies_hours)) if detection_latencies_hours else 0.0
@@ -362,7 +336,7 @@ def simulate_baseline(pushes: List[Push], windows: List[Window]) -> Dict[str, fl
     max_exact = float(np.max(exact_latencies_hours)) if exact_latencies_hours else 0.0
 
     return dict(
-        policy="baseline_4h",
+        policy=f"baseline_{interval_hours}h",
         scheduled_tests=scheduled_tests,
         predictor_triggered_tests=0,
         backfill_tests=backfill_tests,
@@ -378,14 +352,10 @@ def simulate_baseline(pushes: List[Push], windows: List[Window]) -> Dict[str, fl
 
 # ---------- Proposed (scheduled + commit-triggered) with multi-culprit risk bisection ----------
 
-def simulate_proposed_streaming(pushes: List[Push], windows: List[Window], threshold: float, test_interval_hours: int) -> Dict[str, float]:
-    if test_interval_hours % WINDOW_HOURS != 0:
-        raise ValueError("TEST_INTERVAL_HOURS must be a multiple of WINDOW_HOURS.")
-    k = test_interval_hours // WINDOW_HOURS  # number of 4h windows between scheduled tests
-
+def simulate_proposed_streaming(pushes: List[Push], threshold: float, test_interval_hours: float) -> Dict[str, float]:
     scheduled_tests = 0
     predictor_tests = 0
-    backfill_tests = 0  # integer
+    backfill_tests = 0
     detections = 0
 
     detection_latencies_hours: List[float] = []
@@ -393,56 +363,76 @@ def simulate_proposed_streaming(pushes: List[Push], windows: List[Window], thres
 
     last_test_idx = -1  # global push index of last test boundary
 
-    for w in range(len(windows)):
-        # --- Stream over pushes; predictor can trigger immediately on a commit ---
-        for gi in windows[w].push_indices:
-            if pushes[gi].score >= threshold:
-                predictor_tests += 1
-                detection_time = pushes[gi].ts
+    push_ts = [p.ts for p in pushes]
+    schedule_times = make_schedule_times(test_interval_hours, SIM_START, SIM_END)
+    next_sched_i = 0
 
-                defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, gi))
-                if defect_indices:
-                    # Multi-culprit risk-median bisection
-                    span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
-                        pushes, last_test_idx, gi, defect_indices
-                    )
-
-                    for defect_idx in defect_indices:
-                        dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
-                        if dt_hours >= 0:
-                            detection_latencies_hours.append(dt_hours)
-                            steps_to_this = per_defect_steps.get(defect_idx, span_steps)
-                            exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
-
-                    detections += 1
-                    backfill_tests += int(span_steps)
-
-                last_test_idx = gi  # move boundary
-
-        # --- Scheduled test at the boundary windows (every k windows) ---
-        if (k == 0) or ((w % k) == (k - 1)):
+    # Iterate pushes in time; fire due scheduled tests before each push; then handle predictor trigger
+    for gi, push in enumerate(pushes):
+        # Flush any scheduled tests that occur before or at this push
+        while next_sched_i < len(schedule_times) and schedule_times[next_sched_i] <= push.ts:
+            t = schedule_times[next_sched_i]
+            next_sched_i += 1
             scheduled_tests += 1
-            b_idx = windows[w].push_indices[-1] if windows[w].push_indices else last_test_idx
+            b_idx = last_push_idx_at_or_before(push_ts, t)
             if b_idx > last_test_idx:
-                detection_time = windows[w].end
-
+                detection_time = t
                 defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, b_idx))
                 if defect_indices:
                     span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
                         pushes, last_test_idx, b_idx, defect_indices
                     )
-
                     for defect_idx in defect_indices:
                         dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
                         if dt_hours >= 0:
                             detection_latencies_hours.append(dt_hours)
                             steps_to_this = per_defect_steps.get(defect_idx, span_steps)
                             exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
-
                     detections += 1
                     backfill_tests += int(span_steps)
-
                 last_test_idx = b_idx
+
+        # Predictor-triggered on this push
+        if push.score >= threshold:
+            predictor_tests += 1
+            detection_time = push.ts
+            defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, gi))
+            if defect_indices:
+                span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
+                    pushes, last_test_idx, gi, defect_indices
+                )
+                for defect_idx in defect_indices:
+                    dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
+                    if dt_hours >= 0:
+                        detection_latencies_hours.append(dt_hours)
+                        steps_to_this = per_defect_steps.get(defect_idx, span_steps)
+                        exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
+                detections += 1
+                backfill_tests += int(span_steps)
+            last_test_idx = gi
+
+    # Flush remaining scheduled tests after last push until SIM_END
+    while next_sched_i < len(schedule_times):
+        t = schedule_times[next_sched_i]
+        next_sched_i += 1
+        scheduled_tests += 1
+        b_idx = last_push_idx_at_or_before(push_ts, t)
+        if b_idx > last_test_idx:
+            detection_time = t
+            defect_indices = list(iter_defect_indices_in_span(pushes, last_test_idx, b_idx))
+            if defect_indices:
+                span_steps, per_defect_steps = multi_culprit_risk_bisect_steps(
+                    pushes, last_test_idx, b_idx, defect_indices
+                )
+                for defect_idx in defect_indices:
+                    dt_hours = (detection_time - pushes[defect_idx].ts).total_seconds() / 3600.0
+                    if dt_hours >= 0:
+                        detection_latencies_hours.append(dt_hours)
+                        steps_to_this = per_defect_steps.get(defect_idx, span_steps)
+                        exact_latencies_hours.append(dt_hours + steps_to_this * TEST_EXEC_HOURS)
+                detections += 1
+                backfill_tests += int(span_steps)
+            last_test_idx = b_idx
 
     total_scheduled = scheduled_tests + predictor_tests
     total_cost = total_scheduled * TEST_COST + backfill_tests * BACKFILL_COST
@@ -469,10 +459,10 @@ def simulate_proposed_streaming(pushes: List[Push], windows: List[Window], thres
 
 # ---------- Auto-tune τ for given AUC & test interval ----------
 
-def pick_best_threshold(pushes: List[Push], windows: List[Window], test_interval_hours: int, grid: np.ndarray) -> Dict[str, float]:
+def pick_best_threshold(pushes: List[Push], test_interval_hours: float, grid: np.ndarray) -> Dict[str, float]:
     best = None
     for tau in grid:
-        res = simulate_proposed_streaming(pushes, windows, threshold=float(tau), test_interval_hours=test_interval_hours)
+        res = simulate_proposed_streaming(pushes, threshold=float(tau), test_interval_hours=test_interval_hours)
         if (best is None) or (res["total_tests"] < best["total_tests"]):
             best = {"tau": float(tau), **res}
     return best
@@ -480,13 +470,12 @@ def pick_best_threshold(pushes: List[Push], windows: List[Window], test_interval
 # ---------- Main ----------
 
 def main():
-    pushes, windows = generate_pushes_for_year()
+    pushes, sim_end = generate_pushes_for_year()
 
     total_pushes = len(pushes)
     total_defects = sum(1 for p in pushes if p.is_defect)
-    avg_pushes_per_window = total_pushes / len(windows) if windows else 0
 
-    # Sanity: realized AUC
+    # Realized AUC
     if total_pushes > 0:
         y_all = np.array([1 if p.is_defect else 0 for p in pushes], dtype=int)
         s_all = np.array([p.score for p in pushes], dtype=float)
@@ -495,18 +484,19 @@ def main():
         realized_auc = 0.5
 
     print("=== Data summary ===")
-    print(f"Windows (4h): {len(windows)}")
+    print(f"Simulation: {SIM_START} → {sim_end}  (~{YEAR_DAYS} days)")
     print(f"Total pushes: {total_pushes} | True defects: {total_defects} "
-          f"({100.0*total_defects/max(1,total_pushes):.2f}%) | Avg pushes/window: {avg_pushes_per_window:.1f}")
+          f"({100.0*total_defects/max(1,total_pushes):.2f}%)")
     print(f"Target ROC AUC: {TARGET_ROC_AUC:.3f} | Realized ROC AUC (synthetic): {realized_auc:.3f}")
-    print(f"Proposed scheduled interval: every {TEST_INTERVAL_HOURS}h")
+    print(f"Scheduled interval: every {TEST_INTERVAL_HOURS}h (no windowing)")
     print(f"Test runtime: {TEST_EXEC_HOURS} hours per run\n")
 
-    # Baseline (always every 4h) - multi-culprit uniform bisection
-    base = simulate_baseline(pushes, windows)
+    # Baseline (e.g., 4h) - multi-culprit uniform bisection, fixed cadence only
+    base_interval = BASELINE_TEST_INTERVAL
+    base = simulate_baseline(pushes, interval_hours=base_interval)
 
     # Tune threshold for proposed streaming policy (multi-culprit risk-aware backfill)
-    best = pick_best_threshold(pushes, windows, TEST_INTERVAL_HOURS, THRESHOLD_GRID)
+    best = pick_best_threshold(pushes, TEST_INTERVAL_HOURS, THRESHOLD_GRID)
 
     print("=== Results ===")
     def line(d: Dict[str, float]) -> str:
@@ -529,10 +519,10 @@ def main():
     print(f"Avg detect hours: baseline={base['avg_detect_hours']:.2f} vs proposed={best['avg_detect_hours']:.2f}")
     print(f"Avg time to exact: baseline={base['avg_time_to_exact_hours']:.2f} vs proposed={best['avg_time_to_exact_hours']:.2f}")
 
-    # Show a small sweep table for context
+    # Sweep table for context
     sweep = []
     for tau in THRESHOLD_GRID:
-        res = simulate_proposed_streaming(pushes, windows, threshold=float(tau), test_interval_hours=TEST_INTERVAL_HOURS)
+        res = simulate_proposed_streaming(pushes, threshold=float(tau), test_interval_hours=TEST_INTERVAL_HOURS)
         sweep.append({"threshold": float(tau), **res})
     df = pd.DataFrame(sweep).sort_values("threshold")
     print("\n=== Threshold sweep (proposed streaming) ===")

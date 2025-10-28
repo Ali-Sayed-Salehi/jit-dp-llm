@@ -12,4 +12,12 @@ source /home/$USER/links/scratch/repos/jit-dp-llm/slurm_scripts/tril/train_prepa
 # # -p 0.10 0.20 \
 
 
-pip install chromadb sentence-transformers pydantic python-dotenv tiktoken openai
+pip install chromadb sentence-transformers pydantic python-dotenv tiktoken openai# python /home/alis/links/scratch/repos/jit-dp-llm/analysis/token_length_violin.py \
+# --dataset /home/alis/links/scratch/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
+# --model /home/alis/links/scratch/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
+# --configs /home/alis/links/scratch/repos/jit-dp-llm/analysis/seq_len_confis.jsonl \
+# --field prompt \
+# --logy \
+# --output /home/alis/links/scratch/repos/jit-dp-llm/analysis/results/violin_plot
+
+python /home/alis/links/scratch/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
