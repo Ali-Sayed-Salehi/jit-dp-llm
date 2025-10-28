@@ -10,6 +10,7 @@ module load cuda/12.6
 module load python/3.11.5 
 module load arrow/21.0.0 
 module load gcc/14.3
+module load rust/1.85.0
 module list
 
 REPO_ROOT="/home/$USER/links/scratch/repos/jit-dp-llm"
