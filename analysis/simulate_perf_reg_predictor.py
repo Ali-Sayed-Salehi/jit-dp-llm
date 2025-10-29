@@ -13,14 +13,14 @@ import pandas as pd
 RANDOM_SEED                   = 42
 YEAR_DAYS                     = 365
 PUSH_RATE_PER_HOUR            = 8.0     # avg pushes/hour (Poisson)
-DEFECT_RATE                   = 0.01    # 1% true culprit pushes
+DEFECT_RATE                   = 0.006    # 6% true culprit pushes
 
 TEST_COST                     = 1.0     # cost per scheduled/triggered test
 BACKFILL_COST                 = 1.0     # cost per backfill "step"
-TEST_EXEC_HOURS               = 0.5     # runtime of a single perf test run (hours)
+TEST_EXEC_HOURS               = 0.25     # runtime of a single perf test run (hours)
 
 # Predictor quality; we will TUNE τ per AUC
-TARGET_ROC_AUC                = 0.8
+TARGET_ROC_AUC                = 0.7
 
 # Baseline fixed schedule for comparison
 BASELINE_TEST_INTERVAL        = 4.0     # hours
@@ -36,7 +36,7 @@ TEST_INTERVAL_GRID = np.linspace(0.1, 168.0, 100)  # from 0.1 h to 168 h (≈ 1 
 
 # Constraint for both τ and TEST_INTERVAL optimization:
 # Reject candidates whose max_time_to_exact_hours exceeds this cap.
-MAX_MAX_TIME_TO_DETECT       = 18     # hours (user-specified)
+MAX_MAX_TIME_TO_DETECT       = 8     # hours (user-specified)
 
 # Grid to auto-pick best τ (per AUC & frequency)
 THRESHOLD_GRID                = np.linspace(0.5, 0.99, 25)

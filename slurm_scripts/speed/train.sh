@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=train
+#SBATCH --job-name=train-llama
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
@@ -23,7 +23,7 @@ echo "running the training script"
 accelerate launch \
 --config_file=/speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/accelerate_config_deepspeed.yaml \
 --num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID /speed-scratch/a_s87063/repos/jit-dp-llm/llama/train.py \
---config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/templates/train_config_speed_mbert_perf.yaml.yaml
+--config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/templates/train_config_speed_llama_perf.yaml
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/train.py --config /speed-scratch/a_s87063/repos/jit-dp-llm/llama/configs/train_config.yaml
 echo "training finished"

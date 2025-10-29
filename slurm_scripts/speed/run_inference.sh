@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=inference-debug
+#SBATCH --job-name=inference
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
@@ -17,12 +17,12 @@ source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/train_prepar
 echo "running the inference script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/run_inference.py \
-  --base_model_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-09-29_22-14-38/output/checkpoint-525 \
-  --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/apachejit/apachejit_total_llm_struc_meta.jsonl \
+  --base_model_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/answerdotai/ModernBERT-large \
+  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-10-28_21-21-31/output/checkpoint-110 \
+  --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf/perf_llm_struc.jsonl \
   --mixed_precision bf16 \
-  --truncation_len 22000 \
-  --quant \
+  # --truncation_len 22000 \
+  # --quant \
   # --debug
 
 echo "inference finished"

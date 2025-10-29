@@ -13,7 +13,7 @@ class_imbalance_fix: oversampling     # oversampling
 threshold: null
 selection_metric: f1       #f1   # recall@top_30%  -  only for seq_ls
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
-continue_from_dir: /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-10-28_18-22-15/output   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
+continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 2e-4  
 num_train_epochs: 3
 weight_decay: 0
@@ -24,12 +24,14 @@ lora_dropout: 0
 gradient_accumulation_steps: 256
 train_batch_size: 1
 lr_warmup_ratio: 0.03
-eval_steps: 25
-logging_steps: 25
-save_steps: 25
+eval_steps: 10
+logging_steps: 10
+save_steps: 10
 eval_accumulation_steps: null
 pooling: null
 clm_for_seq_cls: false
+dataset_cron_split: true
+balance_eval_dataset: false
 new_tokens: [
         "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
         "<FILE>", "</FILE>",

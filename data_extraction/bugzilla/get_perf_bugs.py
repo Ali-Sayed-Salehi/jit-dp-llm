@@ -36,17 +36,17 @@ BUGZILLA_API = f"{BUGZILLA_API_URL}/bug"
 FIELDS = ["id", "summary", "regressed_by", "product", "component", "creation_time"]
 LIMIT = 150  # Page size
 
-START_DATE_ISO = "2024-10-10T00:00:00Z"   # <-- set the date you want
-threshold_time = START_DATE_ISO
+START_DATE_ISO = "2024-10-10T00:00:00Z"
+start_cutoff = pd.to_datetime(START_DATE_ISO, utc=True)
 
-# TIMESPAN_IN_YEARS = 10
-# TIMESPAN_IN_DAYS = TIMESPAN_IN_YEARS * 365
+TIMESPAN_IN_YEARS = 10
+TIMESPAN_IN_DAYS = TIMESPAN_IN_YEARS * 365
 
 offset = 0
 all_bugs_list = []
 
 now = datetime.now()
-# threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
+threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
 
 # get all the bugs in the last year
 while True:
@@ -76,7 +76,7 @@ all_bugs_df.to_csv(all_bugs_path, index=False)
 print(f"✅ Saved all the bugs from Bugzilla to {all_bugs_path}")
 
 all_bugs_df = pd.read_csv(all_bugs_path)
-all_bugs_df['creation_time'] = pd.to_datetime(all_bugs_df['creation_time'])
+all_bugs_df['creation_time'] = pd.to_datetime(all_bugs_df['creation_time'], utc=True)
 all_bugs_df['regressed_by'] = all_bugs_df['regressed_by'].apply(ast.literal_eval)
 all_bugs_df_sorted = all_bugs_df.sort_values(by='creation_time')
 
@@ -111,7 +111,6 @@ for bug in regressions_list:
 
     if not regression_bug:
         regression_bugs_not_in_bugzilla_bugs.append(regression_bug_id)
-        # pprint(bug['perf_reg_alert_summary_id'])
         continue
 
     regressor_bug_ids_list = regression_bug.get('regressed_by')
@@ -121,36 +120,28 @@ for bug in regressions_list:
         regressor_bug_ids_list.append(regression_bug_id)
 
     for bug_id in regressor_bug_ids_list:
-        regressor_bug = {"bug_id": bug_id, 
-                            "regressed_perf_tests": bug['reg_perf_tests_list'], 
-                            "regressed_product": regression_bug['product'], 
-                            "regressed_component": regression_bug['component'],
-                            "regressor_revision": bug['regressor_push_head_revision']}
-
+        regressor_bug = {
+            "bug_id": bug_id, 
+            "regressed_perf_tests": bug['reg_perf_tests_list'], 
+            "regressed_product": regression_bug['product'], 
+            "regressed_component": regression_bug['component'],
+            "regressor_revision": bug['regressor_push_head_revision']
+        }
         all_regressor_bugs_list.append(regressor_bug)
-
-# pprint("regression_bugs_not_in_bugzilla_bugs:\n")
-# pprint(regression_bugs_not_in_bugzilla_bugs)
-# print()
 
 # gather relevant components and products
 relevant_components = set()
 relevant_products = set()
-
-# for counting purposes
 relevant_components_list = []
 relevant_products_list = []
 
 for bug in all_regressor_bugs_list:
     product = bug.get("regressed_product")
     component = bug.get("regressed_component")
-
     relevant_products.add(product)
     relevant_components.add(component)
-
     relevant_components_list.append(component)
     relevant_products_list.append(product)
-
 
 products_count = Counter(relevant_products_list)
 components_count = Counter(relevant_components_list)
@@ -178,9 +169,13 @@ for bug in all_bugs_list:
     bug_is_perf_regressor = bug_id in all_regressor_bugs_dict
     bug_is_perf_regression = bug_id in regressions_dict
 
+    # skip non-regressors older than START_DATE_ISO
+    created_ts = pd.to_datetime(bug_creation_time, utc=True)
+    if (created_ts < start_cutoff) and (not bug_is_perf_regressor):
+        continue
+
     regressed_perf_tests_list = []
     perf_reg_alert_summary_id = 0
-
     regressor_revision = None
 
     if bug_is_perf_regressor:
@@ -192,21 +187,19 @@ for bug in all_bugs_list:
         regression_bug = regressions_dict.get(bug_id)
         perf_reg_alert_summary_id = regression_bug.get('perf_reg_alert_summary_id')
 
-    bug_with_added_info = {'bug_id': bug_id, 
-                           'bug_summary': bug_summary, 
-                           'bug_is_perf_regressor': bug_is_perf_regressor,
-                           'bug_is_perf_regression': bug_is_perf_regression,
-                           'regressed_perf_tests': regressed_perf_tests_list,
-                           'regressor_revision': regressor_revision,
-                           'perf_reg_alert_summary_id': perf_reg_alert_summary_id, 
-                           'product': bug_product,
-                           'component': bug_component,
-                           'creation_time': bug_creation_time}
+    bug_with_added_info = {
+        'bug_id': bug_id, 
+        'bug_summary': bug_summary, 
+        'bug_is_perf_regressor': bug_is_perf_regressor,
+        'bug_is_perf_regression': bug_is_perf_regression,
+        'regressed_perf_tests': regressed_perf_tests_list,
+        'regressor_revision': regressor_revision,
+        'perf_reg_alert_summary_id': perf_reg_alert_summary_id, 
+        'product': bug_product,
+        'component': bug_component,
+        'creation_time': created_ts.isoformat()
+    }
     all_bugs_with_added_regressor_info_list.append(bug_with_added_info)
-
-# for bug in all_bugs_with_added_regressor_info_list:
-#     if bug['bug_is_perf_regression'] and bug['bug_is_perf_regressor']:
-#         pprint(bug)
 
 all_bugs_with_added_regressor_info_df = pd.DataFrame(all_bugs_with_added_regressor_info_list)
 perf_bugs_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "perf_bugs.csv")
