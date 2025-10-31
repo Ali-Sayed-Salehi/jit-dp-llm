@@ -65,7 +65,7 @@ threshold_time = now - relativedelta(days=TIMESPAN_IN_DAYS)
 alert_push_time = now
 uri = "performance/alertsummary"
 
-# === NEW: set output path and ensure directory exists ===
+# set output path and ensure directory exists ===
 alert_summaries_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alert_summaries.csv")
 os.makedirs(os.path.dirname(alert_summaries_path), exist_ok=True)
 write_header = not os.path.exists(alert_summaries_path)
@@ -146,6 +146,7 @@ regression_bug_ids_list = []
 alert_summary_ids_list = []
 regression_tests_list = []
 regressor_revisions_list = []
+alert_creation_date_list = []
 
 for alert_summary in alert_summaries_with_added_info_list:
     regression_bug_id = alert_summary.get('bug_number')
@@ -154,12 +155,14 @@ for alert_summary in alert_summaries_with_added_info_list:
         alert_summary_ids_list.append(alert_summary.get("id"))
         regression_tests_list.append(alert_summary.get("tests_list"))
         regressor_revisions_list.append(alert_summary.get('revision'))
+        alert_creation_date_list.append(alert_summary.get('created'))
 
 regressions_df = pd.DataFrame({
     'regression_bug_id': regression_bug_ids_list,
     'reg_perf_tests_list': regression_tests_list,
     'perf_reg_alert_summary_id': alert_summary_ids_list,
-    'regressor_push_head_revision': regressor_revisions_list
+    'regressor_push_head_revision': regressor_revisions_list,
+    'alert_creation_date': alert_creation_date_list
 })
 
 alerts_with_bug_and_test_info_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "alerts_with_bug_and_test_info.csv")

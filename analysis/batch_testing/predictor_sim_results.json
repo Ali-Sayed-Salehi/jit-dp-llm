@@ -1,0 +1,2724 @@
+{
+  "threshold": null,
+  "used_samples": 453,
+  "samples": [
+    {
+      "commit_id": "4c72f9a7bc6d9b5259a5d29c27e9f6d9dd3028c1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6185876525155527
+    },
+    {
+      "commit_id": "b0fe08adeda4e39e6a0c485e15711f031671d2d3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6223045644427659
+    },
+    {
+      "commit_id": "4fa82a16550af9a8704a4eacd4a28a54a3d757ba",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6143597461422284
+    },
+    {
+      "commit_id": "54ba2b672cbf9f9bc8997b15653aa6ef82584021",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5094440994622467
+    },
+    {
+      "commit_id": "d8bea2d85ad4e93b977c2d0d2a8691f7f9cecb1c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6164588886079925
+    },
+    {
+      "commit_id": "f0c411f5db422ae8a6827967e211237e6823d042",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7931585904499835
+    },
+    {
+      "commit_id": "fefcd67f3d2aea00318042317dc1b58cadfaeb95",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5571309336152648
+    },
+    {
+      "commit_id": "2769378eaed1aaf348103d338ccdb0eb35350fd2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6344865347261347
+    },
+    {
+      "commit_id": "f2f6cefad4a196e4c78ceb4c6bd4699c5e6a4cb0",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6279876702547301
+    },
+    {
+      "commit_id": "fae55d1f539414ac9a8ad968947587aaf8ecd06f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5850508625155897
+    },
+    {
+      "commit_id": "9c7e306db98878a8b20c916fd68d935eda3c9f47",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5700335919390329
+    },
+    {
+      "commit_id": "83fa9cde3e29718f8e86e8a9b212d8775e4d8b43",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5500990705712895
+    },
+    {
+      "commit_id": "fca286fd6041335f0b1544a395adaaf47f33cfba",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5152938906229717
+    },
+    {
+      "commit_id": "50df2b17f7dcf1f072803201ddd29bd941da1237",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5857445741097457
+    },
+    {
+      "commit_id": "a03c45343d37d9c8a3e020615626a4bd2ecf55ec",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6952434867024818
+    },
+    {
+      "commit_id": "ee9b6d67276a12b4e35211a04ab95a4fb5a231e0",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7308914454059154
+    },
+    {
+      "commit_id": "ccd91698a48e8f677b9b8e2597a4f4fd145635c1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5682218568177549
+    },
+    {
+      "commit_id": "874cebe82ef0b3213f24e0a46934453df7673a09",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5691294267093222
+    },
+    {
+      "commit_id": "325103528ded397a98376a4ac281c51a691fc77c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5946262645564635
+    },
+    {
+      "commit_id": "1fc659bb70750e3653dfb350ff0da9bff9bb090d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6137157048964311
+    },
+    {
+      "commit_id": "70decbc4510d12c085089585ea6103516f2c6600",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5314008675682879
+    },
+    {
+      "commit_id": "6872bb88f123aa2d487429b30f1354a9118e36f5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7875073434431195
+    },
+    {
+      "commit_id": "80cb6602d3f66905b5e1d223aa75d66c35ed5001",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6402837739116483
+    },
+    {
+      "commit_id": "9cbd3bd10a436a74ad9dd1a3253bdcbe4436a746",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5367432332954353
+    },
+    {
+      "commit_id": "44d2dba0cded99eb5a5e6cff679e6cbc16e1e642",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5126691657139486
+    },
+    {
+      "commit_id": "f8710ef5ce287c03c1fe24a6bbe3261dd17ec9ed",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6310412277725124
+    },
+    {
+      "commit_id": "827b75793dffbda405e576520aa01b762e5b8b59",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5514186182292595
+    },
+    {
+      "commit_id": "c9bc26f4b569de8b4d9fe25cc19443a9cd5e63a7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5679804650366345
+    },
+    {
+      "commit_id": "c0a226a7ac3f64b903f375cd7c7d3bcf78aeb349",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5009201583227698
+    },
+    {
+      "commit_id": "d1f4297b441c5ffc6aae8b62eb927fc69621cbb5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7436056656380142
+    },
+    {
+      "commit_id": "fed1ded1ac6dcf28bb80ce16741624fe8418a5ed",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5266956613014853
+    },
+    {
+      "commit_id": "5d001d82653cb8910abe6318dbc68eb5d3cdd751",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.795373130532543
+    },
+    {
+      "commit_id": "69c742e8aaf34273730e8a32dafe355351790324",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.9379729594662318
+    },
+    {
+      "commit_id": "4e701c8188f585ce44c8281dd00e4832b3e74f7f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6782889039377358
+    },
+    {
+      "commit_id": "d0b9224a639519fcfa975daa8cdd6466fa775ded",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7181394959786334
+    },
+    {
+      "commit_id": "cb5a3c9bb76c13855f2861ed83ff45d9085236fa",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5130055793542765
+    },
+    {
+      "commit_id": "24bea77e1d7472643414aebec88c5da5ac74d99f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5143096989499365
+    },
+    {
+      "commit_id": "62e0dd5ec3d511e55137da634460d31b9214e24a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7572606416271447
+    },
+    {
+      "commit_id": "0365640ad0aec8b750fae061aa44333490530a9b",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.509309623611892
+    },
+    {
+      "commit_id": "131bea72f855177cbb1a8b046250e0b8d5063fec",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7292841643272631
+    },
+    {
+      "commit_id": "dee7c60741d6c14b1ba066a70e62a5a51f4a66b2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6111254561773807
+    },
+    {
+      "commit_id": "2b86d382dab2e182131315e79fa26bb32affa790",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6379130713563926
+    },
+    {
+      "commit_id": "ec8aef6d9ad3969c4f89b2e83a694e63b958da8a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5852398383875411
+    },
+    {
+      "commit_id": "181a1b32436c80ecd242b36f142e3a248a24c8e2",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5056040841891459
+    },
+    {
+      "commit_id": "8537e0411470fd803910507861469329f12fb7e3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5176446209877748
+    },
+    {
+      "commit_id": "3c25ee26a7adab3e323b7f0409a7b4dca2f0f9f8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5548648218588721
+    },
+    {
+      "commit_id": "2ab38f908263fc74938c293fca89c0336c78aedc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5161566953829875
+    },
+    {
+      "commit_id": "072267a4c98d6015e7c7d11f522f3584c9cf0aa7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5382745271431347
+    },
+    {
+      "commit_id": "c07bd2924f75f1fdf87ffd4382d33a6979c08bae",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6808811250133284
+    },
+    {
+      "commit_id": "4ae9cb5b911f6633cc6ab8603df7545863b75738",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6925408711023384
+    },
+    {
+      "commit_id": "703fb617c8b70339e2c95cc43de4b8116d867f3e",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.5393740926364542
+    },
+    {
+      "commit_id": "02f8364076efec946f73e80e04e665bccb3900bb",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5355868943384952
+    },
+    {
+      "commit_id": "304bd1114b5d426b90ba0babdcf3a202f877841f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6322649086586625
+    },
+    {
+      "commit_id": "5292260c689831453b0a32d6a39faf2cc5ffa770",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.7013122946999907
+    },
+    {
+      "commit_id": "f84ebf1477350306376647babd58ab1c583c631f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7056887379420577
+    },
+    {
+      "commit_id": "c47ccf99a981e193a2d58482cd0c6dd0a85b4935",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7417548233873784
+    },
+    {
+      "commit_id": "90cc5baba60411e221cb6d5d253ecd4e76d6e724",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5008669165044091
+    },
+    {
+      "commit_id": "443287b84688ea4e13f51b04bc46bc4d4476b090",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5834186475933071
+    },
+    {
+      "commit_id": "9439cc885798548bc708381e917f7fae63fb0ada",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5347656428817354
+    },
+    {
+      "commit_id": "48aaa9a98d334fda40954801fdf590e7e45577ee",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5078204376298299
+    },
+    {
+      "commit_id": "10de9521e5903d8e9a79ef6713a172b0a69f261e",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.583998502090039
+    },
+    {
+      "commit_id": "e1cdaf575bc5cd3b808c51b0c3b55e46a5f930d2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6121295444061032
+    },
+    {
+      "commit_id": "47c45ea2a52e0f277fc12ac99cf79ba63cd13790",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7835617023749281
+    },
+    {
+      "commit_id": "5f81538725c6de9a1716a070ee76c2e8cb62d3b1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6686378747331139
+    },
+    {
+      "commit_id": "4ce7e09dc04e6896eb36056159d5ba09e26cf7c9",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5229235526938384
+    },
+    {
+      "commit_id": "81cedd50bad6c0f60887dad6c33dd16ef33e9879",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7862345143840992
+    },
+    {
+      "commit_id": "9b819b90fbe191154c08be4f93553164981ad451",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5956744596184433
+    },
+    {
+      "commit_id": "c2e45f73d86d3c3a05b750a2efb938b27c23b55d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.567332380644874
+    },
+    {
+      "commit_id": "f3e13ae5c26f2ee36a378f82aaf8c9614470ed06",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6407113892609635
+    },
+    {
+      "commit_id": "d2c236c5df45c1b1817b761c1b1859a57fa17251",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5066514737585155
+    },
+    {
+      "commit_id": "7b5ad213cf68b889c96bf5261bf21ca9a20fccf3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.525079413343073
+    },
+    {
+      "commit_id": "c2a74411687b6220822212509c71556a620e2048",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6994616986801943
+    },
+    {
+      "commit_id": "8f47bc29de98c497fc8eb22b95c93e32ad4c8b6f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5200241579572655
+    },
+    {
+      "commit_id": "509eafea319a069b5d7ed334b5562df9c4e56dfe",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.678613046164955
+    },
+    {
+      "commit_id": "33c978a6e9b887321b59dc2e6269d1d9ccd599c2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6724718894110899
+    },
+    {
+      "commit_id": "092d5b1c73ba517f11a82e738e2e008e799e6d4a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7072739620602189
+    },
+    {
+      "commit_id": "491e19c84114df04d91ebf8603ddd52b2809a703",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5228432892162409
+    },
+    {
+      "commit_id": "f56a5945a2f0fa26cc9729737ff88610998c8530",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6731214356909674
+    },
+    {
+      "commit_id": "aa6597cc98b7b8070dbd7423c5215053adddd5fd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6090636398073771
+    },
+    {
+      "commit_id": "c11eaea50455da5c3ae253ab7de43b95f9a9d80c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5033399621116319
+    },
+    {
+      "commit_id": "5fec1334c4d2034ce9c03fe511fe1ffd5266b3ae",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6933267257940314
+    },
+    {
+      "commit_id": "fbd4f95fb4c0677c75fa6c10977c00d5e144bc2b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6378818773066857
+    },
+    {
+      "commit_id": "a67f4d680f65fea13b2dce6183d0cce76b84d518",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8375259282629052
+    },
+    {
+      "commit_id": "2943453155ac4ea275b37a12d30391c39f1a3c1e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.739639741855994
+    },
+    {
+      "commit_id": "3b9788ab7a9ecbbed2a1e5f02c04abca152b5819",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6732379971727486
+    },
+    {
+      "commit_id": "63a504fe289295b39dba152c74797029aa44248b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5463668324813493
+    },
+    {
+      "commit_id": "c8cd96972cad99f96325a4a09f0696d5f61b792b",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5539606321451853
+    },
+    {
+      "commit_id": "7a7ea826905f1cbb03257f1e6e7faeda3fe3eeb2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6023822188981187
+    },
+    {
+      "commit_id": "eb1e4e29b0d951fb0737c83ea312c6cabbe9893e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5662840079832254
+    },
+    {
+      "commit_id": "e2128da95f49fe932ba02f60b6d53eda84e20dd8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.578331951457407
+    },
+    {
+      "commit_id": "a5c66783b42830ea5a5f3e646b032adb3b38a81a",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.539931603635515
+    },
+    {
+      "commit_id": "195e2a1ae55f16f61354fb15f9736e5b421ebdb5",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5152428206372287
+    },
+    {
+      "commit_id": "9c526d72506213d780c61af8fc3c896f4e793d88",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.564693562312427
+    },
+    {
+      "commit_id": "5f9b82e165a25b547a5f8c1af34f3e8a488f2027",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7304118151444452
+    },
+    {
+      "commit_id": "c63801497940b667d2c47373aee95312502a2acb",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5165367055504527
+    },
+    {
+      "commit_id": "c62d97a2717fc21f13c5062d17160312e984bc75",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5508449204937079
+    },
+    {
+      "commit_id": "22e50e71b83acbf6c3c81dd212e9ff7f47f8f654",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5582754599131344
+    },
+    {
+      "commit_id": "02495f5285aaf7104c1eaeb781b41e71d33b06d4",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6038579504558765
+    },
+    {
+      "commit_id": "1e663e2d276111c86f00afd2853de4405468c32b",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6519500192584162
+    },
+    {
+      "commit_id": "a5e79aa6cc92a4a9cf740d575abc4794fb6f0e6c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.646295047901515
+    },
+    {
+      "commit_id": "5bd332b17a23b50509621298cd39727bcbbf1439",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6055047934399326
+    },
+    {
+      "commit_id": "44234e940d4a7b363ecfdcdfcb4feb50ca3083a8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.585149652533667
+    },
+    {
+      "commit_id": "0ad0504b0407fa0fd2b677990757a4d54b8fd08b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6665987021926698
+    },
+    {
+      "commit_id": "25a7682e6ef81d8db1abaefe08a880646ea96096",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.745569775590219
+    },
+    {
+      "commit_id": "2ddc17cd00616730865c5c1a9502cb165e230f93",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6194829411485099
+    },
+    {
+      "commit_id": "1eda9d6439c666a5646afa93d256e47c48094bbb",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5836084123755667
+    },
+    {
+      "commit_id": "c633bff0b34126f401d76a06b5fd90c29a63e7aa",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5053123100633
+    },
+    {
+      "commit_id": "db4055e6504b035ee5a0e691226df99dda20dc73",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5111339815096856
+    },
+    {
+      "commit_id": "8953cd2a8fa079c5e794fb219ca6119ccec3f9a6",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.9064875619287645
+    },
+    {
+      "commit_id": "85eb829b18519c2c138458cd51522edb003af50e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.508285617610465
+    },
+    {
+      "commit_id": "9ab3fbac6d96e5b40b05dc0dd0f14e941ded9e2e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5282950389913403
+    },
+    {
+      "commit_id": "40452ee1b1338a79f6eb32b0a4135762f2f654f3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6709404906882872
+    },
+    {
+      "commit_id": "f0d718722308aa7f64f687c254306476d9c61efd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.680932583237271
+    },
+    {
+      "commit_id": "fe34ff4420f339851d1af646014195c8a62ad72f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.600298048283952
+    },
+    {
+      "commit_id": "5554edb639175609afe19acfb3d4243b96d24871",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6225090379461864
+    },
+    {
+      "commit_id": "c2332983038910cb4fe0d88fee3257dce79de71c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7361079902254798
+    },
+    {
+      "commit_id": "28e8c3437cef60d9b07e32c73f70a4f454ea66ef",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6551868494809807
+    },
+    {
+      "commit_id": "ba808f9f537b43a0a1267d3a7d19a16bd64f51dd",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5756702327952253
+    },
+    {
+      "commit_id": "4f2cbf69be2360987ba64bd9f6a5d45fc9086f12",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6575534531261797
+    },
+    {
+      "commit_id": "ba91ce2c95666a6ff904d181bac8c88595921025",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6469884403860613
+    },
+    {
+      "commit_id": "6ed08b61c96f85349cf265c6de4318a6ccf7bf8c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5873868511997606
+    },
+    {
+      "commit_id": "ba2cec2237d62e0e573a29f4a3ba44b96c4dd940",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7601263295860047
+    },
+    {
+      "commit_id": "e4aa32d0fc2bd41dd2e3fb12b619c5fe78f85a53",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5716270395106483
+    },
+    {
+      "commit_id": "ffb7b8098e029b36abaf3cd4b162a94f03442f57",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7560406700095988
+    },
+    {
+      "commit_id": "7c8af7d119df4586d562d7a3acf9e09eb4721be1",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5141905820362007
+    },
+    {
+      "commit_id": "03b2925cc870f11884d59e77376816d5a6947a48",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5995896738642194
+    },
+    {
+      "commit_id": "4a815c4d1f9c702a7e8d280ed9390a05cd008217",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6945626592233598
+    },
+    {
+      "commit_id": "5a011f959bd0866ccd9b47c75a4a021069c6f1e5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5637715737544965
+    },
+    {
+      "commit_id": "cc221f1c307eab9b73da5a666ece48475a500907",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5761739442658246
+    },
+    {
+      "commit_id": "b74aa2545ad376cf98d69d4663f6e96ac516afbc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7681210523515399
+    },
+    {
+      "commit_id": "3deaee81bc642b5b968049d06ae544d4bd6e5a3f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6157559753143207
+    },
+    {
+      "commit_id": "a5a525028acd7ba541b423a121da94321ba9b5e9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5583142106321807
+    },
+    {
+      "commit_id": "ac365bf8333870fd577c28b6e47e243f622a3bc7",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6251979984698653
+    },
+    {
+      "commit_id": "a4e67a3c04ecea458a87df27e72cb2333d774a3b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8168381560047043
+    },
+    {
+      "commit_id": "1f2c2c232654828efb3b3d3f2561932d45b5a991",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5277899386953382
+    },
+    {
+      "commit_id": "463d8139296e98c673b5cb233e32ba2a3af9240e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5237153322177468
+    },
+    {
+      "commit_id": "e2eaca5428fda5a0702d33e350c0285b61b35665",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5978274592502189
+    },
+    {
+      "commit_id": "cbb4c4e933707d4454c3b68e2513c88421d027b9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5081022681678451
+    },
+    {
+      "commit_id": "bf1a52f18ef7b7cd01320ec32f5ce1b348c4bfbd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5932828171215907
+    },
+    {
+      "commit_id": "334f3bdcd95f022ddf8809162d576a45b63c540e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6672928049039426
+    },
+    {
+      "commit_id": "a218671cf161b9a2f1e65ce1fde9728043058384",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7610151836017108
+    },
+    {
+      "commit_id": "b242a74d26b05a576b4828c1976a906dfaa1b7ad",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5747904633275168
+    },
+    {
+      "commit_id": "929ffcfaa86899e6517afb6eab763c8728a493ac",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6247288832003951
+    },
+    {
+      "commit_id": "0a48a7a9089fab42115f604f82efc25b3e5fd7de",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6606144866122738
+    },
+    {
+      "commit_id": "41b5b7abaf62387088e0b696624be84be15ce1e1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6788222028100452
+    },
+    {
+      "commit_id": "e85828a3bf147cba44a0c644dd7b40ab09edb2ea",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5586694519685405
+    },
+    {
+      "commit_id": "cfacf2e20955d4dc1dfb74d8eb2c91f8e4bac5f7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8024011831381691
+    },
+    {
+      "commit_id": "25f4778b46c3a6dfd5d09d5261b6fd6116ec4435",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6510146726040771
+    },
+    {
+      "commit_id": "d29d46414a8bd17cae77210d48d6e28cdb08a2fc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5663119234682482
+    },
+    {
+      "commit_id": "3dcdca63503e7acf7b2db7b353a84c7b1699dd2e",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5062908416150161
+    },
+    {
+      "commit_id": "c0e7ef4ee3baf6848839f0d9644e15dcbcd993af",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.586805117600825
+    },
+    {
+      "commit_id": "a553eeb58a0897f472ec90d551e4c0f299740eaa",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6056951147464757
+    },
+    {
+      "commit_id": "95bdf1fd13a83e367d392e0b0830934d346aeb3b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7441245893988543
+    },
+    {
+      "commit_id": "7094e761326e6ff9c13f8bcb8170e089b317ee53",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5409372984655914
+    },
+    {
+      "commit_id": "002ce5f09d7b9dd5465de02ad6cc9878cc575ad7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5333086643046206
+    },
+    {
+      "commit_id": "03e730a2e94ec2f9f41d404ebc8fd173921fd20e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5365760737738632
+    },
+    {
+      "commit_id": "e71782bd0a2af0ff7242a9ab17ae1ed1d1580b29",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6903371131935405
+    },
+    {
+      "commit_id": "e724231225382ff2803123c5f3478ceb3da17f96",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5462065872887085
+    },
+    {
+      "commit_id": "6808d6d3c7c8b8c5ae9af0d01d28c7129239ef7e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5886614274933175
+    },
+    {
+      "commit_id": "4b9bd878798cf0d1ea81a54af8a3ad7e5ede5f97",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5097226237986379
+    },
+    {
+      "commit_id": "30a8f008e7eea2780f205be43f01cd128972f2e3",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5643554479721837
+    },
+    {
+      "commit_id": "b2781bb212662ae8a303c2fa1d0ea0670a49bbc2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5214038706470052
+    },
+    {
+      "commit_id": "d4c43a5880c1cbc8675556a899425e0da996ccc1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5630394323903516
+    },
+    {
+      "commit_id": "8c0e0212d9532511ab649d58932e7a7e07fb8704",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6777105853279677
+    },
+    {
+      "commit_id": "6fdc84b66933610309d2b327121e2a16cbfc05bc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5685623077145926
+    },
+    {
+      "commit_id": "12a1480b1a4127c1714ea01bf231a729b483fa3e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6381793860275985
+    },
+    {
+      "commit_id": "410c6d92358de2a70b5bde56ee174e5bd7cae63f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5855562521517892
+    },
+    {
+      "commit_id": "2e90a54a8f7657f11a84a00e2907672686ee025c",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5912771582283904
+    },
+    {
+      "commit_id": "69f0ec36a54e6ffb1cbf995dfaed853c3378bfc0",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5846860891916028
+    },
+    {
+      "commit_id": "3775e0d0c233606bbea539323751cb1f813ea83b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5330002824870417
+    },
+    {
+      "commit_id": "25e88b73966f313e828e29f17ece88ef6ad78811",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5542493558028491
+    },
+    {
+      "commit_id": "80e44e61fe07917c5c1ab9dd125ed488a7c89f25",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.666158760719261
+    },
+    {
+      "commit_id": "80937e975aa40323ee92394ba8229db5b093d8e3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8227275002337202
+    },
+    {
+      "commit_id": "39d68aac41fabbc78f1be9486bbbfc48275a46e2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5613744133640791
+    },
+    {
+      "commit_id": "d2e6af4871ea04a166c453153605f2229e73e95b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.570364211506408
+    },
+    {
+      "commit_id": "eecf63f33869123ce3f8847df962162c4d8c3d58",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6784333130343451
+    },
+    {
+      "commit_id": "77f1bae331cb8cf49b70bf29f116beceb0ffb1d8",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5123701431544718
+    },
+    {
+      "commit_id": "fb72a2390e63c25c244588c80ae15b8b8e8a5910",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5216238083689905
+    },
+    {
+      "commit_id": "55ac99080d7b8c182296db050207859e549b8840",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7283540223863247
+    },
+    {
+      "commit_id": "d5ff86bdc1d49356f9cf92eeb96009e9fa5045f5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5331498207212648
+    },
+    {
+      "commit_id": "9ca6a30819b454c94a0a776b488dcba478ac9806",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6252975396984322
+    },
+    {
+      "commit_id": "ab16665bafd3d7d12d0c9e9eb7d1372830b31c03",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7913102598567392
+    },
+    {
+      "commit_id": "fe15a02a83f2dec2a89cc294523ea2a250ea1985",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.54156941993449
+    },
+    {
+      "commit_id": "1771bc66ef7ee1d4bde1e9fcae12baa5b83876a0",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6058326868416415
+    },
+    {
+      "commit_id": "df020056819341b4115a98713ce4585d60eb8252",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.5038585060045071
+    },
+    {
+      "commit_id": "314b1bffbd00e4ede0932b132f471b7df3db1e60",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5325400192903195
+    },
+    {
+      "commit_id": "fd8f0e891d7199a3f2ca28d43e984b7283f4bac9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5370359678871831
+    },
+    {
+      "commit_id": "7ba9c32711af4f642b950e827f43ee24dbb872dd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6745022967288145
+    },
+    {
+      "commit_id": "9b85469b7aaac21364d046268f10235fa99e9659",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5483545674210266
+    },
+    {
+      "commit_id": "b445a11895af503f9b879f8a49ecfb410ad9394a",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5309433767688253
+    },
+    {
+      "commit_id": "c9dbad8407e6e1c96941fd8f6f015c1496f1610a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6919339960034555
+    },
+    {
+      "commit_id": "f7859d4579ac8a6fa6b6e563fb776332aa284732",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5508651864651946
+    },
+    {
+      "commit_id": "21bbacafe8fdd71abdcabab3a01cb67d3fe2d99e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5996445081879114
+    },
+    {
+      "commit_id": "4fd810c8ee426913f09e7178956464d635757f7e",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6923153300739642
+    },
+    {
+      "commit_id": "b13c8d5372ff9588f14a8d4fb1892bae5f7693eb",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8402370832303862
+    },
+    {
+      "commit_id": "8fe3534897b03ca569f0f29511e16d070d5048bf",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5103083728485662
+    },
+    {
+      "commit_id": "7d7732fdbf27aff986fe9a1486863db5430c4d2c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6395056075517768
+    },
+    {
+      "commit_id": "55a43c41ca5da3903c40a4bf1a5b703f207379bc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6129254837990483
+    },
+    {
+      "commit_id": "3ed521fc47775bb75da7f7db76d620d05fec1c23",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6453049779534418
+    },
+    {
+      "commit_id": "eaa205d62ce313e9271dd935b0e4d46bad21f004",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6011059365126424
+    },
+    {
+      "commit_id": "019c11c5aa37c8bff0cf9090c305841ffa3082b0",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6890817377870483
+    },
+    {
+      "commit_id": "e28e11cd2c91c55749c90f4a808642e671126a53",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6570370875383476
+    },
+    {
+      "commit_id": "e36708d6699d410c84d1753a7ba1e88506cae7f1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5547839466660939
+    },
+    {
+      "commit_id": "02b4aa806d6d56d952a2b8167299e71b20a2ba2b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.663319327716061
+    },
+    {
+      "commit_id": "f5f53c1466992e4cf7fb40a815e0539d2c40446e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.689098753627707
+    },
+    {
+      "commit_id": "f66981cfed58dec24317d1be1491d1ab8ab0c475",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5919396766877524
+    },
+    {
+      "commit_id": "45da33804a2d700971eb31c82039a6873de3f9a6",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6364517267700343
+    },
+    {
+      "commit_id": "52b209fdfc60ece90221e03e09f2229db6cfe9db",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5738785856657509
+    },
+    {
+      "commit_id": "2f13832f938b7edb95e2db23c464dc815389c567",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8715485949364171
+    },
+    {
+      "commit_id": "719a63004f3d12e2c0846665b0aa9af5119477fa",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6583183318306384
+    },
+    {
+      "commit_id": "476ed7d837d8040c72514e12ae1a12492e23b5eb",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6215426012327849
+    },
+    {
+      "commit_id": "90be8c89dd0c42afbfda7a5ac94c00e25eba8585",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6248348103041851
+    },
+    {
+      "commit_id": "28f764159cb486588d53e414d1d83de4bb6ef398",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7299174642677357
+    },
+    {
+      "commit_id": "eb723beab1df058d28341911456022a9f41c9bab",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5622628940905694
+    },
+    {
+      "commit_id": "72e3bfa5737bf90add7ea08d1c4640b7772fc347",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.8082775310905183
+    },
+    {
+      "commit_id": "70be2e2c7b5c4cd5f726dc7f4a24760984a63452",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7121950646207114
+    },
+    {
+      "commit_id": "7e700f09b56c16b30e097a6b7394ec5aaed6762f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7928936707309662
+    },
+    {
+      "commit_id": "e88ac6f2737917ecdc8cb568e42cbc6e7213da69",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6704997300584266
+    },
+    {
+      "commit_id": "2e13ab26cbc3be838b1146c044f64b40ae0aadfa",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5390489928753839
+    },
+    {
+      "commit_id": "4eafca8551cf7ad0493bf2ff06ba7ecad7f19d06",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5105591348320928
+    },
+    {
+      "commit_id": "ff897fbc1e524e01006769c5816a32f11943b4e8",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.566457302754764
+    },
+    {
+      "commit_id": "e86d02ff8f7e359d0d8272d9809017df49355019",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6331545993927377
+    },
+    {
+      "commit_id": "0bb72645a4cd9fe96a9f8385d82c5302cea81492",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.806690347975539
+    },
+    {
+      "commit_id": "ecb9fcafd3f139c344647e79346cd91bef4f486e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6561188447772861
+    },
+    {
+      "commit_id": "9dcacaee50c1f39e3c76cfa2aba27b7dd24d35ae",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5599887276294268
+    },
+    {
+      "commit_id": "6354a9191359caabcc89ad07bc7ae5e082207b18",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5399295177409034
+    },
+    {
+      "commit_id": "4b890272a3968fa4affd1f5c72e1bca8423dd714",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8524451033133754
+    },
+    {
+      "commit_id": "d4140c6fe05e79272ee33070bd6556e3d7da52f9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6045216450077722
+    },
+    {
+      "commit_id": "ec560efa239b8cb17f3ed0c69ead14b6d5734d11",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5803636837805548
+    },
+    {
+      "commit_id": "9564c81f159bd2c745c84fec63b50f1de362a2d7",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6743247096666062
+    },
+    {
+      "commit_id": "24b2d4d65f4106935e8c10f63c8a97b66327974d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5275424235967636
+    },
+    {
+      "commit_id": "a1c6972578beef6cb52aa92dd7a95d1aff0668f9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5601000016488642
+    },
+    {
+      "commit_id": "cd53783322f6df9fe66fab893063feadb79adb6e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.759986531170159
+    },
+    {
+      "commit_id": "b3cc2a726c49801421b405f99a68d3484f6181d5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7087783307418082
+    },
+    {
+      "commit_id": "86b54accac664fcf8aaa68d1ce604baec5db1890",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5939478543817046
+    },
+    {
+      "commit_id": "9aa7df5a34064065982252a20fe3d280ef2c2e4c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5350874914350547
+    },
+    {
+      "commit_id": "2bbbd5f794ec3e278e8d89502772640d91992ef4",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5251562393455503
+    },
+    {
+      "commit_id": "ff3471cb51ed14b09d3c9adf212d8e72c4c8eebc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6616889036123035
+    },
+    {
+      "commit_id": "811cf67709f3aaa7fa53f1d97bc632931e5bc376",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7486005474666335
+    },
+    {
+      "commit_id": "5101cdb87e4d27c66dd14a54efe7635d21cd4592",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7003338575018887
+    },
+    {
+      "commit_id": "feca994fed94a0526e33ca4176a4cbbae1bc30e4",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7492496968595092
+    },
+    {
+      "commit_id": "61919dbd02124eadef58f5201346120b334bdc95",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5170002154234449
+    },
+    {
+      "commit_id": "ab86b4883528c8f5f3ef28809ef81b879429bde3",
+      "true_label": 1,
+      "prediction": 0,
+      "confidence": 0.6982842626798902
+    },
+    {
+      "commit_id": "6a98de648cc4d228688330bd7513052ca045f8d1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6429928653036246
+    },
+    {
+      "commit_id": "3124ebc3a6071104e835bfd402d940d7c51214ad",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5419656951589438
+    },
+    {
+      "commit_id": "c4ea7f2b5ce372c35e32782b522adbe4d449aba3",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5963396414817773
+    },
+    {
+      "commit_id": "73f4fc968359b7743a558a087d4a8c9b42511e57",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5908023419184246
+    },
+    {
+      "commit_id": "ebd70faa8d9a4a00ac8b2177086a50cdf9bd7959",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5291656281973203
+    },
+    {
+      "commit_id": "38ea1f6fbb7092424b20f31a4bb8626358139785",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6514715252597609
+    },
+    {
+      "commit_id": "08b32a5b2b4d531d35536999dd3dcce7fd09ac9c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6960281142626397
+    },
+    {
+      "commit_id": "950b9382dfc93c15218c1fdc8130a7da256afd78",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6869967019584331
+    },
+    {
+      "commit_id": "e8e81cd2630cfb422dcaf0d8a0cc2aeae5e14189",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5970263158653364
+    },
+    {
+      "commit_id": "95e7f75941727a619d424d1cea0eb1962137dbd4",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5282545275628092
+    },
+    {
+      "commit_id": "37391716be3d833f6830cd70a232a31cc361280c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5371256674863226
+    },
+    {
+      "commit_id": "f8730aebfa41b94e55f1754ede0bd308e98d1650",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.8296046833994686
+    },
+    {
+      "commit_id": "00b83cdd96d9942837f8c4f0346516b8a31c7179",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6041720370558732
+    },
+    {
+      "commit_id": "11874074521579841d81de0bc8c870e3a19541ef",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5199748950172847
+    },
+    {
+      "commit_id": "6da43dcb36a96f7a7332acf320ea3956d6350693",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.560320689719952
+    },
+    {
+      "commit_id": "647445b4bf05dd6d61e8af3220b7260ee58fbcde",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6286232540260166
+    },
+    {
+      "commit_id": "73e17a886d4decaffc3148faeb30d01fb23ea7b1",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6987861038625258
+    },
+    {
+      "commit_id": "1bda81674eaf7b4843e38875ddd3a159a7944fee",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5943520195917877
+    },
+    {
+      "commit_id": "16067e39cefc627d9f790bafaa2cb37a4e0904b6",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7805328728660514
+    },
+    {
+      "commit_id": "26b22c57c1c2ee44e5bca8c16eeb4aa937b69b41",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6515801755747928
+    },
+    {
+      "commit_id": "7fcc82b31608c9e5805317c57bffa115b76929ff",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.544744586550491
+    },
+    {
+      "commit_id": "86c4a2c5f8bf150873368447123675c6d1f550bd",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5010306347404242
+    },
+    {
+      "commit_id": "a74a6885a50662466773bbc140062a71f9718826",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.773949672005926
+    },
+    {
+      "commit_id": "4537f4704b96ee86a20af6601703f2b5da78444b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8909674447258126
+    },
+    {
+      "commit_id": "e232395d4b7ed94a04a160c415c0a559c1e3ca52",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8459213389702699
+    },
+    {
+      "commit_id": "d8324994615c2c2510cfa388cbc90f07605f9736",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6091733787710172
+    },
+    {
+      "commit_id": "8253ea7ea30ebf99f371e15728cda4f1e0c14c06",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6133132100961184
+    },
+    {
+      "commit_id": "a65d943c936efc30ea8173f81e623289614ad419",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5554667004812276
+    },
+    {
+      "commit_id": "624c486a2df46c9761d2d900c60c14c117df79cf",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6992880463463985
+    },
+    {
+      "commit_id": "c8527d5e45539bf5a3a9155598d0c1a79443af8f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.757926660191882
+    },
+    {
+      "commit_id": "18490cf615bebb7be94e6a06a9df375dd0d35e52",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.860972812427736
+    },
+    {
+      "commit_id": "61d166a75390daa2ac745103a70b6fc86db4e580",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5575348307215806
+    },
+    {
+      "commit_id": "74f68ebd9b472cc1296a21a181b417d85ddb7f95",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5522630393550768
+    },
+    {
+      "commit_id": "2045d518781bee1a01ddcbe70ce85ccde92b6b57",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5280961834758868
+    },
+    {
+      "commit_id": "f0cdb5bc8ab61bca9aa626ea167e97bc0070eead",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5020126437493211
+    },
+    {
+      "commit_id": "a8993f00ab4b364e2bfe86357644488cffcfa738",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6246023099408655
+    },
+    {
+      "commit_id": "4c149b703e82d202868d190a514090eb31f14a4b",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5740546641951996
+    },
+    {
+      "commit_id": "a55e81f9e194a9ea03c3b69afa60f1d6065ad013",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6175913315869248
+    },
+    {
+      "commit_id": "fc2f86a34740cf1194433851f96174d14347619e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6852478938350313
+    },
+    {
+      "commit_id": "cb0abfb4ec4493ede0e4382fa183d221f511fbe5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6671546191861603
+    },
+    {
+      "commit_id": "3d808dad817357ea9096f11d7bf0a810c0fdc203",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6754407021669957
+    },
+    {
+      "commit_id": "f096c6d079d0bd48341d2b579d51f91168af255b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.879380036815544
+    },
+    {
+      "commit_id": "48a0e2f19ca2328ca898c4549ea03d37a92d6ea1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.579833939164836
+    },
+    {
+      "commit_id": "1bec81551b1830ac63ebe58490160afa3db40ef6",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5677647586626806
+    },
+    {
+      "commit_id": "fdb8669372840753f1e9270c60ec11478b0c4f75",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6467322896037906
+    },
+    {
+      "commit_id": "e75d49ab2ffec27226a791f9956b4c9aa04a6327",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6920855496411475
+    },
+    {
+      "commit_id": "2851c6759c85523ee0b200833cdc02f7a4f745c5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5520373066581694
+    },
+    {
+      "commit_id": "12f0a4bf8f1c06116ea9afd6490f21c3aa5963fc",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6214763057936521
+    },
+    {
+      "commit_id": "597cfcc68361b7fbcdf39f2d6cc32ca1d21470a2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5950650853268573
+    },
+    {
+      "commit_id": "5df355bd62d41aa8b01d6a10fd2f27b09f89a562",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6654847353300521
+    },
+    {
+      "commit_id": "e1289ad9e8efde05ffdeabac85416388f4cfbfdb",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.676296689112558
+    },
+    {
+      "commit_id": "a779ebcbfe929693a949782f4e6391625b1e1577",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6089985805207259
+    },
+    {
+      "commit_id": "a0e7ca10443f3642767dc19d826e04b5a7b74283",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.763154758664346
+    },
+    {
+      "commit_id": "01534b93408ce725f8de7889f3290c14b7b1caf7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6161586287775522
+    },
+    {
+      "commit_id": "28df6e414dc8ec7a57ffe163ea7e0fac0b529a3f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5921074879005552
+    },
+    {
+      "commit_id": "ebe5020481c005339d733360b9996350b1071c43",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6379635507218385
+    },
+    {
+      "commit_id": "f0c1b1c9bc06141f9552a3470f77ae4ac72ea53b",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5217081155706254
+    },
+    {
+      "commit_id": "c8cc426a5e241c30bf7453383221b65ccf737b57",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5333897713988345
+    },
+    {
+      "commit_id": "bb949467ccc9348d72512a90dba94c7fad513a2a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6919703618018019
+    },
+    {
+      "commit_id": "ced36b74a7f7490b0f103b5d1fe99d79b0b3f73f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5135801209225246
+    },
+    {
+      "commit_id": "2704d9b7f8c5da167e3261c5288fbc7234605dbf",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7469803392169392
+    },
+    {
+      "commit_id": "ea706b685f1f8ad46e12d7a5195ce4375ade35ae",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5597570701268777
+    },
+    {
+      "commit_id": "cefead3e5fd3909925972a9e10fb6e2b43d861ed",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5459828934059672
+    },
+    {
+      "commit_id": "169b0228a19bb2fb02544d41c584edb8f03942ce",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6988668146720285
+    },
+    {
+      "commit_id": "6e266832c808b9ee79a354e2765735a77527a728",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6579199948658322
+    },
+    {
+      "commit_id": "d12754638c687fb1faccb217c2a44a5b66806c37",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5268087975051645
+    },
+    {
+      "commit_id": "e884b3a3c7626437b9d4921663e31223576309aa",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8454519510733915
+    },
+    {
+      "commit_id": "e956b65e38cc27a54c9a4183895861e5ac75bd71",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5286810746291406
+    },
+    {
+      "commit_id": "ecd7dce029ce3806cdfe35af7e38b2b03a4dd313",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.652556124636811
+    },
+    {
+      "commit_id": "28fb9e879f1d76ea281447395ecadb3449008401",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5998224681596971
+    },
+    {
+      "commit_id": "e290d5ceed8e4e03110fb07981a2638bbb19e88d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5399163419720703
+    },
+    {
+      "commit_id": "bc88726eb506af450de5b963cdef80ea4b4451d3",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.549621285916811
+    },
+    {
+      "commit_id": "3a2c45c531bb0a29f8bb1a01cae9fbde78947e67",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8630505232514654
+    },
+    {
+      "commit_id": "3613d93e8727179783a07186c9f5749fd6cf4a08",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7494232469261524
+    },
+    {
+      "commit_id": "819e913ba4b67442aac9e1d13e220765c9b95934",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5003314835438777
+    },
+    {
+      "commit_id": "e82a2578f7ef0f0dc605c712f21d6d9de45d6f16",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5678553481505785
+    },
+    {
+      "commit_id": "e0db86fb83c4d19431a463e0a4bf17b89854672e",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6455067223794626
+    },
+    {
+      "commit_id": "50bf97dc3605fe9b0c86dad87611fe9023f305d4",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6326087027862506
+    },
+    {
+      "commit_id": "c64a2d656aae0a36fe707b286d97ed2dc374d73c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8651642219973319
+    },
+    {
+      "commit_id": "34897a2036a6cce401cda396bc7cca6de34a0ec4",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5007368063991978
+    },
+    {
+      "commit_id": "1a0d70ac1d1ba420aa2fad876d677a1f8552df34",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8472014359438483
+    },
+    {
+      "commit_id": "c71b363392005528e26f9cf9b72b308f9691866a",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6081544939819175
+    },
+    {
+      "commit_id": "8db300296a58df2a544398079732a76484ad111f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5673179270359557
+    },
+    {
+      "commit_id": "58dcb919f24b26409865d98f7fd8cc734d02a098",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7472107736490381
+    },
+    {
+      "commit_id": "86eecca7d777a829a06f3a0463af277eb3b56bbe",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6592772221747571
+    },
+    {
+      "commit_id": "8c3b32bb01dd961ba99a3bbc78de23fc13fbd30a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5169277577324776
+    },
+    {
+      "commit_id": "e8179d677e9920cdd07fcbf4a009e3ffd069298e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.84395820667474
+    },
+    {
+      "commit_id": "503e466b52974b3f84ea6308db77db18b3aaf2e8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5621426128475799
+    },
+    {
+      "commit_id": "5354dcf844d528655a0b206593c6f260987f238c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6943170480888341
+    },
+    {
+      "commit_id": "01916de6877bbf534bdb6a9a604802bfbc258dbc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.585642883083839
+    },
+    {
+      "commit_id": "884e1ad9d5409b907762f3c63671e73b341b6d7d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6600101052776419
+    },
+    {
+      "commit_id": "05895b6b88b021f6800680d45f7fc542e8a26ffc",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5771807113286564
+    },
+    {
+      "commit_id": "97e3fc291cd31bac9c53354bc215ece33b435a42",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7836039440756811
+    },
+    {
+      "commit_id": "226165e0ef4dd109dc254fb48780248fc76a72c9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5590547332942772
+    },
+    {
+      "commit_id": "ad9fe87a69e30f5e60db2e66ddc6923d5a2e00b0",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6340302959373971
+    },
+    {
+      "commit_id": "869f9df85484a9677caf9667e0dcba20a05b40bd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.706677878567165
+    },
+    {
+      "commit_id": "2c6ac3202acdeb16311f6f47302ac05a6e7d1b6c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5728263207884898
+    },
+    {
+      "commit_id": "c47b842dd7faa9354e52ebaf496091bdff99214e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.57394178831744
+    },
+    {
+      "commit_id": "92c1db8a63739cfec13465ac72fe6f592068324c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6889715823653378
+    },
+    {
+      "commit_id": "28bf7ae3c042d0d9d1fb8ac4d4fd464c137b9573",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5164217226632823
+    },
+    {
+      "commit_id": "d6d0fbdef190091e5dac0c7fe409befc4c95bd36",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5874805136465233
+    },
+    {
+      "commit_id": "4744b8340c17bd048256b145e34f08f25461b0c8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7217460081170228
+    },
+    {
+      "commit_id": "97b643a699c5f8e436aca52669131c26f590146d",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6273000775319518
+    },
+    {
+      "commit_id": "a355b65b13e64961da182f6c86f8ac57c9263831",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5021183345600846
+    },
+    {
+      "commit_id": "4424e72e5872e8fdfa2cfba982240bace917fe72",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6215567959079066
+    },
+    {
+      "commit_id": "187f0e64d6ebaacf779b84038af2ed3e908ac9f1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6821310450002067
+    },
+    {
+      "commit_id": "9ae61137c8c5085f2390e512440add7b50a1ff5e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7011827782651578
+    },
+    {
+      "commit_id": "980f8c05167f7b2cb5663352e7c9e3021f5c4dee",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5587913854603113
+    },
+    {
+      "commit_id": "c476d8e5ae9fc4ad72daf14dfdc7f9d6958bdb2d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6188956922557307
+    },
+    {
+      "commit_id": "b3864b8d84674440c5cd3763330d197f07c63a01",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5407324717014466
+    },
+    {
+      "commit_id": "5fa7263dad27958562b8af62169d43d6ccdf62ec",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.5762050855848113
+    },
+    {
+      "commit_id": "1a356de078609cfe665fd3e1633bf47e7bd2cb96",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5204831783935608
+    },
+    {
+      "commit_id": "1ef835f9afab8be1b546bd45febbce7510f6eb33",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6149613077862389
+    },
+    {
+      "commit_id": "3a98124b9dbb039021ef0ee5ad1f18f2c32f9dd9",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.501462850450458
+    },
+    {
+      "commit_id": "e933a800916fdf2d80514ae01977a9215d6fec2c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6236342073669772
+    },
+    {
+      "commit_id": "d2cc6fa58a865cae4c2f6bbc62e720f9bb7ba0ee",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5070167613282893
+    },
+    {
+      "commit_id": "04112249cb1d9d6d2c3ab7d8eab1d50001f6ae5b",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5132624498938967
+    },
+    {
+      "commit_id": "610fb2d58ceaeec53b4f7d5424eb981b5f21a0c8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6150426642852923
+    },
+    {
+      "commit_id": "45ede4b715b4fe8ef8d3866e18d2eb0df0634a26",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7109112640150297
+    },
+    {
+      "commit_id": "4df91634529c8b0f18ca75da51116275ea8d6fcb",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.721275478780151
+    },
+    {
+      "commit_id": "4a50e42f0ad942f7d7886f3c6e7a50381f21ee47",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6955550497981593
+    },
+    {
+      "commit_id": "dc7525e3426bfc6827b32eb43ea844be861c9578",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7269989059837405
+    },
+    {
+      "commit_id": "8c97563356bda665a59683b169ef9980041438f2",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5116877383417726
+    },
+    {
+      "commit_id": "79b5f8458e32f3e42219346df0465f843abe4adc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6060116983138419
+    },
+    {
+      "commit_id": "ef7502550bd6a2148c691026bdde68f4c4cae7e2",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.8025430261068565
+    },
+    {
+      "commit_id": "81da1a82b925c1839448732c5bfd63c67e9afaeb",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.694033547773963
+    },
+    {
+      "commit_id": "6aa61316c63cfb5de1ac268483a5b3730140ad98",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5968753012316815
+    },
+    {
+      "commit_id": "408b339111751d78d4fba892a104d3a52c6ca331",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7996942191022951
+    },
+    {
+      "commit_id": "1c2cc21fb8b07c8e9f17f89fe871fefaddf6c5a2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6492075055686963
+    },
+    {
+      "commit_id": "e03cc46e4b4800c33664231ca75721d6a5077723",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6097199457822211
+    },
+    {
+      "commit_id": "2a762c5a885a9af0941596467b95633d73af2a3d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7920090625247114
+    },
+    {
+      "commit_id": "9a6c8b3d3ea551165ecabe35955e67f0d5f8d2fc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6323136327720936
+    },
+    {
+      "commit_id": "2b5becb2458c2b5c9a7809a207072ebb9602b139",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5629839261206969
+    },
+    {
+      "commit_id": "e12f9e4708c160ba86e88ae664821f12caba14fc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6592661921594615
+    },
+    {
+      "commit_id": "cea60bbab4bc4cf66c907c80923aadbc6c1f589f",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.5008730559442416
+    },
+    {
+      "commit_id": "9d5c1e38e7fa2659ff35e72c5ea438724010a945",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6978796219836023
+    },
+    {
+      "commit_id": "bc523d3640536476fa895d1e598a3c5c0c9bf614",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6304822012163642
+    },
+    {
+      "commit_id": "d999e2f0ea60e16b482bf43505bac17634d09a36",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.620594344358402
+    },
+    {
+      "commit_id": "46129bda5bb44386edec5514be64e155d1a05726",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7070609847941798
+    },
+    {
+      "commit_id": "7656bdae4fdc02feebcf0ceba5bf02c5203f39bc",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6481038923996711
+    },
+    {
+      "commit_id": "b3b7b91599f3dd768ab8f6f7dcf675cdb3812c46",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5231103383378527
+    },
+    {
+      "commit_id": "8483b989091925a0d5eeccf1f306940232d0144e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6883247576814899
+    },
+    {
+      "commit_id": "8cb5cf656f1f90bc694cd52d142c781655097439",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5378416970961941
+    },
+    {
+      "commit_id": "bd84d99137f7164f902707523b7d837eeeb0a60d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5061028415919386
+    },
+    {
+      "commit_id": "f932ab788f5c3f59352f019984418ee0732d8009",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5033637996460741
+    },
+    {
+      "commit_id": "867a5f11e79cf1d488da72d7f9033a0ea29be90a",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5805606125843679
+    },
+    {
+      "commit_id": "99df335cfc36c5153cb567c3bea4e97f588fa072",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6710121753730967
+    },
+    {
+      "commit_id": "64b20d04bfd0b37fedf24f56e52e9ded708fb810",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5461225392214777
+    },
+    {
+      "commit_id": "fe26eba04a72d454abb405a9c86a5f313c42bbc8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7022781143756667
+    },
+    {
+      "commit_id": "ba49e466a4e73a4954b181a031d5cf4293b8444a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6511536441329
+    },
+    {
+      "commit_id": "4dc9329fab6e9ef2fab8f20da39682a3eee823a8",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5542952453247871
+    },
+    {
+      "commit_id": "1e442fe985636550c2f146fd581f66adecd7ad1d",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5060864270013418
+    },
+    {
+      "commit_id": "2ba7bd5431988186def771f918f888794b7c03a1",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5997294159728055
+    },
+    {
+      "commit_id": "91cc4ae696c3f263c887bc8085f0302b87edcf94",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7536923835578542
+    },
+    {
+      "commit_id": "8c85bd03d0dd93bd0f15e84796c85247935300a7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5275458823049611
+    },
+    {
+      "commit_id": "c92b6557b62ee6a2b2f241f3a13a970584d4b928",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6813180782333368
+    },
+    {
+      "commit_id": "47ac98b419b6b8bf9ee198c25bfa4edafb396108",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7191811428390787
+    },
+    {
+      "commit_id": "84e7d5e29ff6039afd93c0171287d4ecbf043d04",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6836093188212891
+    },
+    {
+      "commit_id": "06f5cf917ecfa5328bf5f8615308eb04fb22cb7d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5682022688528428
+    },
+    {
+      "commit_id": "0e14d44d12e8a6dcd7d5868a7f23672bc7094351",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8736131416006649
+    },
+    {
+      "commit_id": "4d7be07621419d512738f448e128e01960517905",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5534615532356534
+    },
+    {
+      "commit_id": "f2cac32dfe566f5a8939216dfc616134c59b7c0c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5775656590574174
+    },
+    {
+      "commit_id": "03ae30f42356fe629f02ac074a545b3404302b58",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6754039059143737
+    },
+    {
+      "commit_id": "bc5dac32dbd74b552ae2d3034a1248cfe2dee2bd",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.533763620855096
+    },
+    {
+      "commit_id": "ea8d7ec6e5de10520827ab86bb301eafd7c3d99f",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5211241853436342
+    },
+    {
+      "commit_id": "752e661cda971c3fd85d3d47b932307344bc584d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6782106547650045
+    },
+    {
+      "commit_id": "25f9eeda1f933f08e492ce5d3f0b4ac266ee4c9a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6864321442084491
+    },
+    {
+      "commit_id": "d46ec073c91279c9050751768c3c245292d0f27e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5103254596654112
+    },
+    {
+      "commit_id": "3bf0444120dd3ee6a6ae3fac4c18f96e7e5714e5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7955734891646735
+    },
+    {
+      "commit_id": "aaeaf698c0de5207cb8bbc3ea787c36ab3f51973",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6429082934382804
+    },
+    {
+      "commit_id": "b8fab7321155d8477ed453ad64ce0cca0d8e352e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6814050020442332
+    },
+    {
+      "commit_id": "c262a80bc377a4bca80c680862bfa54526573162",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5909858044796388
+    },
+    {
+      "commit_id": "e496bd62ccda435363641b4c80270b4d1a7ab448",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5727646786115913
+    },
+    {
+      "commit_id": "0c870b29b3c8027fd0d3d21744e22c91845c8053",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5952543589696078
+    },
+    {
+      "commit_id": "ec35937e69bef55b39ad0bb0ce2b0b7a042febd6",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5463954018323045
+    },
+    {
+      "commit_id": "e09fb846848866bc4f7de6c2035e4d8e17d4f531",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.570579868532471
+    },
+    {
+      "commit_id": "5defb130af43fa6642e461df730c6175b05bb45a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6406340004070211
+    },
+    {
+      "commit_id": "7ff5834aa0302c64ac3e8569154d8f0dd3484178",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7562002830749279
+    },
+    {
+      "commit_id": "9377aa9a7a6f5026437ac75d2049d08edc7b070e",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5068813762053528
+    },
+    {
+      "commit_id": "f4c10314a33e7b1466d046630f840bbada41698a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5318690955851322
+    },
+    {
+      "commit_id": "162e6ad382fb9bcc860e735c80e5c4323712b41d",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5871544312916812
+    },
+    {
+      "commit_id": "2b57170f090c15ad94afcd928cadbd81c7b014e7",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6964216735152833
+    },
+    {
+      "commit_id": "af3ff863ed28eabd6e1defbee2d1ff34189f0e05",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5965920728289464
+    },
+    {
+      "commit_id": "efd39416cbefbb2292f46008b4a7eb8c5414fdcf",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.607571357989618
+    },
+    {
+      "commit_id": "ea1d99dc994d7ab12a0640638dd1e32040514ee5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.611301800843194
+    },
+    {
+      "commit_id": "e089d2d00eddb82bf5832cc992d1b5960e0e2db5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5986596627388023
+    },
+    {
+      "commit_id": "94de3d8791d50ea6b64743776cfb8e557988fe69",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8211755942463087
+    },
+    {
+      "commit_id": "56e1bca3407cddc366f124c25b86a1b012d9b6a4",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.7064231338893091
+    },
+    {
+      "commit_id": "f81869ef877650af2ad4c3aeb79c51c24629292a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5157364425981762
+    },
+    {
+      "commit_id": "87e54226e2588356b1f68f81be523e47d5f032f7",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5458310687107872
+    },
+    {
+      "commit_id": "bcec5f42cb2e5a1cb68f6c686ffe88ec72bb7828",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6901950932777712
+    },
+    {
+      "commit_id": "eac7dad7251f5722db41cfccdf338aa72e3a2370",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.641146767979014
+    },
+    {
+      "commit_id": "baf0595b731bc3c17fe64b56df06600c2568d6e2",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6046624697596392
+    },
+    {
+      "commit_id": "9f3a65b726555c1416c790b8fe4d2db7d3ad9846",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5987379200990892
+    },
+    {
+      "commit_id": "74b8af028eb73a20311a17d0d2ce20f75b995c2c",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.6505419231413909
+    },
+    {
+      "commit_id": "830aa3fdaf67d93f4d79717c79c057a13d445b35",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8233273442328062
+    },
+    {
+      "commit_id": "8d7602b5a4ae6f73077d0028c4b0414e5488226a",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5373359318432456
+    },
+    {
+      "commit_id": "2a7f6cd58b829d587e8c8864904c9268cc3b3714",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7897372464008485
+    },
+    {
+      "commit_id": "4cb0ee10f36015521a86eb1ff21d536b4d9c72bd",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.9330226308938911
+    },
+    {
+      "commit_id": "ae91dcae58b1c803d2c5bbb11bf9ff034bc35741",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.8606874301019439
+    },
+    {
+      "commit_id": "b6b38429bca68c415b38ace7f21b4c090c56d8be",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7782481436863801
+    },
+    {
+      "commit_id": "6e2ff269951f3bbacd7d33a0ff48271dc4b4ab70",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5379042816852705
+    },
+    {
+      "commit_id": "fda286a582270e4bbcb8068a933a949160ac7e9d",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7120184932725842
+    },
+    {
+      "commit_id": "71a2477086d93fd30754dcef9012be60dfc60214",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.6293420380473029
+    },
+    {
+      "commit_id": "f37a474eca075ef43a9624cd97c97e2c582659c8",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7500931460632063
+    },
+    {
+      "commit_id": "12d6b648896bd96b4387b17f6db736a519103183",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.5211873883090079
+    },
+    {
+      "commit_id": "03496d20f27b667c37f5b12b188f31140eed619c",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.742153036660605
+    },
+    {
+      "commit_id": "7c42609d3357449e742040e2a33d942e45857fc8",
+      "true_label": 0,
+      "prediction": 1,
+      "confidence": 0.5699771307046663
+    },
+    {
+      "commit_id": "0498598458d8c4322c8471ce6654e61063792ee5",
+      "true_label": 0,
+      "prediction": 0,
+      "confidence": 0.7281105984404793
+    },
+    {
+      "commit_id": "a5cc817a57593d97a2aec6fa489459b10b83e51a",
+      "true_label": 1,
+      "prediction": 1,
+      "confidence": 0.5013372605007573
+    }
+  ]
+}
