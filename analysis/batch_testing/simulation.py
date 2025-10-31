@@ -12,7 +12,7 @@ INPUT_JSON = os.path.join(REPO_ROOT, "analysis", "batch_testing", "predictor_sim
 OUTPUT_PATH = os.path.join(REPO_ROOT, "analysis", "batch_testing", "simulated_results.json")
 
 BATCH_HOURS = 4
-FSB_SIZE = 4
+FSB_SIZE = 20
 CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.5
 RANDOM_SEED = 42
@@ -20,13 +20,16 @@ RANDOM_SEED = 42
 
 random.seed(RANDOM_SEED)
 
-# local imports (same dir)
 from batch_strats import simulate_twb_with_bisect, simulate_fsb_with_bisect
-from bisection_strats import risk_ordered_bisect, unordered_bisect, TEST_DURATION_MIN
+from bisection_strats import (
+    risk_ordered_bisect,
+    unordered_bisect,
+    time_ordered_bisect,
+    TEST_DURATION_MIN,
+)
 
 
 def load_predictions(path):
-    """commit_id -> {true_label, pred_label, p_pos}"""
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -117,8 +120,6 @@ def run_exhaustive_testing(commits):
         if c["true_label"]:
             culprit_times.append(fb_min)
 
-    # reusing build_results from batch_strats would create a circular import,
-    # so do a tiny local version here
     if feedback_times:
         mean_fb = sum(feedback_times.values()) / len(feedback_times)
     else:
@@ -139,7 +140,6 @@ def run_exhaustive_testing(commits):
     }
 
 
-# registries (now clean)
 BATCHING_STRATEGIES = [
     ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
     ("FSB-N", simulate_fsb_with_bisect, FSB_SIZE),
@@ -148,6 +148,7 @@ BATCHING_STRATEGIES = [
 BISECTION_STRATEGIES = [
     ("ROB", risk_ordered_bisect),
     ("UB", unordered_bisect),
+    ("TOB", time_ordered_bisect),
 ]
 
 

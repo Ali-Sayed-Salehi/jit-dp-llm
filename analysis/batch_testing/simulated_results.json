@@ -12,24 +12,36 @@
     "max_time_to_culprit_min": 310.0
   },
   "TWB-N + UB": {
+    "total_tests_run": 2935,
+    "mean_feedback_time_min": 137.66,
+    "mean_time_to_culprit_min": 186.41,
+    "max_time_to_culprit_min": 310.0
+  },
+  "TWB-N + TOB": {
     "total_tests_run": 2937,
     "mean_feedback_time_min": 137.65,
     "mean_time_to_culprit_min": 186.92,
     "max_time_to_culprit_min": 300.0
   },
   "FSB-N + ROB": {
-    "total_tests_run": 14396,
-    "mean_feedback_time_min": 24.66,
-    "mean_time_to_culprit_min": 49.76,
-    "max_time_to_culprit_min": 492.98
+    "total_tests_run": 3558,
+    "mean_feedback_time_min": 103.8,
+    "mean_time_to_culprit_min": 171.42,
+    "max_time_to_culprit_min": 1128.47
   },
   "FSB-N + UB": {
-    "total_tests_run": 14400,
-    "mean_feedback_time_min": 24.66,
-    "mean_time_to_culprit_min": 49.76,
-    "max_time_to_culprit_min": 492.98
+    "total_tests_run": 3662,
+    "mean_feedback_time_min": 103.83,
+    "mean_time_to_culprit_min": 175.5,
+    "max_time_to_culprit_min": 1138.47
+  },
+  "FSB-N + TOB": {
+    "total_tests_run": 3644,
+    "mean_feedback_time_min": 103.83,
+    "mean_time_to_culprit_min": 175.29,
+    "max_time_to_culprit_min": 1128.47
   },
   "best_by_total_tests": "TWB-N + ROB",
-  "best_by_max_ttc": "TWB-N + UB",
+  "best_by_max_ttc": "TWB-N + TOB",
   "best_by_mean_feedback_time": "FSB-N + ROB"
 }
