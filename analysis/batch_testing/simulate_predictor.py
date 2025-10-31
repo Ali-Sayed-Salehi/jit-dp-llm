@@ -5,7 +5,7 @@ import random
 import math
 
 # ====== CONFIG / CONSTS ======
-TARGET_ROC_AUC = 0.7  # pick your target auc here
+TARGET_ROC_AUC = 0.7  # pick target auc here
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INPUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "perf_bugs_with_diff.jsonl")
 OUT_JSON = os.path.join(REPO_ROOT, "analysis", "batch_testing", "predictor_sim_results.json")

@@ -41,8 +41,8 @@ echo "Running script"
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
 
 echo "Script finished"

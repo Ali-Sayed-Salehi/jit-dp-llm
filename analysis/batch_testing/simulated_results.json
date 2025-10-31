@@ -1,7 +1,23 @@
 {
-  "total_tests_run": 2087,
-  "mean_feedback_time_min": 149.82,
-  "max_feedback_time_min": 286.35,
-  "mean_time_to_culprit_min": 168.6,
-  "max_time_to_culprit_min": 286.35
+  "Exhaustive Testing (ET)": {
+    "total_tests_run": 56071,
+    "mean_feedback_time_min": 10.0,
+    "mean_time_to_culprit_min": 10.0,
+    "max_time_to_culprit_min": 10.0
+  },
+  "TWB-N + ROB": {
+    "total_tests_run": 2853,
+    "mean_feedback_time_min": 137.62,
+    "mean_time_to_culprit_min": 182.83,
+    "max_time_to_culprit_min": 310.0
+  },
+  "TWB-N + UB": {
+    "total_tests_run": 2937,
+    "mean_feedback_time_min": 137.65,
+    "mean_time_to_culprit_min": 186.92,
+    "max_time_to_culprit_min": 300.0
+  },
+  "best_by_total_tests": "TWB-N + ROB",
+  "best_by_max_ttc": "TWB-N + UB",
+  "best_by_mean_feedback_time": "TWB-N + ROB"
 }

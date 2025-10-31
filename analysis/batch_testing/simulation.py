@@ -3,12 +3,13 @@ import os
 import json
 import random
 from datetime import datetime, timedelta, timezone
+from pprint import pprint
 
 # ====== CONFIG (edit here) ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
-INPUT_JSON = os.path.join(REPO_ROOT, "analysis", "predictor_results.json")  # model output
+INPUT_JSON = os.path.join(REPO_ROOT, "analysis", "batch_testing", "predictor_sim_results.json")  # predictor model output
 OUTPUT_PATH = os.path.join(REPO_ROOT, "analysis", "batch_testing", "simulated_results.json")
 
 BATCH_HOURS = 4        # Time window (TWB-N)
@@ -285,6 +286,7 @@ def main():
     # choose bests among CI-like ones
     best_tests = min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])
     best_max_ttc = min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_min"])
+    best_mean_fb = min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_min"])
 
     out = {
         "Exhaustive Testing (ET)": et_results,
@@ -292,6 +294,7 @@ def main():
         "TWB-N + UB": twb_ub_results,
         "best_by_total_tests": best_tests[0],
         "best_by_max_ttc": best_max_ttc[0],
+        "best_by_mean_feedback_time": best_mean_fb[0],
     }
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
@@ -300,6 +303,7 @@ def main():
     print("saved to", OUTPUT_PATH)
     print(f"Best (fewest tests): {best_tests[0]}")
     print(f"Best (lowest max TTC): {best_max_ttc[0]}")
+    print(f"Best (lowest mean feedback): {best_mean_fb[0]}")
 
 
 if __name__ == "__main__":
