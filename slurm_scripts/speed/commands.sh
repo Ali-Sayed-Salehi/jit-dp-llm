@@ -20,7 +20,7 @@ source /speed-scratch/a_s87063/repos/jit-dp-llm/slurm_scripts/speed/set_env.csh
 echo "activating venv"
 source /speed-scratch/a_s87063/repos/jit-dp-llm/venv/bin/activate.csh
 
-echo "Running script"
+echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/eval_thresholds.py \
 # --json /speed-scratch/a_s87063/repos/jit-dp-llm/llama/inference/eval_2025-10-09_19-10-15/final_test_results_seq_cls.json \

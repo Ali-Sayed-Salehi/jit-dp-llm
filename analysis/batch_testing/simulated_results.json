@@ -17,7 +17,19 @@
     "mean_time_to_culprit_min": 186.92,
     "max_time_to_culprit_min": 300.0
   },
+  "FSB-N + ROB": {
+    "total_tests_run": 14396,
+    "mean_feedback_time_min": 24.66,
+    "mean_time_to_culprit_min": 49.76,
+    "max_time_to_culprit_min": 492.98
+  },
+  "FSB-N + UB": {
+    "total_tests_run": 14400,
+    "mean_feedback_time_min": 24.66,
+    "mean_time_to_culprit_min": 49.76,
+    "max_time_to_culprit_min": 492.98
+  },
   "best_by_total_tests": "TWB-N + ROB",
   "best_by_max_ttc": "TWB-N + UB",
-  "best_by_mean_feedback_time": "TWB-N + ROB"
+  "best_by_mean_feedback_time": "FSB-N + ROB"
 }
