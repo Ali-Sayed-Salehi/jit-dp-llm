@@ -400,6 +400,7 @@ def load_and_split_dataset(
     seed=42,
     format_fn=None,
     cron_split=True,
+    eval_ds_as_final_test=False,
 ):
     """
     Load dataset and split into train/eval/final_test. 
@@ -409,6 +410,8 @@ def load_and_split_dataset(
         cron_split (bool): 
             True  -> keep input order and take contiguous 80/10/10 (chronological-style).
             False -> shuffle the entire dataset first (seeded), then split 80/10/10.
+        eval_ds_as_final_test (bool):
+            If True, also return the eval split as the final_test split.
     """
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
@@ -463,7 +466,7 @@ def load_and_split_dataset(
         print("🔀 Using non-chronological split: shuffling full dataset before 80/10/10.")
         dataset_for_split = final_dataset.shuffle(seed=seed)
 
-    # Split 80% train, 10% eval, 10% test
+    # Split 65% train, 10% eval, rest final_test
     n_total = len(dataset_for_split)
     n_train = int(n_total * 0.65)
     n_eval  = int(n_total * 0.1)
@@ -490,11 +493,18 @@ def load_and_split_dataset(
         # Keep the commit_id column for traceability
         test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt", "response"])
 
+    # If requested, reuse eval as final_test
+    if eval_ds_as_final_test:
+        final_test_dataset = eval_dataset
+    else:
+        final_test_dataset = test_dataset
+
     return DatasetDict({
         "train": train_dataset,
         "test": eval_dataset,
-        "final_test": test_dataset
+        "final_test": final_test_dataset,
     })
+
 
 
 def enable_gradient_checkpointing(

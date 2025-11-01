@@ -239,6 +239,7 @@ def run_inference(
     drs_token: str = "[/drs]",
     strict_single_token: bool = True,
     per_device_eval_batch_size: int = 1,
+    eval_ds_as_final_test = False
 ):
     """
     Inference on 'final_test'.
@@ -277,7 +278,8 @@ def run_inference(
         repo_path=REPO_PATH,
         slurm_tmpdir=os.environ.get("TMPDIR", ""),
         debug=False,
-        format_fn=fmt_fn,   # <- expected to yield 'text' and 'orig-labels' for clm_for_seq_cls
+        format_fn=fmt_fn,
+        eval_ds_as_final_test=eval_ds_as_final_test
     )
 
     test_ds = dataset_dict["final_test"]
@@ -577,6 +579,7 @@ def parse_args():
     p.add_argument("--recall_pcts", type=str, default="0.05,0.1,0.3", help="CSV list for recall@top_k.")
     p.add_argument("--quant", action="store_true", help="Use 4-bit quantization for memory-constrained inference.")
     p.add_argument("--debug", action="store_true", help="Use only 200 samples from final_test for a quick debug run.")
+    p.add_argument("--eval_ds_as_final_test", action="store_true", help="Uses the evaluation split of the dataset to run the inference.")
 
     # New flags for CLM → seq-cls
     p.add_argument("--clm_for_seq_cls", action="store_true", help="Use CLM-as-seq-cls inference path.")
@@ -621,4 +624,5 @@ if __name__ == "__main__":
         drs_token=args.drs_token,
         strict_single_token=args.strict_single_token,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
+        eval_ds_as_final_test=args.eval_ds_as_final_test
     )

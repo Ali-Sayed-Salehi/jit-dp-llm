@@ -104,10 +104,11 @@ def parse_hg_date(date_field):
 
 
 def get_cutoff_from_input(all_commits_path, pred_map):
-    """Find the oldest commit (by ts) that is present in INPUT_JSON."""
+    """Find the oldest and newest commit (by ts) that is present in INPUT_JSON."""
     oldest = None
+    newest = None
     if not pred_map:
-        return None
+        return None, None
     with open(all_commits_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -123,10 +124,13 @@ def get_cutoff_from_input(all_commits_path, pred_map):
             ts = parse_hg_date(date_field)
             if oldest is None or ts < oldest:
                 oldest = ts
-    return oldest
+            if newest is None or ts > newest:
+                newest = ts
+    return oldest, newest
 
 
-def read_commits_from_all(all_commits_path, pred_map, cutoff):
+
+def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -140,7 +144,13 @@ def read_commits_from_all(all_commits_path, pred_map, cutoff):
                 continue
 
             ts = parse_hg_date(date_field)
-            if ts <= cutoff:
+
+            # lower bound: must be AFTER this
+            if ts <= lower_cutoff:
+                continue
+
+            # upper bound: must be BEFORE / EQUAL this
+            if upper_cutoff is not None and ts > upper_cutoff:
                 continue
 
             if node in pred_map:
@@ -163,6 +173,7 @@ def read_commits_from_all(all_commits_path, pred_map, cutoff):
 
     commits.sort(key=lambda x: x["ts"])
     return commits
+
 
 
 def run_exhaustive_testing(commits):
@@ -201,10 +212,12 @@ def run_exhaustive_testing(commits):
 
 def main():
     pred_map = load_predictions(INPUT_JSON)
-    dynamic_cutoff = get_cutoff_from_input(ALL_COMMITS_PATH, pred_map)
-    cutoff = dynamic_cutoff or DEFAULT_CUTOFF
+    dynamic_oldest, dynamic_newest = get_cutoff_from_input(ALL_COMMITS_PATH, pred_map)
 
-    commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, cutoff)
+    lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
+    upper_cutoff = dynamic_newest
+
+    commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff)
     if not commits:
         print("No commits found after cutoff; exiting.")
         return
