@@ -465,7 +465,7 @@ def load_and_split_dataset(
 
     # Split 80% train, 10% eval, 10% test
     n_total = len(dataset_for_split)
-    n_train = int(n_total * 0.8)
+    n_train = int(n_total * 0.65)
     n_eval  = int(n_total * 0.1)
 
     train_dataset = dataset_for_split.select(range(0, n_train))

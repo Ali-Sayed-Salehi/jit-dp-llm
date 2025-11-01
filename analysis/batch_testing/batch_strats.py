@@ -1,6 +1,6 @@
 # batch_strats.py
 from datetime import timedelta
-
+import math
 
 def build_results(total_tests_run, culprit_times, feedback_times):
     if feedback_times:
@@ -75,3 +75,228 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size):
         )
 
     return build_results(total_tests_run, culprit_times, feedback_times)
+
+
+def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold):
+    """
+    Risk-Adaptive Stream Batching (RASB-T)
+    - stream through commits in time order
+    - keep adding commits to the batch
+    - compute failure prob = 1 - Π(1 - p_i)
+    - once failure prob >= threshold -> test the batch
+    - start a new batch
+    """
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    current_batch = []
+    # product of (1 - p_i) over batch; start at 1
+    prod_clean = 1.0
+    current_end_time = None
+
+    for c in commits:
+        p = c["risk"]  # this is p(positive) we already computed in simulation
+        current_batch.append(c)
+        current_end_time = c["ts"]
+
+        # update product of clean probs
+        prod_clean *= (1.0 - p)
+        fail_prob = 1.0 - prod_clean
+
+        if fail_prob >= threshold:
+            # test this batch now
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times
+            )
+            # reset for next batch
+            current_batch = []
+            prod_clean = 1.0
+            current_end_time = None
+
+    # leftover batch (below threshold) must still be tested
+    if current_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times
+        )
+
+    return build_results(total_tests_run, culprit_times, feedback_times)
+
+
+def simulate_hrab_t_n_with_bisect(commits, bisect_fn, params):
+    """
+    Hybrid Risk-Aware Batching (HRAB-T-N)
+    - if commit.risk >= T -> test immediately (single-commit batch)
+    - else -> put into a time-window batch of length N hours, test at window end
+    params: (T, N_hours)
+    """
+    risk_threshold, window_hours = params
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    pending_batch = []
+    window_end = None
+
+    for c in commits:
+        p = c["risk"]
+        ts = c["ts"]
+
+        # 1) high-risk: test right away
+        if p >= risk_threshold:
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                [c], ts, total_tests_run, culprit_times, feedback_times
+            )
+            continue
+
+        # 2) low-risk: add to time-window batch
+        if not pending_batch:
+            # start a new window
+            window_end = ts + timedelta(hours=window_hours)
+            pending_batch.append(c)
+        else:
+            # check if still in the same window
+            if ts < window_end:
+                pending_batch.append(c)
+            else:
+                # flush current window
+                total_tests_run, culprit_times, feedback_times = bisect_fn(
+                    pending_batch, window_end, total_tests_run, culprit_times, feedback_times
+                )
+                # start new window with this commit
+                pending_batch = [c]
+                window_end = ts + timedelta(hours=window_hours)
+
+    # flush leftover low-risk batch
+    if pending_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            pending_batch, window_end, total_tests_run, culprit_times, feedback_times
+        )
+
+    return build_results(total_tests_run, culprit_times, feedback_times)
+
+
+def simulate_dlrtwb_t_ab_with_bisect(commits, bisect_fn, params):
+    """
+    Dual-Lane Risk-Segregated Time-Window Batching (DLRTWB-T-a-b)
+    - risk >= T  -> goes to HIGH lane (short window 'a')
+    - risk <  T  -> goes to LOW lane  (long  window 'b')
+    - each lane batches independently and is flushed on its own window
+    params: (T, a_hours, b_hours)
+    """
+    risk_threshold, high_hours, low_hours = params
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    high_batch = []
+    high_end = None
+
+    low_batch = []
+    low_end = None
+
+    for c in commits:
+        p = c["risk"]
+        ts = c["ts"]
+
+        if p >= risk_threshold:
+            # HIGH-RISK LANE
+            if not high_batch:
+                high_end = ts + timedelta(hours=high_hours)
+                high_batch.append(c)
+            else:
+                if ts < high_end:
+                    high_batch.append(c)
+                else:
+                    # flush old high lane
+                    total_tests_run, culprit_times, feedback_times = bisect_fn(
+                        high_batch, high_end, total_tests_run, culprit_times, feedback_times
+                    )
+                    # start new
+                    high_batch = [c]
+                    high_end = ts + timedelta(hours=high_hours)
+        else:
+            # LOW-RISK LANE
+            if not low_batch:
+                low_end = ts + timedelta(hours=low_hours)
+                low_batch.append(c)
+            else:
+                if ts < low_end:
+                    low_batch.append(c)
+                else:
+                    # flush old low lane
+                    total_tests_run, culprit_times, feedback_times = bisect_fn(
+                        low_batch, low_end, total_tests_run, culprit_times, feedback_times
+                    )
+                    # start new
+                    low_batch = [c]
+                    low_end = ts + timedelta(hours=low_hours)
+
+    # flush both lanes at the end
+    if high_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            high_batch, high_end, total_tests_run, culprit_times, feedback_times
+        )
+    if low_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            low_batch, low_end, total_tests_run, culprit_times, feedback_times
+        )
+
+    return build_results(total_tests_run, culprit_times, feedback_times)
+
+
+
+def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params):
+    """
+    RAPB-T-a (bounded):
+    aged_p = 1 - (1 - base_risk) * exp(-a * waited_hours)
+    """
+    threshold_T, aging_rate = params
+
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    current_batch = []
+    entry_times = []
+    current_end_time = None
+
+    for c in commits:
+        now_ts = c["ts"]
+
+        current_batch.append(c)
+        entry_times.append(now_ts)
+        current_end_time = now_ts
+
+        prod_clean = 1.0
+        for commit, entered_at in zip(current_batch, entry_times):
+            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
+            base_risk = commit["risk"]
+
+            # bounded aging
+            decay = math.exp(-aging_rate * wait_hours)
+            aged_p = 1.0 - (1.0 - base_risk) * decay
+
+            prod_clean *= (1.0 - aged_p)
+
+        fail_prob = 1.0 - prod_clean
+
+        if fail_prob >= threshold_T:
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times
+            )
+            current_batch = []
+            entry_times = []
+            current_end_time = None
+
+    if current_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times
+        )
+
+    return {
+        "total_tests_run": total_tests_run,
+        "mean_feedback_time_min": round(sum(feedback_times.values()) / len(feedback_times), 2) if feedback_times else 0.0,
+        "mean_time_to_culprit_min": round(sum(culprit_times) / len(culprit_times), 2) if culprit_times else 0.0,
+        "max_time_to_culprit_min": round(max(culprit_times), 2) if culprit_times else 0.0,
+    }

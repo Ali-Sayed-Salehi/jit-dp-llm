@@ -4,6 +4,23 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 
+from batch_strats import (
+    simulate_twb_with_bisect,
+    simulate_fsb_with_bisect,
+    simulate_rasb_t_with_bisect,
+    simulate_hrab_t_n_with_bisect,
+    simulate_dlrtwb_t_ab_with_bisect,
+    simulate_rapb_t_a_with_bisect,
+)
+from bisection_strats import (
+    risk_ordered_bisect,
+    unordered_bisect,
+    time_ordered_bisect,
+    risk_weighted_adaptive_bisect,
+    top_k_risk_first_bisect,  # if you're keeping TKRB
+    TEST_DURATION_MIN,
+)
+
 # ====== CONFIG (edit here) ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -13,20 +30,38 @@ OUTPUT_PATH = os.path.join(REPO_ROOT, "analysis", "batch_testing", "simulated_re
 
 BATCH_HOURS = 4
 FSB_SIZE = 20
-CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
+RASB_THRESHOLD = 0.5
+HRAB_RISK_THRESHOLD = 0.8
+HRAB_WINDOW_HOURS = 4
+DLR_RISK_THRESHOLD = 0.6     # T
+DLR_HIGH_HOURS = 1           # a (fast lane)
+DLR_LOW_HOURS = 4            # b (slow lane)
+RAPB_THRESHOLD = 0.35      # when aged cumulative prob hits this, test
+RAPB_AGING_PER_HOUR = 0.05 # risk grows by 0.05 per hour waited
+
+DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.5
 RANDOM_SEED = 42
+
+BATCHING_STRATEGIES = [
+    ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
+    ("FSB-N", simulate_fsb_with_bisect, FSB_SIZE),
+    ("RASB-T", simulate_rasb_t_with_bisect, RASB_THRESHOLD),
+    ("HRAB-T-N", simulate_hrab_t_n_with_bisect, (HRAB_RISK_THRESHOLD, HRAB_WINDOW_HOURS)),
+    ("DLRTWB-T-a-b", simulate_dlrtwb_t_ab_with_bisect, (DLR_RISK_THRESHOLD, DLR_HIGH_HOURS, DLR_LOW_HOURS)),
+    ("RAPB-T-a", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),  # <--- new
+]
+
+BISECTION_STRATEGIES = [
+    ("ROB", risk_ordered_bisect),
+    ("UB", unordered_bisect),
+    ("TOB", time_ordered_bisect),
+    ("RWAB", risk_weighted_adaptive_bisect),
+    ("TKRB-K", top_k_risk_first_bisect),
+]
 # =================================
 
 random.seed(RANDOM_SEED)
-
-from batch_strats import simulate_twb_with_bisect, simulate_fsb_with_bisect
-from bisection_strats import (
-    risk_ordered_bisect,
-    unordered_bisect,
-    time_ordered_bisect,
-    TEST_DURATION_MIN,
-)
 
 
 def load_predictions(path):
@@ -68,7 +103,30 @@ def parse_hg_date(date_field):
     return datetime.now(timezone.utc)
 
 
-def read_commits_from_all(all_commits_path, pred_map):
+def get_cutoff_from_input(all_commits_path, pred_map):
+    """Find the oldest commit (by ts) that is present in INPUT_JSON."""
+    oldest = None
+    if not pred_map:
+        return None
+    with open(all_commits_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            node = obj.get("node")
+            if node not in pred_map:
+                continue
+            date_field = obj.get("date")
+            if date_field is None:
+                continue
+            ts = parse_hg_date(date_field)
+            if oldest is None or ts < oldest:
+                oldest = ts
+    return oldest
+
+
+def read_commits_from_all(all_commits_path, pred_map, cutoff):
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -82,7 +140,7 @@ def read_commits_from_all(all_commits_path, pred_map):
                 continue
 
             ts = parse_hg_date(date_field)
-            if ts <= CUTOFF:
+            if ts <= cutoff:
                 continue
 
             if node in pred_map:
@@ -140,21 +198,12 @@ def run_exhaustive_testing(commits):
     }
 
 
-BATCHING_STRATEGIES = [
-    ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
-    ("FSB-N", simulate_fsb_with_bisect, FSB_SIZE),
-]
-
-BISECTION_STRATEGIES = [
-    ("ROB", risk_ordered_bisect),
-    ("UB", unordered_bisect),
-    ("TOB", time_ordered_bisect),
-]
-
-
 def main():
     pred_map = load_predictions(INPUT_JSON)
-    commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map)
+    dynamic_cutoff = get_cutoff_from_input(ALL_COMMITS_PATH, pred_map)
+    cutoff = dynamic_cutoff or DEFAULT_CUTOFF
+
+    commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, cutoff)
     if not commits:
         print("No commits found after cutoff; exiting.")
         return

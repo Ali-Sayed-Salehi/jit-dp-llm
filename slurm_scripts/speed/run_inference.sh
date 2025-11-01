@@ -1,6 +1,6 @@
 #!/encs/bin/tcsh
 
-#SBATCH --job-name=inference
+#SBATCH --job-name=inference-mbert-perf
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --partition=ps,pg,pt
 #SBATCH --gpus=1
@@ -18,7 +18,7 @@ echo "running the inference script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/run_inference.py \
   --base_model_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/answerdotai/ModernBERT-large \
-  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-10-28_21-21-31/output/checkpoint-110 \
+  --model_path /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2025-10-31_18-12-41/output/checkpoint-30 \
   --dataset_path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf/perf_llm_struc.jsonl \
   --mixed_precision bf16 \
   # --truncation_len 22000 \
