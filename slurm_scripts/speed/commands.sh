@@ -22,10 +22,10 @@ source /speed-scratch/a_s87063/repos/jit-dp-llm/venv/bin/activate.csh
 
 echo "Running script ..."
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/eval_thresholds.py \
---json /speed-scratch/a_s87063/repos/jit-dp-llm/llama/inference/eval_2025-10-31_22-57-47/final_test_results_seq_cls.json \
---out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/eval_thr_results_perf_mbert.json \
---threshold 0.7 \
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/eval_thresholds.py \
+# --json /speed-scratch/a_s87063/repos/jit-dp-llm/llama/inference/eval_2025-10-31_22-57-47/final_test_results_seq_cls.json \
+# --out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/eval_thr_results_perf_mbert.json \
+# --threshold 0.7 \
 # --recall-target 0.84 \
 # -p 0.10 0.20 \
 
@@ -41,7 +41,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/eval_thresholds.py \
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
 

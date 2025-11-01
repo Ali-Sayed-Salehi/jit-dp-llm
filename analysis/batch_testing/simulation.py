@@ -33,14 +33,14 @@ FSB_SIZE = 20
 RASB_THRESHOLD = 0.5
 HRAB_RISK_THRESHOLD = 0.8
 HRAB_WINDOW_HOURS = 4
-DLR_RISK_THRESHOLD = 0.6     # T
-DLR_HIGH_HOURS = 1           # a (fast lane)
-DLR_LOW_HOURS = 4            # b (slow lane)
-RAPB_THRESHOLD = 0.35      # when aged cumulative prob hits this, test
-RAPB_AGING_PER_HOUR = 0.05 # risk grows by 0.05 per hour waited
+DLR_RISK_THRESHOLD = 0.6
+DLR_HIGH_HOURS = 1
+DLR_LOW_HOURS = 4
+RAPB_THRESHOLD = 0.35
+RAPB_AGING_PER_HOUR = 0.05
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
-PRED_THRESHOLD = 0.5
+PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
 BATCHING_STRATEGIES = [
@@ -49,7 +49,7 @@ BATCHING_STRATEGIES = [
     ("RASB-T", simulate_rasb_t_with_bisect, RASB_THRESHOLD),
     ("HRAB-T-N", simulate_hrab_t_n_with_bisect, (HRAB_RISK_THRESHOLD, HRAB_WINDOW_HOURS)),
     ("DLRTWB-T-a-b", simulate_dlrtwb_t_ab_with_bisect, (DLR_RISK_THRESHOLD, DLR_HIGH_HOURS, DLR_LOW_HOURS)),
-    ("RAPB-T-a", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),  # <--- new
+    ("RAPB-T-a", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
 ]
 
 BISECTION_STRATEGIES = [
@@ -198,6 +198,7 @@ def run_exhaustive_testing(commits):
     }
 
 
+
 def main():
     pred_map = load_predictions(INPUT_JSON)
     dynamic_cutoff = get_cutoff_from_input(ALL_COMMITS_PATH, pred_map)
@@ -210,34 +211,198 @@ def main():
 
     et_results = run_exhaustive_testing(commits)
 
+    # Baseline (TWB-N + UB, BATCH_HOURS=4)
+    baseline = simulate_twb_with_bisect(commits, unordered_bisect, BATCH_HOURS)
+    baseline_fb = baseline["mean_feedback_time_min"]
+    baseline_mean_ttc = baseline["mean_time_to_culprit_min"]
+    baseline_max_ttc = baseline["max_time_to_culprit_min"]
+    baseline_tests = baseline["total_tests_run"]
+
+    def pct_diff(val, base):
+        if base and base > 0:
+            return round((val - base) / base * 100.0, 2)
+        return 0.0
+
     ci_results = {}
     for b_name, b_fn, b_param in BATCHING_STRATEGIES:
-        for bis_name, bis_fn in BISECTION_STRATEGIES:
-            combo_name = f"{b_name} + {bis_name}"
-            res = b_fn(commits, bis_fn, b_param)
-            ci_results[combo_name] = res
+        # Expanded parameter sweeps (wider than before)
+        if b_name == "TWB-N":
+            candidates = [{"BATCH_HOURS": v} for v in [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 18, 24]]
+        elif b_name == "FSB-N":
+            candidates = [
+                {"FSB_SIZE": v}
+                for v in [5, 8, 10, 12, 15, 20, 25, 30, 35, 40, 50, 60, 75, 100]
+            ]
+        elif b_name == "RASB-T":
+            candidates = [
+                {"RASB_THRESHOLD": v}
+                for v in [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9]
+            ]
+        elif b_name == "HRAB-T-N":
+            candidates = [
+                {"HRAB_RISK_THRESHOLD": t, "HRAB_WINDOW_HOURS": n}
+                for t in [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+                for n in [1, 2, 3, 4, 6, 8, 10, 12]
+            ]
+        elif b_name == "DLRTWB-T-a-b":
+            candidates = [
+                {"DLR_RISK_THRESHOLD": t, "DLR_HIGH_HOURS": a, "DLR_LOW_HOURS": b}
+                for t in [0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+                for a in [0.25, 0.5, 1, 1.5, 2, 3]
+                for b in [2, 3, 4, 6, 8, 10, 12]
+            ]
+        elif b_name == "RAPB-T-a":
+            candidates = [
+                {"RAPB_THRESHOLD": t, "RAPB_AGING_PER_HOUR": a}
+                for t in [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
+                for a in [0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.12, 0.15]
+            ]
+        else:
+            candidates = [b_param]
 
-    best_tests = min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])
-    best_max_ttc = min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_min"])
-    best_mean_fb = min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_min"])
+        for bis_name, bis_fn in BISECTION_STRATEGIES:
+            # best that satisfies the (new) condition: only max_ttc <= baseline_max_ttc
+            best_res = None
+            best_params = None
+            best_tests = float("inf")
+
+            # fallback: best by lowest max_ttc even if it violates baseline
+            fb_res = None
+            fb_params = None
+            fb_best_max_ttc = float("inf")
+
+            for param_dict in candidates:
+                # unpack parameters properly
+                if b_name == "HRAB-T-N":
+                    param = (
+                        param_dict["HRAB_RISK_THRESHOLD"],
+                        param_dict["HRAB_WINDOW_HOURS"],
+                    )
+                elif b_name == "DLRTWB-T-a-b":
+                    param = (
+                        param_dict["DLR_RISK_THRESHOLD"],
+                        param_dict["DLR_HIGH_HOURS"],
+                        param_dict["DLR_LOW_HOURS"],
+                    )
+                elif b_name == "RAPB-T-a":
+                    param = (
+                        param_dict["RAPB_THRESHOLD"],
+                        param_dict["RAPB_AGING_PER_HOUR"],
+                    )
+                else:
+                    param = list(param_dict.values())[0]
+
+                res = b_fn(commits, bis_fn, param)
+
+                # always track fallback (lowest max_ttc overall)
+                if res["max_time_to_culprit_min"] < fb_best_max_ttc:
+                    fb_best_max_ttc = res["max_time_to_culprit_min"]
+                    fb_res = res
+                    fb_params = param_dict
+
+                # only max_ttc must be <= baseline
+                if res["max_time_to_culprit_min"] <= baseline_max_ttc:
+                    if res["total_tests_run"] < best_tests:
+                        best_res = res
+                        best_params = param_dict
+                        best_tests = res["total_tests_run"]
+
+            combo_name = f"{b_name} + {bis_name}"
+
+            if best_res is not None:
+                # compute % saved vs baseline
+                if baseline_tests > 0:
+                    saved_pct = round(
+                        (baseline_tests - best_res["total_tests_run"]) / baseline_tests * 100.0,
+                        2,
+                    )
+                else:
+                    saved_pct = 0.0
+
+                best_res["best_params"] = best_params
+                best_res["tests_saved_pct_vs_baseline"] = saved_pct
+                best_res["violates_baseline"] = False
+
+                # add metric comparisons vs baseline
+                best_res["mean_feedback_time_pct_vs_baseline"] = pct_diff(
+                    best_res["mean_feedback_time_min"], baseline_fb
+                )
+                best_res["mean_time_to_culprit_pct_vs_baseline"] = pct_diff(
+                    best_res["mean_time_to_culprit_min"], baseline_mean_ttc
+                )
+                best_res["max_time_to_culprit_pct_vs_baseline"] = pct_diff(
+                    best_res["max_time_to_culprit_min"], baseline_max_ttc
+                )
+
+                ci_results[combo_name] = best_res
+
+                print(
+                    f"✅ Best for {combo_name}: params={best_params}, "
+                    f"tests={best_res['total_tests_run']}, saved={saved_pct}%, "
+                    f"violates_baseline=False"
+                )
+            else:
+                # no feasible config per new condition -> keep fallback
+                if fb_res is not None:
+                    if baseline_tests > 0:
+                        saved_pct = round(
+                            (baseline_tests - fb_res["total_tests_run"]) / baseline_tests * 100.0,
+                            2,
+                        )
+                    else:
+                        saved_pct = 0.0
+
+                    fb_res["best_params"] = fb_params
+                    fb_res["tests_saved_pct_vs_baseline"] = saved_pct
+                    fb_res["violates_baseline"] = True
+
+                    # still compare vs baseline even if it violates
+                    fb_res["mean_feedback_time_pct_vs_baseline"] = pct_diff(
+                        fb_res["mean_feedback_time_min"], baseline_fb
+                    )
+                    fb_res["mean_time_to_culprit_pct_vs_baseline"] = pct_diff(
+                        fb_res["mean_time_to_culprit_min"], baseline_mean_ttc
+                    )
+                    fb_res["max_time_to_culprit_pct_vs_baseline"] = pct_diff(
+                        fb_res["max_time_to_culprit_min"], baseline_max_ttc
+                    )
+
+                    ci_results[combo_name] = fb_res
+
+                    print(
+                        f"⚠️  No max-TTC-satisfying config for {combo_name}. "
+                        f"Using fallback with lowest max_ttc. "
+                        f"params={fb_params}, tests={fb_res['total_tests_run']}, "
+                        f"saved={saved_pct}%, violates_baseline=True"
+                    )
+
+    # summarize best overall results (on what we actually stored)
+    if ci_results:
+        best_tests_combo = min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])
+        best_max_ttc_combo = min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_min"])
+        best_mean_fb_combo = min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_min"])
+    else:
+        best_tests_combo = ("-", {})
+        best_max_ttc_combo = ("-", {})
+        best_mean_fb_combo = ("-", {})
 
     out = {
         "Exhaustive Testing (ET)": et_results,
+        "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline,
     }
-    for name, res in ci_results.items():
-        out[name] = res
-
-    out["best_by_total_tests"] = best_tests[0]
-    out["best_by_max_ttc"] = best_max_ttc[0]
-    out["best_by_mean_feedback_time"] = best_mean_fb[0]
+    out.update(ci_results)
+    out["best_by_total_tests"] = best_tests_combo[0]
+    out["best_by_max_ttc"] = best_max_ttc_combo[0]
+    out["best_by_mean_feedback_time"] = best_mean_fb_combo[0]
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
-    print("saved to", OUTPUT_PATH)
-    print(f"Best (fewest tests): {best_tests[0]}")
-    print(f"Best (lowest max TTC): {best_max_ttc[0]}")
-    print(f"Best (lowest mean feedback): {best_mean_fb[0]}")
+
+    print("Saved to", OUTPUT_PATH)
+    print(f"Best (fewest tests): {best_tests_combo[0]}")
+    print(f"Best (lowest max TTC): {best_max_ttc_combo[0]}")
+    print(f"Best (lowest mean feedback): {best_mean_fb_combo[0]}")
 
 
 if __name__ == "__main__":

@@ -5,187 +5,233 @@
     "mean_time_to_culprit_min": 10.0,
     "max_time_to_culprit_min": 10.0
   },
-  "TWB-N + ROB": {
-    "total_tests_run": 20585,
-    "mean_feedback_time_min": 136.62,
-    "mean_time_to_culprit_min": 182.83,
-    "max_time_to_culprit_min": 310.0
-  },
-  "TWB-N + UB": {
+  "Baseline (TWB-N + UB, BATCH_HOURS=4)": {
     "total_tests_run": 20667,
     "mean_feedback_time_min": 136.62,
     "mean_time_to_culprit_min": 186.41,
     "max_time_to_culprit_min": 310.0
   },
-  "TWB-N + TOB": {
-    "total_tests_run": 20669,
+  "TWB-N + ROB": {
+    "total_tests_run": 20585,
     "mean_feedback_time_min": 136.62,
-    "mean_time_to_culprit_min": 186.92,
-    "max_time_to_culprit_min": 300.0
+    "mean_time_to_culprit_min": 182.83,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "BATCH_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.4
+  },
+  "TWB-N + UB": {
+    "total_tests_run": 20663,
+    "mean_feedback_time_min": 136.62,
+    "mean_time_to_culprit_min": 185.9,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "BATCH_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.02
+  },
+  "TWB-N + TOB": {
+    "total_tests_run": 26226,
+    "mean_feedback_time_min": 106.46,
+    "mean_time_to_culprit_min": 156.63,
+    "max_time_to_culprit_min": 240.0,
+    "best_params": {
+      "BATCH_HOURS": 3
+    },
+    "tests_saved_pct_vs_baseline": -26.9
   },
   "TWB-N + RWAB": {
     "total_tests_run": 20225,
     "mean_feedback_time_min": 136.61,
     "mean_time_to_culprit_min": 163.24,
-    "max_time_to_culprit_min": 290.0
+    "max_time_to_culprit_min": 290.0,
+    "best_params": {
+      "BATCH_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 2.14
   },
   "TWB-N + TKRB-K": {
-    "total_tests_run": 20165,
-    "mean_feedback_time_min": 136.73,
-    "mean_time_to_culprit_min": 163.55,
-    "max_time_to_culprit_min": 326.78
-  },
-  "FSB-N + ROB": {
-    "total_tests_run": 28234,
-    "mean_feedback_time_min": 102.46,
-    "mean_time_to_culprit_min": 208.29,
-    "max_time_to_culprit_min": 2213.72
-  },
-  "FSB-N + UB": {
-    "total_tests_run": 28310,
-    "mean_feedback_time_min": 102.47,
-    "mean_time_to_culprit_min": 211.46,
-    "max_time_to_culprit_min": 2213.72
-  },
-  "FSB-N + TOB": {
-    "total_tests_run": 28306,
-    "mean_feedback_time_min": 102.46,
-    "mean_time_to_culprit_min": 211.97,
-    "max_time_to_culprit_min": 2223.72
-  },
-  "FSB-N + RWAB": {
-    "total_tests_run": 27890,
-    "mean_feedback_time_min": 102.45,
-    "mean_time_to_culprit_min": 190.13,
-    "max_time_to_culprit_min": 2183.72
-  },
-  "FSB-N + TKRB-K": {
-    "total_tests_run": 27838,
-    "mean_feedback_time_min": 102.5,
-    "mean_time_to_culprit_min": 188.5,
-    "max_time_to_culprit_min": 2183.72
-  },
-  "RASB-T + ROB": {
-    "total_tests_run": 6429,
-    "mean_feedback_time_min": 2259726.15,
-    "mean_time_to_culprit_min": 35.98,
-    "max_time_to_culprit_min": 124.85
-  },
-  "RASB-T + UB": {
-    "total_tests_run": 6487,
-    "mean_feedback_time_min": 2259726.15,
-    "mean_time_to_culprit_min": 38.63,
-    "max_time_to_culprit_min": 124.85
-  },
-  "RASB-T + TOB": {
-    "total_tests_run": 6521,
-    "mean_feedback_time_min": 2259726.15,
-    "mean_time_to_culprit_min": 40.78,
-    "max_time_to_culprit_min": 134.13
-  },
-  "RASB-T + RWAB": {
-    "total_tests_run": 6205,
-    "mean_feedback_time_min": 2259726.14,
-    "mean_time_to_culprit_min": 24.25,
-    "max_time_to_culprit_min": 94.85
-  },
-  "RASB-T + TKRB-K": {
-    "total_tests_run": 6259,
-    "mean_feedback_time_min": 2259726.16,
-    "mean_time_to_culprit_min": 24.14,
-    "max_time_to_culprit_min": 94.85
+    "total_tests_run": 25773,
+    "mean_feedback_time_min": 106.54,
+    "mean_time_to_culprit_min": 135.4,
+    "max_time_to_culprit_min": 290.0,
+    "best_params": {
+      "BATCH_HOURS": 3
+    },
+    "tests_saved_pct_vs_baseline": -24.71
   },
   "HRAB-T-N + ROB": {
     "total_tests_run": 20572,
-    "mean_feedback_time_min": 136.61,
-    "mean_time_to_culprit_min": 176.37,
-    "max_time_to_culprit_min": 310.0
+    "mean_feedback_time_min": 136.59,
+    "mean_time_to_culprit_min": 154.12,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "HRAB_RISK_THRESHOLD": 0.7,
+      "HRAB_WINDOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.46
   },
   "HRAB-T-N + UB": {
-    "total_tests_run": 20662,
-    "mean_feedback_time_min": 136.62,
-    "mean_time_to_culprit_min": 179.84,
-    "max_time_to_culprit_min": 310.0
+    "total_tests_run": 20638,
+    "mean_feedback_time_min": 136.59,
+    "mean_time_to_culprit_min": 156.77,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "HRAB_RISK_THRESHOLD": 0.7,
+      "HRAB_WINDOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.14
   },
   "HRAB-T-N + TOB": {
-    "total_tests_run": 20650,
-    "mean_feedback_time_min": 136.61,
-    "mean_time_to_culprit_min": 180.14,
-    "max_time_to_culprit_min": 300.0
+    "total_tests_run": 20640,
+    "mean_feedback_time_min": 136.59,
+    "mean_time_to_culprit_min": 157.18,
+    "max_time_to_culprit_min": 300.0,
+    "best_params": {
+      "HRAB_RISK_THRESHOLD": 0.7,
+      "HRAB_WINDOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.13
   },
   "HRAB-T-N + RWAB": {
     "total_tests_run": 20222,
     "mean_feedback_time_min": 136.6,
     "mean_time_to_culprit_min": 157.29,
-    "max_time_to_culprit_min": 290.0
+    "max_time_to_culprit_min": 290.0,
+    "best_params": {
+      "HRAB_RISK_THRESHOLD": 0.8,
+      "HRAB_WINDOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 2.15
   },
   "HRAB-T-N + TKRB-K": {
-    "total_tests_run": 20168,
-    "mean_feedback_time_min": 136.73,
-    "mean_time_to_culprit_min": 158.1,
-    "max_time_to_culprit_min": 326.78
+    "total_tests_run": 20680,
+    "mean_feedback_time_min": 136.55,
+    "mean_time_to_culprit_min": 105.36,
+    "max_time_to_culprit_min": 297.12,
+    "best_params": {
+      "HRAB_RISK_THRESHOLD": 0.6,
+      "HRAB_WINDOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": -0.06
   },
   "DLRTWB-T-a-b + ROB": {
-    "total_tests_run": 20880,
-    "mean_feedback_time_min": 136.55,
-    "mean_time_to_culprit_min": 139.18,
-    "max_time_to_culprit_min": 296.78
+    "total_tests_run": 20570,
+    "mean_feedback_time_min": 136.59,
+    "mean_time_to_culprit_min": 159.32,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "DLR_RISK_THRESHOLD": 0.7,
+      "DLR_HIGH_HOURS": 0.5,
+      "DLR_LOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.47
   },
   "DLRTWB-T-a-b + UB": {
-    "total_tests_run": 20936,
-    "mean_feedback_time_min": 136.56,
-    "mean_time_to_culprit_min": 141.83,
-    "max_time_to_culprit_min": 300.0
+    "total_tests_run": 20626,
+    "mean_feedback_time_min": 136.62,
+    "mean_time_to_culprit_min": 176.63,
+    "max_time_to_culprit_min": 310.0,
+    "best_params": {
+      "DLR_RISK_THRESHOLD": 0.7,
+      "DLR_HIGH_HOURS": 2,
+      "DLR_LOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.2
   },
   "DLRTWB-T-a-b + TOB": {
-    "total_tests_run": 20934,
-    "mean_feedback_time_min": 136.55,
-    "mean_time_to_culprit_min": 141.93,
-    "max_time_to_culprit_min": 296.78
+    "total_tests_run": 20638,
+    "mean_feedback_time_min": 136.6,
+    "mean_time_to_culprit_min": 162.38,
+    "max_time_to_culprit_min": 300.0,
+    "best_params": {
+      "DLR_RISK_THRESHOLD": 0.7,
+      "DLR_HIGH_HOURS": 0.5,
+      "DLR_LOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.14
   },
   "DLRTWB-T-a-b + RWAB": {
-    "total_tests_run": 20642,
-    "mean_feedback_time_min": 136.54,
-    "mean_time_to_culprit_min": 126.73,
-    "max_time_to_culprit_min": 273.95
+    "total_tests_run": 20222,
+    "mean_feedback_time_min": 136.6,
+    "mean_time_to_culprit_min": 158.51,
+    "max_time_to_culprit_min": 290.0,
+    "best_params": {
+      "DLR_RISK_THRESHOLD": 0.8,
+      "DLR_HIGH_HOURS": 0.5,
+      "DLR_LOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 2.15
   },
   "DLRTWB-T-a-b + TKRB-K": {
     "total_tests_run": 20586,
     "mean_feedback_time_min": 136.62,
     "mean_time_to_culprit_min": 126.52,
-    "max_time_to_culprit_min": 297.12
+    "max_time_to_culprit_min": 297.12,
+    "best_params": {
+      "DLR_RISK_THRESHOLD": 0.6,
+      "DLR_HIGH_HOURS": 1,
+      "DLR_LOW_HOURS": 4
+    },
+    "tests_saved_pct_vs_baseline": 0.39
   },
   "RAPB-T-a + ROB": {
-    "total_tests_run": 46716,
-    "mean_feedback_time_min": 58.63,
-    "mean_time_to_culprit_min": 25.23,
-    "max_time_to_culprit_min": 50.0
+    "total_tests_run": 29069,
+    "mean_feedback_time_min": 95.32,
+    "mean_time_to_culprit_min": 29.31,
+    "max_time_to_culprit_min": 86.67,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.45,
+      "RAPB_AGING_PER_HOUR": 0.02
+    },
+    "tests_saved_pct_vs_baseline": -40.65
   },
   "RAPB-T-a + UB": {
-    "total_tests_run": 46768,
-    "mean_feedback_time_min": 58.63,
-    "mean_time_to_culprit_min": 27.88,
-    "max_time_to_culprit_min": 60.0
+    "total_tests_run": 29131,
+    "mean_feedback_time_min": 95.32,
+    "mean_time_to_culprit_min": 32.37,
+    "max_time_to_culprit_min": 86.67,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.45,
+      "RAPB_AGING_PER_HOUR": 0.02
+    },
+    "tests_saved_pct_vs_baseline": -40.95
   },
   "RAPB-T-a + TOB": {
-    "total_tests_run": 46802,
-    "mean_feedback_time_min": 58.63,
-    "mean_time_to_culprit_min": 29.61,
-    "max_time_to_culprit_min": 60.0
+    "total_tests_run": 29163,
+    "mean_feedback_time_min": 95.32,
+    "mean_time_to_culprit_min": 34.11,
+    "max_time_to_culprit_min": 86.67,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.45,
+      "RAPB_AGING_PER_HOUR": 0.02
+    },
+    "tests_saved_pct_vs_baseline": -41.11
   },
   "RAPB-T-a + RWAB": {
-    "total_tests_run": 46578,
-    "mean_feedback_time_min": 58.62,
-    "mean_time_to_culprit_min": 18.19,
-    "max_time_to_culprit_min": 22.18
+    "total_tests_run": 28897,
+    "mean_feedback_time_min": 95.31,
+    "mean_time_to_culprit_min": 20.33,
+    "max_time_to_culprit_min": 66.67,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.45,
+      "RAPB_AGING_PER_HOUR": 0.02
+    },
+    "tests_saved_pct_vs_baseline": -39.82
   },
   "RAPB-T-a + TKRB-K": {
-    "total_tests_run": 46641,
-    "mean_feedback_time_min": 58.63,
-    "mean_time_to_culprit_min": 18.19,
-    "max_time_to_culprit_min": 22.18
+    "total_tests_run": 28954,
+    "mean_feedback_time_min": 95.33,
+    "mean_time_to_culprit_min": 20.33,
+    "max_time_to_culprit_min": 66.67,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.45,
+      "RAPB_AGING_PER_HOUR": 0.02
+    },
+    "tests_saved_pct_vs_baseline": -40.1
   },
-  "best_by_total_tests": "RASB-T + RWAB",
+  "best_by_total_tests": "HRAB-T-N + RWAB",
   "best_by_max_ttc": "RAPB-T-a + RWAB",
   "best_by_mean_feedback_time": "RAPB-T-a + RWAB"
 }
