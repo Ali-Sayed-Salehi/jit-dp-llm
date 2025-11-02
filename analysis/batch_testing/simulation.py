@@ -3,6 +3,7 @@ import os
 import json
 import random
 from datetime import datetime, timedelta, timezone
+import argparse
 
 from batch_strats import (
     simulate_twb_with_bisect,
@@ -25,8 +26,6 @@ from bisection_strats import (
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
-INPUT_JSON = os.path.join(REPO_ROOT, "analysis", "batch_testing", "predictor_sim_results.json")
-OUTPUT_PATH = os.path.join(REPO_ROOT, "analysis", "batch_testing", "simulated_results.json")
 
 BATCH_HOURS = 4
 FSB_SIZE = 20
@@ -60,7 +59,7 @@ BISECTION_STRATEGIES = [
     ("TKRB-K", top_k_risk_first_bisect),
 ]
 
-# ---- PREDICTION THRESHOLD SWEEP ----
+# ---- PREDICTION THRESHOLD SWEEP (for eval) ----
 PRED_THRESHOLD_CANDIDATES = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99]
 
 # ---- PARAM SWEEPS FOR BATCHING STRATEGIES ----
@@ -99,6 +98,40 @@ PARAM_SWEEPS = {
 
 random.seed(RANDOM_SEED)
 
+def get_args():
+    parser = argparse.ArgumentParser(
+        description="Batch-testing simulation"
+    )
+    parser.add_argument(
+        "--input-json-eval",
+        default=os.path.join(
+            REPO_ROOT, "analysis", "batch_testing", "final_test_results_perf_mbert_eval.json"
+        ),
+        help="Path to EVAL predictions json"
+    )
+    parser.add_argument(
+        "--input-json-final",
+        default=os.path.join(
+            REPO_ROOT, "analysis", "batch_testing", "final_test_results_perf_mbert_final_test.json"
+        ),
+        help="Path to FINAL predictions json"
+    )
+    parser.add_argument(
+        "--output-eval",
+        default=os.path.join(
+            REPO_ROOT, "analysis", "batch_testing", "batch_sim_results_eval.json"
+        ),
+        help="Where to write EVAL sim results"
+    )
+    parser.add_argument(
+        "--output-final",
+        default=os.path.join(
+            REPO_ROOT, "analysis", "batch_testing", "batch_sim_results_final_test.json"
+        ),
+        help="Where to write FINAL sim results"
+    )
+    return parser.parse_args()
+
 
 def load_predictions(path, pred_threshold):
     if not os.path.exists(path):
@@ -128,7 +161,6 @@ def load_predictions(path, pred_threshold):
     return preds
 
 
-
 def parse_hg_date(date_field):
     if isinstance(date_field, list) and len(date_field) == 2:
         unix_ts, offset_sec = date_field
@@ -141,7 +173,7 @@ def parse_hg_date(date_field):
 
 
 def get_cutoff_from_input(all_commits_path, pred_map):
-    """Find the oldest and newest commit (by ts) that is present in INPUT_JSON."""
+    """Find the oldest and newest commit (by ts) that is present in the given INPUT_JSON."""
     oldest = None
     newest = None
     if not pred_map:
@@ -166,7 +198,6 @@ def get_cutoff_from_input(all_commits_path, pred_map):
     return oldest, newest
 
 
-
 def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
@@ -182,11 +213,8 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
 
             ts = parse_hg_date(date_field)
 
-            # lower bound: must be AFTER this
             if ts <= lower_cutoff:
                 continue
-
-            # upper bound: must be BEFORE / EQUAL this
             if upper_cutoff is not None and ts > upper_cutoff:
                 continue
 
@@ -212,7 +240,6 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
     return commits
 
 
-
 def run_exhaustive_testing(commits):
     total_tests_run = 0
     culprit_times = []
@@ -227,100 +254,111 @@ def run_exhaustive_testing(commits):
             culprit_times.append(fb_min)
 
     if feedback_times:
-        mean_fb = sum(feedback_times.values()) / len(feedback_times)
+        mean_fb_hr = round((sum(feedback_times.values()) / len(feedback_times)) / 60.0, 2)
     else:
-        mean_fb = 0.0
+        mean_fb_hr = 0.0
 
     if culprit_times:
-        mean_ttc = sum(culprit_times) / len(culprit_times)
-        max_ttc = max(culprit_times)
+        mean_ttc_hr = round((sum(culprit_times) / len(culprit_times)) / 60.0, 2)
+        max_ttc_hr = round(max(culprit_times) / 60.0, 2)
     else:
-        mean_ttc = 0.0
-        max_ttc = 0.0
+        mean_ttc_hr = 0.0
+        max_ttc_hr = 0.0
 
     return {
         "total_tests_run": total_tests_run,
-        "mean_feedback_time_min": round(mean_fb, 2),
-        "mean_time_to_culprit_min": round(mean_ttc, 2),
-        "max_time_to_culprit_min": round(max_ttc, 2),
+        "mean_feedback_time_hr": mean_fb_hr,
+        "mean_time_to_culprit_hr": mean_ttc_hr,
+        "max_time_to_culprit_hr": max_ttc_hr,
     }
 
 
-def main():
-    # 1) figure out the time window from INPUT_JSON (oldest + newest commit)
-    # we just use the first threshold candidate to identify which commits appear in INPUT_JSON
+def convert_result_minutes_to_hours(res):
+    """Mutates and returns res: converts *_min to *_hr and drops *_min."""
+    if "mean_feedback_time_min" in res:
+        res["mean_feedback_time_hr"] = round(res["mean_feedback_time_min"] / 60.0, 2)
+        del res["mean_feedback_time_min"]
+    if "mean_time_to_culprit_min" in res:
+        res["mean_time_to_culprit_hr"] = round(res["mean_time_to_culprit_min"] / 60.0, 2)
+        del res["mean_time_to_culprit_min"]
+    if "max_time_to_culprit_min" in res:
+        res["max_time_to_culprit_hr"] = round(res["max_time_to_culprit_min"] / 60.0, 2)
+        del res["max_time_to_culprit_min"]
+    return res
+
+
+def lookup_batching(name):
+    for n, fn, default_param in BATCHING_STRATEGIES:
+        if n == name:
+            return fn, default_param
+    return None, None
+
+
+def lookup_bisection(name):
+    for n, fn in BISECTION_STRATEGIES:
+        if n == name:
+            return fn
+    return None
+
+
+def run_evaluation():
+    # figure out window from EVAL input
     tmp_pred_map = load_predictions(
-        INPUT_JSON, pred_threshold=PRED_THRESHOLD_CANDIDATES[0]
+        INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD_CANDIDATES[0]
     )
     dynamic_oldest, dynamic_newest = get_cutoff_from_input(ALL_COMMITS_PATH, tmp_pred_map)
-
     lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
-    upper_cutoff = dynamic_newest  # can be None if INPUT_JSON commits weren't found
+    upper_cutoff = dynamic_newest
 
-    # 2) build commits once for baseline/exhaustive testing
+    # build commits for ET/baseline
     base_commits = read_commits_from_all(
-        ALL_COMMITS_PATH,
-        tmp_pred_map,
-        lower_cutoff,
-        upper_cutoff,
+        ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
     )
     if not base_commits:
-        print("No commits found in cutoff window; exiting.")
-        return
+        print("No commits found in EVAL window; exiting eval.")
+        return None
 
-    # Exhaustive testing baseline (doesn't depend on threshold)
     et_results = run_exhaustive_testing(base_commits)
-
-    # Baseline: TWB-N + UB, with fixed BATCH_HOURS=4
     baseline = simulate_twb_with_bisect(base_commits, unordered_bisect, BATCH_HOURS)
-    baseline_fb = baseline["mean_feedback_time_min"]
-    baseline_mean_ttc = baseline["mean_time_to_culprit_min"]
-    baseline_max_ttc = baseline["max_time_to_culprit_min"]
+    baseline = convert_result_minutes_to_hours(baseline)
+    baseline_fb = baseline["mean_feedback_time_hr"]
+    baseline_mean_ttc = baseline["mean_time_to_culprit_hr"]
+    baseline_max_ttc = baseline["max_time_to_culprit_hr"]
     baseline_tests = baseline["total_tests_run"]
 
-    def pct_diff(val, base):
+    def time_saved_pct(base, val):
         if base and base > 0:
-            return round((val - base) / base * 100.0, 2)
+            return round((base - val) / base * 100.0, 2)
         return 0.0
 
-    # we will keep: best result per (batching + bisection) across ALL PRED_THRESHOLDs
     ci_results = {}
 
-    # 3) sweep over prediction thresholds
+    # sweep over prediction thresholds (EVAL PHASE)
     for pred_thr in PRED_THRESHOLD_CANDIDATES:
-        print(f"\n🔎 Sweeping with PRED_THRESHOLD = {pred_thr}")
-        pred_map = load_predictions(INPUT_JSON, pred_threshold=pred_thr)
+        pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
         commits = read_commits_from_all(
-            ALL_COMMITS_PATH,
-            pred_map,
-            lower_cutoff,
-            upper_cutoff,
+            ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
         )
         if not commits:
-            print("  (no commits for this threshold in window, skipping)")
+            print("  (no commits for this EVAL threshold in window, skipping)")
             continue
 
-        # 4) for each batching strategy
         for b_name, b_fn, b_param in BATCHING_STRATEGIES:
-            # get pre-defined sweep for this strategy (extracted at top of file)
             candidates = PARAM_SWEEPS.get(b_name, [b_param])
 
-            # 5) for each bisection strategy
             for bis_name, bis_fn in BISECTION_STRATEGIES:
                 combo_name = f"{b_name} + {bis_name}"
 
-                # best (feasible, i.e. not violating baseline on max_ttc)
                 best_res = None
                 best_params = None
                 best_tests = float("inf")
 
-                # fallback: lowest max_ttc even if it violates baseline
                 fb_res = None
                 fb_params = None
                 fb_best_max_ttc = float("inf")
 
                 for param_dict in candidates:
-                    # unpack params according to batching strategy
+                    # unpack
                     if b_name == "HRAB-T-N":
                         param = (
                             param_dict["HRAB_RISK_THRESHOLD"],
@@ -338,27 +376,25 @@ def main():
                             param_dict["RAPB_AGING_PER_HOUR"],
                         )
                     else:
-                        # single-key dict
                         param = list(param_dict.values())[0]
 
                     res = b_fn(commits, bis_fn, param)
+                    res = convert_result_minutes_to_hours(res)
 
-                    # track fallback (the one with lowest max_ttc overall)
-                    if res["max_time_to_culprit_min"] < fb_best_max_ttc:
-                        fb_best_max_ttc = res["max_time_to_culprit_min"]
+                    # fallback
+                    if res["max_time_to_culprit_hr"] < fb_best_max_ttc:
+                        fb_best_max_ttc = res["max_time_to_culprit_hr"]
                         fb_res = res
                         fb_params = param_dict
 
-                    # feasible: must not exceed baseline max TTC
-                    if res["max_time_to_culprit_min"] <= baseline_max_ttc:
+                    # feasible (doesn't violate baseline)
+                    if res["max_time_to_culprit_hr"] <= baseline_max_ttc:
                         if res["total_tests_run"] < best_tests:
                             best_res = res
                             best_params = param_dict
                             best_tests = res["total_tests_run"]
 
-                # build final candidate for this (combo, threshold)
                 if best_res is not None:
-                    # doesn't violate baseline
                     if baseline_tests > 0:
                         saved_pct = round(
                             (baseline_tests - best_res["total_tests_run"]) / baseline_tests * 100.0,
@@ -368,23 +404,21 @@ def main():
                         saved_pct = 0.0
 
                     best_res["best_params"] = best_params
-                    best_res["tests_saved_pct_vs_baseline"] = saved_pct
+                    best_res["tests_saved_vs_baseline_pct"] = saved_pct
                     best_res["violates_baseline"] = False
                     best_res["pred_threshold_used"] = pred_thr
-                    best_res["mean_feedback_time_pct_vs_baseline"] = pct_diff(
-                        best_res["mean_feedback_time_min"], baseline_fb
+                    best_res["mean_feedback_time_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_fb, best_res["mean_feedback_time_hr"]
                     )
-                    best_res["mean_time_to_culprit_pct_vs_baseline"] = pct_diff(
-                        best_res["mean_time_to_culprit_min"], baseline_mean_ttc
+                    best_res["mean_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_mean_ttc, best_res["mean_time_to_culprit_hr"]
                     )
-                    best_res["max_time_to_culprit_pct_vs_baseline"] = pct_diff(
-                        best_res["max_time_to_culprit_min"], baseline_max_ttc
+                    best_res["max_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_max_ttc, best_res["max_time_to_culprit_hr"]
                     )
                     candidate_final = best_res
                 else:
-                    # no feasible config -> use fallback
                     if fb_res is None:
-                        # nothing to record for this combo+threshold
                         continue
 
                     if baseline_tests > 0:
@@ -396,75 +430,240 @@ def main():
                         saved_pct = 0.0
 
                     fb_res["best_params"] = fb_params
-                    fb_res["tests_saved_pct_vs_baseline"] = saved_pct
+                    fb_res["tests_saved_vs_baseline_pct"] = saved_pct
                     fb_res["violates_baseline"] = True
                     fb_res["pred_threshold_used"] = pred_thr
-                    fb_res["mean_feedback_time_pct_vs_baseline"] = pct_diff(
-                        fb_res["mean_feedback_time_min"], baseline_fb
+                    fb_res["mean_feedback_time_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_fb, fb_res["mean_feedback_time_hr"]
                     )
-                    fb_res["mean_time_to_culprit_pct_vs_baseline"] = pct_diff(
-                        fb_res["mean_time_to_culprit_min"], baseline_mean_ttc
+                    fb_res["mean_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_mean_ttc, fb_res["mean_time_to_culprit_hr"]
                     )
-                    fb_res["max_time_to_culprit_pct_vs_baseline"] = pct_diff(
-                        fb_res["max_time_to_culprit_min"], baseline_max_ttc
+                    fb_res["max_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+                        baseline_max_ttc, fb_res["max_time_to_culprit_hr"]
                     )
                     candidate_final = fb_res
 
-                # compare with what we already stored for this combo (from previous thresholds)
                 existing = ci_results.get(combo_name)
 
                 def is_better(new, old):
                     if old is None:
                         return True
-                    # prefer non-violating over violating
                     if not new["violates_baseline"] and old["violates_baseline"]:
                         return True
                     if new["violates_baseline"] and not old["violates_baseline"]:
                         return False
-                    # both same violation status -> prefer fewer tests
                     return new["total_tests_run"] < old["total_tests_run"]
 
                 if is_better(candidate_final, existing):
                     ci_results[combo_name] = candidate_final
-                    print(
-                        f"✅ {combo_name} improved with PRED_THRESHOLD={pred_thr}: "
-                        f"tests={candidate_final['total_tests_run']}, "
-                        f"violates_baseline={candidate_final['violates_baseline']}"
-                    )
 
-    # 6) summarize best overall
+    # summarize eval
     if ci_results:
-        best_tests_combo = min(
-            ci_results.items(), key=lambda kv: kv[1]["total_tests_run"]
-        )
-        best_max_ttc_combo = min(
-            ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_min"]
-        )
-        best_mean_fb_combo = min(
-            ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_min"]
-        )
+        best_tests_combo = min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])
+        best_max_ttc_combo = min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_hr"])
+        best_mean_fb_combo = min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_hr"])
     else:
         best_tests_combo = ("-", {})
         best_max_ttc_combo = ("-", {})
         best_mean_fb_combo = ("-", {})
 
-    out = {
+    out_eval = {
         "Exhaustive Testing (ET)": et_results,
         "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline,
     }
-    out.update(ci_results)
-    out["best_by_total_tests"] = best_tests_combo[0]
-    out["best_by_max_ttc"] = best_max_ttc_combo[0]
-    out["best_by_mean_feedback_time"] = best_mean_fb_combo[0]
+    out_eval.update(ci_results)
+    out_eval["best_by_total_tests"] = best_tests_combo[0]
+    out_eval["best_by_max_ttc"] = best_max_ttc_combo[0]
+    out_eval["best_by_mean_feedback_time"] = best_mean_fb_combo[0]
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
+    return {
+        "eval_output": out_eval,
+        "eval_lower_cutoff": lower_cutoff.isoformat(),
+        "eval_upper_cutoff": upper_cutoff.isoformat() if upper_cutoff else None,
+    }
 
-    print("Saved to", OUTPUT_PATH)
-    print(f"Best (fewest tests): {best_tests_combo[0]}")
-    print(f"Best (lowest max TTC): {best_max_ttc_combo[0]}")
-    print(f"Best (lowest mean feedback): {best_mean_fb_combo[0]}")
+
+def run_final_test(eval_payload):
+    """
+    Use the best params from EVAL and run on the FINAL input json (no sweep).
+    """
+    # window from FINAL input
+    tmp_pred_map_final = load_predictions(
+        INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD_CANDIDATES[0]
+    )
+    final_oldest, final_newest = get_cutoff_from_input(ALL_COMMITS_PATH, tmp_pred_map_final)
+    final_lower = final_oldest or DEFAULT_CUTOFF
+    final_upper = final_newest
+
+    # ET + baseline for final
+    base_commits_final = read_commits_from_all(
+        ALL_COMMITS_PATH, tmp_pred_map_final, final_lower, final_upper
+    )
+    if not base_commits_final:
+        raise RuntimeError("No commits found in FINAL window; exiting final.")
+
+    et_results_final = run_exhaustive_testing(base_commits_final)
+    baseline_final = simulate_twb_with_bisect(base_commits_final, unordered_bisect, BATCH_HOURS)
+    baseline_final = convert_result_minutes_to_hours(baseline_final)
+
+    # baseline metrics (for % diffs and violation check)
+    baseline_fb = baseline_final["mean_feedback_time_hr"]
+    baseline_mean_ttc = baseline_final["mean_time_to_culprit_hr"]
+    baseline_max_ttc = baseline_final["max_time_to_culprit_hr"]
+    baseline_tests = baseline_final["total_tests_run"]
+
+    def time_saved_pct(base, val):
+        if base and base > 0:
+            return round((base - val) / base * 100.0, 2)
+        return 0.0
+
+    final_results = {
+        "Exhaustive Testing (ET)": et_results_final,
+        "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline_final,
+    }
+
+    # replay best configs from EVAL on FINAL
+    eval_out = eval_payload["eval_output"]
+
+    for key, val in eval_out.items():
+        if key in (
+            "Exhaustive Testing (ET)",
+            "Baseline (TWB-N + UB, BATCH_HOURS=4)",
+            "best_by_total_tests",
+            "best_by_max_ttc",
+            "best_by_mean_feedback_time",
+        ):
+            continue
+
+        combo_name = key
+        eval_res = val
+        pred_thr = eval_res.get("pred_threshold_used", PRED_THRESHOLD)
+
+        # get batching/bisection names
+        if " + " not in combo_name:
+            raise RuntimeError(f"Invalid combo name (no ' + '): {combo_name}")
+        b_name, bis_name = combo_name.split(" + ", 1)
+        b_fn, _ = lookup_batching(b_name)
+        bis_fn = lookup_bisection(bis_name)
+        if b_fn is None or bis_fn is None:
+            raise RuntimeError(f"Unknown batching or bisection strategy in combo: {combo_name}")
+
+        # load preds for FINAL
+        pred_map_final = load_predictions(INPUT_JSON_FINAL, pred_threshold=pred_thr)
+        commits_final = read_commits_from_all(
+            ALL_COMMITS_PATH, pred_map_final, final_lower, final_upper
+        )
+        if not commits_final:
+            raise RuntimeError(
+                f"No commits found in FINAL window for combo {combo_name} and threshold {pred_thr}"
+            )
+
+        best_params = eval_res.get("best_params", None)
+        if best_params is None:
+            continue
+
+        # unpack params like in eval
+        if b_name == "HRAB-T-N":
+            param = (
+                best_params["HRAB_RISK_THRESHOLD"],
+                best_params["HRAB_WINDOW_HOURS"],
+            )
+        elif b_name == "DLRTWB-T-a-b":
+            param = (
+                best_params["DLR_RISK_THRESHOLD"],
+                best_params["DLR_HIGH_HOURS"],
+                best_params["DLR_LOW_HOURS"],
+            )
+        elif b_name == "RAPB-T-a":
+            param = (
+                best_params["RAPB_THRESHOLD"],
+                best_params["RAPB_AGING_PER_HOUR"],
+            )
+        else:
+            param = list(best_params.values())[0]
+
+        res_final = b_fn(commits_final, bis_fn, param)
+        res_final = convert_result_minutes_to_hours(res_final)
+
+        violates = res_final["max_time_to_culprit_hr"] > baseline_max_ttc
+        if baseline_tests > 0:
+            saved_pct = round(
+                (baseline_tests - res_final["total_tests_run"]) / baseline_tests * 100.0,
+                2,
+            )
+        else:
+            saved_pct = 0.0
+
+        res_final["violates_baseline"] = violates
+        res_final["tests_saved_vs_baseline_pct"] = saved_pct
+        res_final["mean_feedback_time_saved_vs_baseline_pct"] = time_saved_pct(
+            baseline_fb, res_final["mean_feedback_time_hr"]
+        )
+        res_final["mean_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+            baseline_mean_ttc, res_final["mean_time_to_culprit_hr"]
+        )
+        res_final["max_time_to_culprit_saved_vs_baseline_pct"] = time_saved_pct(
+            baseline_max_ttc, res_final["max_time_to_culprit_hr"]
+        )
+
+        res_final["best_params_from_eval"] = best_params
+        res_final["pred_threshold_used_from_eval"] = pred_thr
+
+        final_results[combo_name] = res_final
+
+    # summarize best on FINAL
+    combo_entries = [
+        (k, v)
+        for k, v in final_results.items()
+        if k not in (
+            "Exhaustive Testing (ET)",
+            "Baseline (TWB-N + UB, BATCH_HOURS=4)",
+        )
+    ]
+    if not combo_entries:
+        raise RuntimeError(
+            f"No combo entries found in final results. final_results.items(): {final_results.items()}"
+        )
+
+    best_tests_combo = min(combo_entries, key=lambda kv: kv[1]["total_tests_run"])
+    best_max_ttc_combo = min(combo_entries, key=lambda kv: kv[1]["max_time_to_culprit_hr"])
+    best_mean_fb_combo = min(combo_entries, key=lambda kv: kv[1]["mean_feedback_time_hr"])
+    final_results["best_by_total_tests"] = best_tests_combo[0]
+    final_results["best_by_max_ttc"] = best_max_ttc_combo[0]
+    final_results["best_by_mean_feedback_time"] = best_mean_fb_combo[0]
+
+    return final_results
+
+
+
+def main():
+
+    args = get_args()
+
+    global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
+    INPUT_JSON_EVAL = args.input_json_eval
+    INPUT_JSON_FINAL = args.input_json_final
+    OUTPUT_PATH_EVAL = args.output_eval
+    OUTPUT_PATH_FINAL = args.output_final
+
+    # ---- 1) EVALUATION PHASE ----
+    eval_payload = run_evaluation()
+    if eval_payload is None:
+        raise RuntimeError("Evaluation was unseccussful. No eval payload present")
+
+    os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
+    with open(OUTPUT_PATH_EVAL, "w", encoding="utf-8") as f:
+        json.dump(eval_payload["eval_output"], f, indent=2)
+    print("✅ Saved EVAL results to", OUTPUT_PATH_EVAL)
+
+    # ---- 2) FINAL TEST PHASE (no sweep; reuse best from eval) ----
+    final_results = run_final_test(eval_payload)
+    if final_results is not None:
+        os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
+        with open(OUTPUT_PATH_FINAL, "w", encoding="utf-8") as f:
+            json.dump(final_results, f, indent=2)
+        print("✅ Saved FINAL TEST results to", OUTPUT_PATH_FINAL)
 
 
 if __name__ == "__main__":

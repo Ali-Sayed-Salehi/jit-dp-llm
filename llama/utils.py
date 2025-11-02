@@ -392,6 +392,7 @@ def setup_live_metrics(live_metrics_enabled: bool, live_metrics_path: str):
     return callbacks
 
 
+
 def load_and_split_dataset(
     dataset_path,
     repo_path,
@@ -411,7 +412,7 @@ def load_and_split_dataset(
             True  -> keep input order and take contiguous 80/10/10 (chronological-style).
             False -> shuffle the entire dataset first (seeded), then split 80/10/10.
         eval_ds_as_final_test (bool):
-            If True, also return the eval split as the final_test split.
+            If True, also return the eval split as the final_test split (but final_test must keep commit_id).
     """
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
@@ -460,10 +461,10 @@ def load_and_split_dataset(
 
     # Optionally shuffle entire dataset BEFORE splitting (IID-style)
     if cron_split:
-        print("⏱️ Using chronological (contiguous) 80/10/10 split (default).")
+        print("⏱️ Using chronological split (default).")
         dataset_for_split = final_dataset
     else:
-        print("🔀 Using non-chronological split: shuffling full dataset before 80/10/10.")
+        print("🔀 Using non-chronological split: shuffling full dataset before splitting.")
         dataset_for_split = final_dataset.shuffle(seed=seed)
 
     # Split 65% train, 10% eval, rest final_test
@@ -486,23 +487,39 @@ def load_and_split_dataset(
     eval_dataset  = eval_dataset.shuffle(seed=seed + 1)
     test_dataset  = test_dataset.shuffle(seed=seed + 2)
 
-    # Apply formatter if provided
-    if format_fn is not None:
-        train_dataset = train_dataset.map(format_fn, remove_columns=train_dataset.column_names)
-        eval_dataset  = eval_dataset.map(format_fn, remove_columns=eval_dataset.column_names)
-        # Keep the commit_id column for traceability
-        test_dataset  = test_dataset.map(format_fn, remove_columns=["prompt", "response"])
+    if format_fn is None:
+        raise RuntimeError(f"No format function is provided for formatting the dataset")
 
-    # If requested, reuse eval as final_test
+    train_dataset = train_dataset.map(
+        format_fn,
+        remove_columns=train_dataset.column_names,
+    )
+
+    eval_for_final = eval_dataset.map(
+        format_fn,
+        remove_columns=["prompt", "response"],
+    )
+
+    eval_dataset = eval_dataset.map(
+        format_fn,
+        remove_columns=eval_dataset.column_names,
+    )
+
+    test_dataset = test_dataset.map(
+        format_fn,
+        remove_columns=["prompt", "response"],
+    )
+
     if eval_ds_as_final_test:
-        final_test_dataset = eval_dataset
+        # use the eval version that KEPT commit_id
+        final_test_dataset = eval_for_final
     else:
         final_test_dataset = test_dataset
 
     return DatasetDict({
         "train": train_dataset,
-        "test": eval_dataset,
-        "final_test": final_test_dataset,
+        "test": eval_dataset,            # <- NEVER has commit_id
+        "final_test": final_test_dataset,  # <- ALWAYS has commit_id
     })
 
 

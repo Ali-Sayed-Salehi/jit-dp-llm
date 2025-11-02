@@ -11,7 +11,7 @@ truncation_len: 22000       # 40000     # 22000
 chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
-selection_metric: f1       #f1   # recall@top_30%  -  only for seq_ls
+selection_metric: roc_auc       #f1   # recall@top_30%  -  only for seq_ls
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
 learning_rate: 2e-4  
