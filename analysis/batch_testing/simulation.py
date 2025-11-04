@@ -59,44 +59,116 @@ BISECTION_STRATEGIES = [
     ("TKRB-K", top_k_risk_first_bisect),
 ]
 
-# ---- PREDICTION THRESHOLD SWEEP (for eval) ----
-PRED_THRESHOLD_CANDIDATES = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99]
 
-# ---- PARAM SWEEPS FOR BATCHING STRATEGIES ----
+# ---- PARAM SWEEPS (multi-resolution; uses existing frange/irange) ----
+def frange(start, stop, step, round_to=4):
+    """Inclusive-ish float range."""
+    vals = []
+    v = start
+    while v <= stop + 1e-9:
+        vals.append(round(v, round_to))
+        v += step
+    return vals
+
+def irange(start, stop, step=1):
+    return list(range(start, stop + 1, step))
+
+# Denser where you found wins (~0.5–0.6, and high-confidence tail), but broad overall
+PRED_THRESHOLD_CANDIDATES = (
+    frange(0.30, 0.70, 0.01)    # fine around mid-range
+    + frange(0.70, 0.90, 0.02)  # moderate
+    + frange(0.90, 0.99, 0.005) # fine tail
+    + [0.995]
+)
+
+# TWB: very fine for short windows, moderate mid, coarse long
+_TWB_ALL = [{"BATCH_HOURS": v} for v in (
+    frange(0.25, 6.0, 0.25)   # 15-min steps to 6h
+    + frange(6.0, 12.0, 0.5)  # 30-min steps 6–12h
+    + frange(12.0, 24.0, 1.0) # 1h steps 12–24h
+)]
+
+# FSB: fine around 10–16, then broader
+_FSB_ALL = [{"FSB_SIZE": v} for v in (
+    irange(4, 20, 1)      # fine 4..20
+    + irange(22, 50, 2)   # 2-step 22..50
+    + irange(60, 200, 10) # coarse checkpoints
+)]
+
+# RASB: fine sweep where bests appeared (0.35–0.55), plus broad context
+_RASB_ALL = [{"RASB_THRESHOLD": v} for v in (
+    frange(0.10, 0.30, 0.05)
+    + frange(0.30, 0.60, 0.01)   # fine band
+    + frange(0.60, 0.95, 0.05)
+)]
+
+# HRAB: windows focused 3–6h (+ 1,2,8); risks dense 0.65–0.80 with broader neighbors
+_HRAB_RISKS = (
+    frange(0.50, 0.65, 0.05)
+    + frange(0.65, 0.80, 0.01)   # fine band
+    + frange(0.80, 0.99, 0.05)
+)
+_HRAB_WINDOWS = (
+    irange(1, 8, 1) + irange(10, 24, 2)  # 1..8 by 1, then 10..24 by 2
+)
+_HRAB_ALL = [
+    {"HRAB_RISK_THRESHOLD": t, "HRAB_WINDOW_HOURS": n}
+    for t in _HRAB_RISKS
+    for n in _HRAB_WINDOWS
+]
+
+# DLRTWB: focus t∈[0.60,0.90] (fine), with neighbors; HIGH fine 0.25–3h; LOW fine 3–8h then coarser
+_DLRTWB_THRESH = (
+    frange(0.40, 0.60, 0.05)
+    + frange(0.60, 0.90, 0.01)   # fine band
+    + frange(0.90, 0.95, 0.02)
+)
+_DLRTWB_HIGH_HOURS = (
+    frange(0.25, 3.0, 0.25) + frange(3.0, 6.0, 0.5)
+)
+_DLRTWB_LOW_HOURS = (
+    frange(3.0, 8.0, 1.0) + frange(8.0, 24.0, 2.0)
+)
+_DLRTWB_ALL = [
+    {"DLR_RISK_THRESHOLD": t, "DLR_HIGH_HOURS": a, "DLR_LOW_HOURS": b}
+    for t in _DLRTWB_THRESH
+    for a in _DLRTWB_HIGH_HOURS
+    for b in _DLRTWB_LOW_HOURS
+]
+
+# RAPB: very fine near bests (T≈0.50–0.60, aging≈0.01), plus broader tails
+_RAPB_THRESH = (
+    frange(0.30, 0.45, 0.05)
+    + frange(0.45, 0.65, 0.01)   # fine band
+    + frange(0.65, 0.80, 0.05)
+)
+_RAPB_AGING = (
+    frange(0.005, 0.020, 0.005)  # very fine around 0.01
+    + frange(0.020, 0.050, 0.005)
+    + frange(0.050, 0.200, 0.01)
+)
+_RAPB_ALL = [
+    {"RAPB_THRESHOLD": t, "RAPB_AGING_PER_HOUR": a}
+    for t in _RAPB_THRESH
+    for a in _RAPB_AGING
+]
+
 PARAM_SWEEPS = {
-    "TWB-N": [
-        {"BATCH_HOURS": v}
-        for v in [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 18, 24]
-    ],
-    "FSB-N": [
-        {"FSB_SIZE": v}
-        for v in [5, 8, 10, 12, 15, 20, 25, 30, 35, 40, 50, 60, 75, 100]
-    ],
-    "RASB-T": [
-        {"RASB_THRESHOLD": v}
-        for v in [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9]
-    ],
-    "HRAB-T-N": [
-        {"HRAB_RISK_THRESHOLD": t, "HRAB_WINDOW_HOURS": n}
-        for t in [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
-        for n in [1, 2, 3, 4, 6, 8, 10, 12]
-    ],
-    "DLRTWB-T-a-b": [
-        {"DLR_RISK_THRESHOLD": t, "DLR_HIGH_HOURS": a, "DLR_LOW_HOURS": b}
-        for t in [0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        for a in [0.25, 0.5, 1, 1.5, 2, 3]
-        for b in [2, 3, 4, 6, 8, 10, 12]
-    ],
-    "RAPB-T-a": [
-        {"RAPB_THRESHOLD": t, "RAPB_AGING_PER_HOUR": a}
-        for t in [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
-        for a in [0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.12, 0.15]
-    ],
+    "TWB-N": _TWB_ALL,
+    "FSB-N": _FSB_ALL,
+    "RASB-T": _RASB_ALL,
+    "HRAB-T-N": _HRAB_ALL,
+    "DLRTWB-T-a-b": _DLRTWB_ALL,
+    "RAPB-T-a": _RAPB_ALL,
 }
 
-# =================================
+# (Optional) If runtime explodes, cap any giant grid temporarily, e.g.:
+# MAX_SWEEP = 5000
+# PARAM_SWEEPS["DLRTWB-T-a-b"] = PARAM_SWEEPS["DLRTWB-T-a-b"][:MAX_SWEEP]
+# PARAM_SWEEPS["RAPB-T-a"] = PARAM_SWEEPS["RAPB-T-a"][:MAX_SWEEP]
 
 random.seed(RANDOM_SEED)
+# =================================
 
 def get_args():
     parser = argparse.ArgumentParser(
