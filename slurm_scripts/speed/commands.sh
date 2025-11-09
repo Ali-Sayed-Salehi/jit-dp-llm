@@ -41,14 +41,18 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
---input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
---input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_test_mopt.json \
---mode mopt \
---final-only
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
+# --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
+# --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
+# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
+# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_test_mopt.json \
+# --mode mopt \
+# --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/plot.py \
+--json_path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
+--out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter.png
 
 echo "Script finished"
