@@ -1,0 +1,55 @@
+debug: false
+task_type: seq_cls    # seq_cls   # clm
+live_metrics: true
+dataset_path: datasets/mozilla_perf/perf_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
+model_path: LLMs/snapshots/microsoft/codebert-base    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/llama3.1_apachejit
+quant: false
+lora: false
+flash_attn_2: false
+mixed_precision: bf16
+truncation_len: null       # 40000     # 22000
+chunking_len: null           # only for clm
+class_imbalance_fix: oversampling     # oversampling
+threshold: null
+selection_metric: roc_auc       #f1   # recall@top_30%  -  only for seq_ls
+slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
+continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
+learning_rate: 1e-5  
+num_train_epochs: 3
+weight_decay: 0.1
+resampling_ratio: 0.7
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0
+gradient_accumulation_steps: 256
+train_batch_size: 1
+lr_warmup_ratio: 0.1
+eval_steps: 10
+logging_steps: 10
+save_steps: 10
+eval_accumulation_steps: null
+pooling: null
+clm_for_seq_cls: false
+dataset_cron_split: true
+balance_eval_dataset: false
+new_tokens: [
+        "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
+        "<FILE>", "</FILE>",
+        "<ADDED>", "</ADDED>",
+        "<REMOVED>", "</REMOVED>",
+        # "[VERY_LOW]", "[LOW]",
+        # "[MEDIUM]", "[HIGH]", "[VERY_HIGH]",
+        # "[num_lines_added:]",
+        # "[num_lines_deleted:]",
+        # "[num_files_touched:]",
+        # "[num_directories_touched:]",
+        # "[num_subsystems_touched:]",
+        # "[change_entropy:]",
+        # "[num_developers_touched_files:]",
+        # "[time_from_last_change:]",
+        # "[num_changes_in_files:]",
+        # "[author_experience:]",
+        # "[author_recent_experience:]",
+        # "[author_subsystem_experience:]",
+        # "[drs]", "[/drs]"
+    ]
