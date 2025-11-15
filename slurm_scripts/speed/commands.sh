@@ -53,6 +53,7 @@ echo "Running script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/plot.py \
 --json_path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
---out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter.png
+--out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter_mft.png \
+--xaxis mft
 
 echo "Script finished"
