@@ -159,7 +159,7 @@ def get_args():
         default=os.path.join(REPO_ROOT, "analysis", "batch_testing", "batch_sim_results_final_test.json"),
         help="Where to write FINAL sim results"
     )
-    # NEW: skip eval and only run FINAL using precomputed eval results
+    # skip eval and only run FINAL using precomputed eval results
     parser.add_argument(
         "--final-only",
         action="store_true",

@@ -51,9 +51,15 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/plot.py \
---json_path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
---out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter_mft.png \
---xaxis mft
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/plot.py \
+# --json_path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
+# --out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter_mft.png \
+# --xaxis mft
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_all_drevs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_drevs.py
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_duration.py
 
 echo "Script finished"
