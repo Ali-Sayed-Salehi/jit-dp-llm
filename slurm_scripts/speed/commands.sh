@@ -62,4 +62,6 @@ echo "Running script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_duration.py
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
+
 echo "Script finished"
