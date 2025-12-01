@@ -9,17 +9,13 @@ from batch_strats import (
     simulate_twb_with_bisect,
     simulate_fsb_with_bisect,
     simulate_rasb_t_with_bisect,
-    simulate_hrab_t_n_with_bisect,
-    simulate_dlrtwb_t_ab_with_bisect,
     simulate_rapb_t_a_with_bisect,
 )
 from bisection_strats import (
-    risk_ordered_bisect,
-    unordered_bisect,
     time_ordered_bisect,
-    risk_weighted_adaptive_bisect,
-    top_k_risk_first_bisect,  # if you're keeping TKRB
+    time_ordered_linear,
     TEST_DURATION_MIN,
+    TESTS_PER_RUN,
 )
 
 # ====== CONFIG (edit here) ======
@@ -30,11 +26,6 @@ ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_comm
 BATCH_HOURS = 4
 FSB_SIZE = 20
 RASB_THRESHOLD = 0.5
-HRAB_RISK_THRESHOLD = 0.8
-HRAB_WINDOW_HOURS = 4
-DLR_RISK_THRESHOLD = 0.6
-DLR_HIGH_HOURS = 1
-DLR_LOW_HOURS = 4
 RAPB_THRESHOLD = 0.35
 RAPB_AGING_PER_HOUR = 0.05
 
@@ -46,18 +37,14 @@ BATCHING_STRATEGIES = [
     ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
     ("FSB-N", simulate_fsb_with_bisect, FSB_SIZE),
     ("RASB-T", simulate_rasb_t_with_bisect, RASB_THRESHOLD),
-    ("HRAB-T-N", simulate_hrab_t_n_with_bisect, (HRAB_RISK_THRESHOLD, HRAB_WINDOW_HOURS)),
-    ("DLRTWB-T-a-b", simulate_dlrtwb_t_ab_with_bisect, (DLR_RISK_THRESHOLD, DLR_HIGH_HOURS, DLR_LOW_HOURS)),
     ("RAPB-T-a", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
 ]
 
 BISECTION_STRATEGIES = [
-    ("ROB", risk_ordered_bisect),
-    ("UB", unordered_bisect),
     ("TOB", time_ordered_bisect),
-    ("RWAB", risk_weighted_adaptive_bisect),
-    ("TKRB-K", top_k_risk_first_bisect),
+    ("SEQ", time_ordered_linear),
 ]
+
 
 # ---- PARAM SWEEPS (kept for --mode sweep; uses existing frange/irange) ----
 def frange(start, stop, step, round_to=4):
@@ -91,24 +78,7 @@ _RASB_ALL = [{"RASB_THRESHOLD": v} for v in (
     + frange(0.30, 0.60, 0.01)
     + frange(0.60, 0.95, 0.05)
 )]
-_HRAB_RISKS = (
-    frange(0.50, 0.65, 0.05)
-    + frange(0.65, 0.80, 0.01)
-    + frange(0.80, 0.99, 0.05)
-)
-_HRAB_WINDOWS = (irange(1, 8, 1) + irange(10, 24, 2))
-_HRAB_ALL = [{"HRAB_RISK_THRESHOLD": t, "HRAB_WINDOW_HOURS": n} for t in _HRAB_RISKS for n in _HRAB_WINDOWS]
-_DLRTWB_THRESH = (
-    frange(0.40, 0.60, 0.05)
-    + frange(0.60, 0.90, 0.01)
-    + frange(0.90, 0.95, 0.02)
-)
-_DLRTWB_HIGH_HOURS = frange(0.25, 3.0, 0.25) + frange(3.0, 6.0, 0.5)
-_DLRTWB_LOW_HOURS  = frange(3.0, 8.0, 1.0) + frange(8.0, 24.0, 2.0)
-_DLRTWB_ALL = [
-    {"DLR_RISK_THRESHOLD": t, "DLR_HIGH_HOURS": a, "DLR_LOW_HOURS": b}
-    for t in _DLRTWB_THRESH for a in _DLRTWB_HIGH_HOURS for b in _DLRTWB_LOW_HOURS
-]
+
 _RAPB_THRESH = (
     frange(0.30, 0.45, 0.05)
     + frange(0.45, 0.65, 0.01)
@@ -125,8 +95,6 @@ PARAM_SWEEPS = {
     "TWB-N": _TWB_ALL,
     "FSB-N": _FSB_ALL,
     "RASB-T": _RASB_ALL,
-    "HRAB-T-N": _HRAB_ALL,
-    "DLRTWB-T-a-b": _DLRTWB_ALL,
     "RAPB-T-a": _RAPB_ALL,
 }
 
@@ -282,7 +250,8 @@ def run_exhaustive_testing(commits):
     feedback_times = {}
 
     for c in commits:
-        total_tests_run += 1
+        # each commit test is a full run of the perf suite
+        total_tests_run += TESTS_PER_RUN
         finish_time = c["ts"] + timedelta(minutes=TEST_DURATION_MIN)
         fb_min = (finish_time - c["ts"]).total_seconds() / 60
         feedback_times[c["commit_id"]] = fb_min
@@ -350,7 +319,7 @@ def run_evaluation_sweep(INPUT_JSON_EVAL):
         return None
 
     et_results = run_exhaustive_testing(base_commits)
-    baseline = simulate_twb_with_bisect(base_commits, unordered_bisect, BATCH_HOURS)
+    baseline = simulate_twb_with_bisect(base_commits, time_ordered_bisect, BATCH_HOURS)
     baseline = convert_result_minutes_to_hours(baseline)
 
     baseline_fb = baseline["mean_feedback_time_hr"]
@@ -381,11 +350,7 @@ def run_evaluation_sweep(INPUT_JSON_EVAL):
                 fb_best_max_ttc = float("inf")
 
                 for param_dict in candidates:
-                    if b_name == "HRAB-T-N":
-                        param = (param_dict["HRAB_RISK_THRESHOLD"], param_dict["HRAB_WINDOW_HOURS"])
-                    elif b_name == "DLRTWB-T-a-b":
-                        param = (param_dict["DLR_RISK_THRESHOLD"], param_dict["DLR_HIGH_HOURS"], param_dict["DLR_LOW_HOURS"])
-                    elif b_name == "RAPB-T-a":
+                    if b_name == "RAPB-T-a":
                         param = (param_dict["RAPB_THRESHOLD"], param_dict["RAPB_AGING_PER_HOUR"])
                     else:
                         param = list(param_dict.values())[0]
@@ -444,12 +409,44 @@ def run_evaluation_sweep(INPUT_JSON_EVAL):
     # summarize
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline,
+        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline,
     }
     out_eval.update(ci_results)
-    out_eval["best_by_total_tests"] = min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])[0] if ci_results else "-"
-    out_eval["best_by_max_ttc"] = min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0] if ci_results else "-"
-    out_eval["best_by_mean_feedback_time"] = min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_hr"])[0] if ci_results else "-"
+
+    # Per-metric bests
+    out_eval["best_by_total_tests"] = (
+        min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])[0]
+        if ci_results else "-"
+    )
+    out_eval["best_by_max_ttc"] = (
+        min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
+        if ci_results else "-"
+    )
+    out_eval["best_by_mean_feedback_time"] = (
+        min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
+        if ci_results else "-"
+    )
+
+    # Best overall: must be simultaneously best on all three metrics
+    if ci_results:
+        items = list(ci_results.items())
+        min_tests = min(v["total_tests_run"] for _, v in items)
+        min_max_ttc = min(v["max_time_to_culprit_hr"] for _, v in items)
+        min_mean_fb = min(v["mean_feedback_time_hr"] for _, v in items)
+
+        best_overall = "NA"
+        for name, v in items:
+            if (
+                v["total_tests_run"] == min_tests
+                and v["max_time_to_culprit_hr"] == min_max_ttc
+                and v["mean_feedback_time_hr"] == min_mean_fb
+            ):
+                best_overall = name
+                break
+    else:
+        best_overall = "NA"
+
+    out_eval["best_overall"] = best_overall
 
     return {
         "eval_output": out_eval,
@@ -475,7 +472,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     et_results = run_exhaustive_testing(base_commits_for_context) if base_commits_for_context else {}
     baseline = {}
     if base_commits_for_context:
-        baseline = simulate_twb_with_bisect(base_commits_for_context, unordered_bisect, BATCH_HOURS)
+        baseline = simulate_twb_with_bisect(base_commits_for_context, time_ordered_bisect, BATCH_HOURS)
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
 
@@ -489,7 +486,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # unified output (same shape as sweep)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline,
+        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline,
     }
 
     # Per combo study with continuous/int ranges
@@ -507,15 +504,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     param = trial.suggest_int("FSB_SIZE", 4, 200)
                 elif b_name == "RASB-T":
                     param = trial.suggest_float("RASB_THRESHOLD", 0.10, 0.95)
-                elif b_name == "HRAB-T-N":
-                    risk_t = trial.suggest_float("HRAB_RISK_THRESHOLD", 0.50, 0.99)
-                    win_h  = trial.suggest_int("HRAB_WINDOW_HOURS", 1, 24)
-                    param = (risk_t, win_h)
-                elif b_name == "DLRTWB-T-a-b":
-                    t  = trial.suggest_float("DLR_RISK_THRESHOLD", 0.40, 0.95)
-                    ah = trial.suggest_float("DLR_HIGH_HOURS", 0.25, 6.0)
-                    lh = trial.suggest_float("DLR_LOW_HOURS", 3.0, 24.0)
-                    param = (t, ah, lh)
                 elif b_name == "RAPB-T-a":
                     T  = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
                     a  = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
@@ -548,10 +536,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     param = int(params["FSB_SIZE"])
                 elif b_name == "RASB-T":
                     param = params["RASB_THRESHOLD"]
-                elif b_name == "HRAB-T-N":
-                    param = (params["HRAB_RISK_THRESHOLD"], int(params["HRAB_WINDOW_HOURS"]))
-                elif b_name == "DLRTWB-T-a-b":
-                    param = (params["DLR_RISK_THRESHOLD"], params["DLR_HIGH_HOURS"], params["DLR_LOW_HOURS"])
                 elif b_name == "RAPB-T-a":
                     param = (params["RAPB_THRESHOLD"], params["RAPB_AGING_PER_HOUR"])
                 else:
@@ -569,8 +553,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                         {"BATCH_HOURS": param} if b_name == "TWB-N" else
                         {"FSB_SIZE": param} if b_name == "FSB-N" else
                         {"RASB_THRESHOLD": param} if b_name == "RASB-T" else
-                        {"HRAB_RISK_THRESHOLD": param[0], "HRAB_WINDOW_HOURS": param[1]} if b_name == "HRAB-T-N" else
-                        {"DLR_RISK_THRESHOLD": param[0], "DLR_HIGH_HOURS": param[1], "DLR_LOW_HOURS": param[2]} if b_name == "DLRTWB-T-a-b" else
                         {"RAPB_THRESHOLD": param[0], "RAPB_AGING_PER_HOUR": param[1]}
                     ),
                     "total_tests_run": res.get("total_tests_run"),
@@ -608,10 +590,48 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             out_eval[combo_key] = result_entry
 
     # summary (unified)
-    combo_items = [(k, v) for k, v in out_eval.items() if k not in ("Exhaustive Testing (ET)", "Baseline (TWB-N + UB, BATCH_HOURS=4)")]
-    out_eval["best_by_total_tests"] = min(combo_items, key=lambda kv: kv[1]["total_tests_run"])[0] if combo_items else "-"
-    out_eval["best_by_max_ttc"] = min(combo_items, key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0] if combo_items else "-"
-    out_eval["best_by_mean_feedback_time"] = min(combo_items, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0] if combo_items else "-"
+    combo_items = [
+        (k, v)
+        for k, v in out_eval.items()
+        if k not in (
+            "Exhaustive Testing (ET)",
+            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
+        )
+    ]
+
+    # Per-metric bests
+    out_eval["best_by_total_tests"] = (
+        min(combo_items, key=lambda kv: kv[1]["total_tests_run"])[0]
+        if combo_items else "-"
+    )
+    out_eval["best_by_max_ttc"] = (
+        min(combo_items, key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
+        if combo_items else "-"
+    )
+    out_eval["best_by_mean_feedback_time"] = (
+        min(combo_items, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
+        if combo_items else "-"
+    )
+
+    # Best overall: simultaneously minimal on all three metrics
+    if combo_items:
+        min_tests = min(v["total_tests_run"] for _, v in combo_items)
+        min_max_ttc = min(v["max_time_to_culprit_hr"] for _, v in combo_items)
+        min_mean_fb = min(v["mean_feedback_time_hr"] for _, v in combo_items)
+
+        best_overall = "NA"
+        for name, v in combo_items:
+            if (
+                v["total_tests_run"] == min_tests
+                and v["max_time_to_culprit_hr"] == min_max_ttc
+                and v["mean_feedback_time_hr"] == min_mean_fb
+            ):
+                best_overall = name
+                break
+    else:
+        best_overall = "NA"
+
+    out_eval["best_overall"] = best_overall
 
     return {
         "eval_output": out_eval,
@@ -635,7 +655,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
     et_results_final = run_exhaustive_testing(base_commits_final)
-    baseline_final = simulate_twb_with_bisect(base_commits_final, unordered_bisect, BATCH_HOURS)
+    baseline_final = simulate_twb_with_bisect(base_commits_final, time_ordered_bisect, BATCH_HOURS)
     baseline_final = convert_result_minutes_to_hours(baseline_final)
 
     baseline_fb = baseline_final["mean_feedback_time_hr"]
@@ -648,7 +668,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWB-N + UB, BATCH_HOURS=4)": baseline_final,
+        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline_final,
         "final_window": {"lower": final_lower.isoformat(), "upper": final_upper.isoformat() if final_upper else None},
     }
 
@@ -658,7 +678,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for combo_name, val in eval_out.items():
         if combo_name in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB-N + UB, BATCH_HOURS=4)",
+            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
@@ -682,15 +702,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         pred_thr = val.get("pred_threshold_used", PRED_THRESHOLD)
 
         # Unpack params for this strategy
-        if b_name == "HRAB-T-N":
-            param = (best_params["HRAB_RISK_THRESHOLD"], best_params["HRAB_WINDOW_HOURS"])
-        elif b_name == "DLRTWB-T-a-b":
-            param = (
-                best_params["DLR_RISK_THRESHOLD"],
-                best_params["DLR_HIGH_HOURS"],
-                best_params["DLR_LOW_HOURS"],
-            )
-        elif b_name == "RAPB-T-a":
+        if b_name == "RAPB-T-a":
             param = (best_params["RAPB_THRESHOLD"], best_params["RAPB_AGING_PER_HOUR"])
         else:
             # single-valued dict e.g., {"BATCH_HOURS": x} or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t}
@@ -729,7 +741,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for k, v in final_results.items():
         if k in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB-N + UB, BATCH_HOURS=4)",
+            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
             "final_window",
             "best_by_total_tests",
             "best_by_max_ttc",
@@ -743,10 +755,27 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         final_results["best_by_total_tests"] = min(eligible, key=lambda kv: kv[1]["total_tests_run"])[0]
         final_results["best_by_max_ttc"] = min(eligible, key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
         final_results["best_by_mean_feedback_time"] = min(eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
+
+        # Best overall on FINAL window
+        min_tests = min(v["total_tests_run"] for _, v in eligible)
+        min_max_ttc = min(v["max_time_to_culprit_hr"] for _, v in eligible)
+        min_mean_fb = min(v["mean_feedback_time_hr"] for _, v in eligible)
+
+        best_overall = "NA"
+        for name, v in eligible:
+            if (
+                v["total_tests_run"] == min_tests
+                and v["max_time_to_culprit_hr"] == min_max_ttc
+                and v["mean_feedback_time_hr"] == min_mean_fb
+            ):
+                best_overall = name
+                break
+        final_results["best_overall"] = best_overall
     else:
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
+        final_results["best_overall"] = "NA"
 
     # Save FINAL
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
