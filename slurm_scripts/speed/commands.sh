@@ -41,12 +41,13 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
-# --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
-# --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
-# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
-# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_test_mopt.json \
-# --mode mopt \
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
+--input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
+--input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_test_mopt.json \
+--mode mopt \
+--mopt-trials 2
 # --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
@@ -60,8 +61,12 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_drevs.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_duration.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_duration.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 
 echo "Script finished"
