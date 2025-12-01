@@ -60,13 +60,87 @@ def batch_has_regressor(batch):
     return any(c["true_label"] for c in batch)
 
 
+# ------------------ SHARED INTERVAL TEST HELPER ------------------ #
+
+def _run_interval_and_update(
+    batch_sorted,
+    status,
+    lo,
+    hi,
+    current_time,
+    first_test,
+    total_tests_run,
+    feedback_times,
+    executor,
+):
+    """
+    Shared helper for 'test_interval' used by multiple bisection strategies.
+
+    Parameters
+    ----------
+    batch_sorted : list[dict]
+        Commits in this batch, sorted by "ts".
+    status : list[str]
+        Per-commit status: "unknown", "clean", or "defect_found".
+    lo, hi : int
+        Inclusive index range within batch_sorted.
+    current_time : datetime
+        Logical current time at which this logical test run is scheduled.
+    first_test : bool
+        True if this is the first test in the batch (controls 850 vs 4 cost).
+    total_tests_run : int
+        Accumulated test count.
+    feedback_times : dict
+        commit_id -> feedback time in minutes.
+    executor : TestExecutor
+        Shared executor for scheduling physical tests.
+
+    Returns
+    -------
+    has_defect : bool
+    current_time : datetime
+    first_test : bool
+    total_tests_run : int
+    """
+    if lo > hi:
+        return False, current_time, first_test, total_tests_run
+
+    tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
+    first_test = False
+
+    # Cost accounting
+    total_tests_run += tests_this_run
+
+    # All physical tests for this logical run start at current_time
+    finish_time = run_test_suite(executor, current_time, tests_this_run)
+
+    has_defect = any(
+        batch_sorted[i]["true_label"] and status[i] != "defect_found"
+        for i in range(lo, hi + 1)
+    )
+
+    if not has_defect:
+        # Interval is clean; provide feedback for all unknown commits here.
+        for i in range(lo, hi + 1):
+            if status[i] == "unknown":
+                status[i] = "clean"
+                cid = batch_sorted[i]["commit_id"]
+                if cid not in feedback_times:
+                    fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
+                    feedback_times[cid] = fb_min
+
+    current_time = finish_time
+    return has_defect, current_time, first_test, total_tests_run
+
+
+# ------------------ TOB (unchanged logic, uses helper) ------------------ #
+
 def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
     """
     Time-Ordered Bisection (TOB) with central executor.
 
     Tests are logically sequential (each test's result is needed to pick the next one),
-    so we submit them one at a time to the executor. The executor may share capacity
-    with other simulations, but within this algorithm we treat tests as dependent.
+    so we submit them one at a time to the executor.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
@@ -75,41 +149,8 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
     n = len(batch_sorted)
 
     status = ["unknown"] * n
-
     current_time = start_time
     first_test = bool(is_batch_root)
-
-    def test_interval(lo, hi):
-        nonlocal total_tests_run, current_time, first_test
-
-        if lo > hi:
-            return False
-
-        tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
-        first_test = False
-
-        # We still count `tests_this_run` tests from a cost perspective.
-        total_tests_run += tests_this_run
-
-        # Fire `tests_this_run` physical tests concurrently
-        finish_time = run_test_suite(executor, current_time, tests_this_run)
-
-        has_defect = any(
-            batch_sorted[i]["true_label"] and status[i] != "defect_found"
-            for i in range(lo, hi + 1)
-        )
-
-        if not has_defect:
-            for i in range(lo, hi + 1):
-                if status[i] == "unknown":
-                    status[i] = "clean"
-                    cid = batch_sorted[i]["commit_id"]
-                    if cid not in feedback_times:
-                        fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
-                        feedback_times[cid] = fb_min
-
-        current_time = finish_time
-        return has_defect
 
     while True:
         unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
@@ -119,15 +160,21 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
         lo = unknown_indices[0]
         hi = unknown_indices[-1]
 
-        still_fails = test_interval(lo, hi)
+        # Test the entire unknown region
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+        )
         if not still_fails:
             break
 
         left = lo
         right = hi
+        # Standard midpoint-based binary search
         while left < right:
             mid = (left + right) // 2
-            left_fails = test_interval(left, mid)
+            left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted, status, left, mid, current_time, first_test, total_tests_run, feedback_times, executor
+            )
             if left_fails:
                 right = mid
             else:
@@ -145,7 +192,9 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
     return total_tests_run, culprit_times, feedback_times
 
 
-def time_ordered_linear(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+# ------------------ Exhaustive variants (unchanged) ------------------ #
+
+def exhaustive_sequential(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
     """
     Sequential 'no-bisection' strategy with central executor.
     Tests commits one-by-one from oldest to newest.
@@ -178,39 +227,29 @@ def time_ordered_linear(batch, start_time, total_tests_run, culprit_times, feedb
     return total_tests_run, culprit_times, feedback_times
 
 
-def time_ordered_parallel(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
     """
     Parallel 'no-bisection' strategy.
 
-    Similar to time_ordered_linear, but instead of waiting for each test to
+    Similar to exhaustive_sequential, but instead of waiting for each test to
     finish before submitting the next one, we submit *all* per-commit tests for
     this batch at the same time.
-
-    - All tests in the batch have the same requested_start_time = start_time.
-    - The TestExecutor decides how they overlap based on NUM_TEST_WORKERS.
-    - Cost model:
-        * The first test in this batch uses TESTS_PER_BATCH_RUN
-        * All subsequent tests use TESTS_PER_BISECTION_RUN
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
-    # Oldest → newest for consistent reporting
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
 
     first_test = bool(is_batch_root)
     requested_time = start_time   # all tests are "ready" at this time
 
     for c in batch_sorted:
-        # Cost accounting
         tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
         first_test = False
         total_tests_run += tests_this_run
 
-        # Submit this test to the central executor.
         finish_time = run_test_suite(executor, requested_time, tests_this_run)
 
-        # Feedback time for this commit, measured from its commit timestamp
         cid = c["commit_id"]
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
         feedback_times[cid] = fb_min
@@ -221,23 +260,14 @@ def time_ordered_parallel(batch, start_time, total_tests_run, culprit_times, fee
     return total_tests_run, culprit_times, feedback_times
 
 
+# ------------------ RWAB using the same helper ------------------ #
+
 def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
     """
     Risk-Weighted Adaptive Bisection (RWAB).
 
-    Like time_ordered_bisect, but when we split a failing interval [lo, hi],
-    we choose the split point that *approximately balances total predicted risk*
-    between the left and right sub-batches (time-ordered).
-
-    - Commits are sorted by time (oldest → newest).
-    - Each commit is expected to have a 'risk' field (p_pos), defaulting to 0.
-    - For an interval [lo, hi], we find an index 'split' such that the sum of
-      risk[lo..split] is as close as possible to half of risk[lo..hi].
-    - We test the left interval [lo, split]. If it still fails, we recurse into
-      that subinterval; otherwise we recurse into [split+1, hi].
-
-    If all risks are zero or missing, this reduces to standard time-ordered
-    bisection using the midpoint.
+    Like time_ordered_bisect, but splits failing intervals so that the sum of
+    predicted risk on the left and right halves is approximately balanced.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
@@ -249,37 +279,26 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
     current_time = start_time
     first_test = bool(is_batch_root)
 
-    # Precompute prefix sums of risk for fast interval-risk queries.
-    # risk_prefix[i] = sum of risk for batch_sorted[0..i-1]
+    # Prefix sums of risk
     risk_prefix = [0.0] * (n + 1)
     for i, c in enumerate(batch_sorted):
         r = float(c.get("risk", 0.0) or 0.0)
         risk_prefix[i + 1] = risk_prefix[i] + r
 
     def risk_sum(lo, hi):
-        # inclusive indices
         return risk_prefix[hi + 1] - risk_prefix[lo]
 
     def choose_risk_balanced_split(lo, hi):
-        """
-        Choose a split index s in [lo, hi-1] such that sum_risk(lo..s) is
-        as close as possible to half of sum_risk(lo..hi).
-
-        If total risk is zero (no signal), fallback to simple midpoint.
-        """
         if lo >= hi:
             return lo
-
         total_risk = risk_sum(lo, hi)
         if total_risk <= 0.0:
-            # No risk information; behave like TOB.
             return (lo + hi) // 2
 
         target = total_risk / 2.0
         best_idx = lo
         best_diff = float("inf")
 
-        # Candidate splits are hi indices for the left sub-interval.
         for s in range(lo, hi):
             left_risk = risk_sum(lo, s)
             diff = abs(left_risk - target)
@@ -289,39 +308,6 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
 
         return best_idx
 
-    def test_interval(lo, hi):
-        nonlocal total_tests_run, current_time, first_test
-
-        if lo > hi:
-            return False
-
-        tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
-        first_test = False
-
-        # Cost accounting
-        total_tests_run += tests_this_run
-
-        # All physical tests for this logical run start at current_time
-        finish_time = run_test_suite(executor, current_time, tests_this_run)
-
-        has_defect = any(
-            batch_sorted[i]["true_label"] and status[i] != "defect_found"
-            for i in range(lo, hi + 1)
-        )
-
-        if not has_defect:
-            # Interval is clean; provide feedback for all unknown commits here.
-            for i in range(lo, hi + 1):
-                if status[i] == "unknown":
-                    status[i] = "clean"
-                    cid = batch_sorted[i]["commit_id"]
-                    if cid not in feedback_times:
-                        fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
-                        feedback_times[cid] = fb_min
-
-        current_time = finish_time
-        return has_defect
-
     while True:
         unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
         if not unknown_indices:
@@ -330,17 +316,21 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
         lo = unknown_indices[0]
         hi = unknown_indices[-1]
 
-        # Test the whole remaining unknown range.
-        still_fails = test_interval(lo, hi)
+        # Test the whole unknown region
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+        )
         if not still_fails:
             break
 
         left = lo
         right = hi
-        # Risk-weighted "binary" search within [left, right]
+        # Risk-weighted "binary" search
         while left < right:
             split = choose_risk_balanced_split(left, right)
-            left_fails = test_interval(left, split)
+            left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted, status, left, split, current_time, first_test, total_tests_run, feedback_times, executor
+            )
             if left_fails:
                 right = split
             else:

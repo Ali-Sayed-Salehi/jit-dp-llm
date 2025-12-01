@@ -3,7 +3,7 @@
 #SBATCH --job-name=command
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=100G
+#SBATCH --mem=50G
 #SBATCH --time=168:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
@@ -44,10 +44,11 @@ echo "Running script ..."
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
 --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
 --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_eval_mopt.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/batch_test_mopt.json \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_1/batch_eval_mopt.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_1/batch_test_mopt.json \
 --mode mopt \
---mopt-trials 2
+--mopt-trials 200 \
+--num-test-workers 1
 # --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py

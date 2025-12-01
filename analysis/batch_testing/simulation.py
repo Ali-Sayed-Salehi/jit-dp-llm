@@ -14,8 +14,8 @@ from batch_strats import (
 )
 from bisection_strats import (
     time_ordered_bisect,
-    time_ordered_linear,
-    time_ordered_parallel,
+    exhaustive_sequential,
+    exhaustive_parallel,
     risk_weighted_adaptive_bisect,
     TEST_DURATION_MIN,
     TESTS_PER_RUN,
@@ -38,7 +38,7 @@ DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
-NUM_TEST_WORKERS = 100  # <--- central test machine capacity (K)
+NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
 BATCHING_STRATEGIES = [
     ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
@@ -50,8 +50,8 @@ BATCHING_STRATEGIES = [
 
 BISECTION_STRATEGIES = [
     ("TOB", time_ordered_bisect),
-    ("SEQ", time_ordered_linear),
-    ("PAR", time_ordered_parallel),
+    ("SEQ", exhaustive_sequential),
+    ("PAR", exhaustive_parallel),
     ("RWAB", risk_weighted_adaptive_bisect),
 ]
 
@@ -148,6 +148,13 @@ def get_args():
         "--final-only",
         action="store_true",
         help="Skip running eval; load eval results from --output-eval and run only the FINAL replay."
+    )
+    # allow overriding num test workers from CLI
+    parser.add_argument(
+        "--num-test-workers",
+        type=int,
+        default=NUM_TEST_WORKERS,
+        help="Number of parallel test workers (central test machine capacity K).",
     )
     return parser.parse_args()
 
@@ -844,6 +851,10 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
 def main():
     args = get_args()
+
+    # Apply CLI override to global NUM_TEST_WORKERS
+    global NUM_TEST_WORKERS
+    NUM_TEST_WORKERS = args.num_test_workers
 
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval
