@@ -220,3 +220,65 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
         )
 
     return build_results(total_tests_run, culprit_times, feedback_times)
+
+
+def simulate_ratb_with_bisect(commits, bisect_fn, threshold, num_workers):
+    """
+    Hybrid Risk-Aware Batching (RATB).
+
+    Stream commits in time order. Maintain a current batch of contiguous commits.
+    - For each commit c:
+        * Add c to the current batch.
+        * If c["risk"] >= threshold (T), immediately flush the batch
+          (all commits since the last flush, including c) to bisect_fn.
+          Then start a new batch.
+    - At the end, if there are remaining commits that never triggered the threshold,
+      flush them as one final batch.
+
+    Param:
+      threshold (T): risk cutoff; any commit with risk >= T triggers a batch.
+    """
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    if not commits:
+        return build_results(total_tests_run, culprit_times, feedback_times)
+
+    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+
+    current_batch = []
+    current_end_time = None
+
+    for c in commits:
+        current_batch.append(c)
+        current_end_time = c["ts"]
+
+        risk = float(c.get("risk", 0.0) or 0.0)
+        if risk >= threshold:
+            # Flush the batch up to and including this high-risk commit
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+            )
+            current_batch = []
+            current_end_time = None
+
+    # Flush any leftover commits that never triggered the risk threshold
+    if current_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+        )
+
+    return build_results(total_tests_run, culprit_times, feedback_times)
+
+

@@ -6,6 +6,7 @@ TESTS_PER_BATCH_RUN = 850      # first test per batch
 TESTS_PER_BISECTION_RUN = 4    # follow-up tests
 TESTS_PER_RUN = TESTS_PER_BATCH_RUN
 
+TKRB_TOP_K = 1
 
 class TestExecutor:
     """
@@ -372,5 +373,157 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
         feedback_times[c["commit_id"]] = fb_min
         if c["true_label"]:
             culprit_times.append(fb_min)
+
+    return total_tests_run, culprit_times, feedback_times
+
+
+# ------------------ TKRB-K: Top-K Risk-First Bisection ------------------ #
+
+def topk_risk_first_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
+    """
+    Top-K Risk-First Bisection (TKRB-K).
+
+    On batch failure, first isolates and tests the top-K riskiest commits:
+
+      For each of the K riskiest commits (by predicted risk p):
+
+        1. Test subbatch [0 .. i]  (up to and including the risky commit)
+        2. Test subbatch [0 .. i-1] (up to and including the previous commit), if i > 0
+
+      If [0 .. i] fails and [0 .. i-1] does NOT fail, then commit i is identified
+      as a culprit (at least one regression must be at i).
+
+    If no culprit is found this way (or there are remaining unknown regressors),
+    we fall back to a TOB-style search over the remaining unknown region.
+
+    We keep results of any subbatches we already tested, and if TOB needs to
+    test exactly the same interval again, we reuse that outcome instead of
+    re-running tests.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    # Cache: (lo, hi) -> has_defect boolean, so we don't re-run identical intervals
+    interval_cache = {}
+
+    def run_interval(lo, hi):
+        """
+        Wrapper around _run_interval_and_update that:
+          - Skips empty intervals.
+          - Checks cache first.
+          - Otherwise runs the interval test, updates time/cost/status/feedback,
+            and stores the has_defect result in the cache.
+        """
+        nonlocal current_time, first_test, total_tests_run
+
+        if lo > hi:
+            return False
+
+        key = (lo, hi)
+        if key in interval_cache:
+            return interval_cache[key]
+
+        has_defect, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+        )
+        interval_cache[key] = has_defect
+        return has_defect
+
+    # ---- Step 1: Initial whole-batch test (like TOB) ----
+    whole_fails = run_interval(0, n - 1)
+    if not whole_fails:
+        # Entire batch clean; _run_interval_and_update has already filled feedback/status.
+        return total_tests_run, culprit_times, feedback_times
+
+    # ---- Step 2: Top-K risk-first probing ----
+    risks = [
+        (i, float(batch_sorted[i].get("risk", 0.0) or 0.0))
+        for i in range(n)
+    ]
+    # Sort by risk descending
+    risks.sort(key=lambda t: t[1], reverse=True)
+    top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
+
+    for idx in top_indices:
+        if status[idx] != "unknown":
+            continue
+
+        # Test subbatch [0 .. idx] (including risky commit)
+        curr_fails = run_interval(0, idx)
+
+        # Test subbatch [0 .. idx-1] if it exists
+        prev_fails = False
+        if idx > 0:
+            prev_fails = run_interval(0, idx - 1)
+
+        # If [0..idx] fails but [0..idx-1] is clean, then idx is a culprit
+        if curr_fails and not prev_fails:
+            c = batch_sorted[idx]
+            status[idx] = "defect_found"
+
+            fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+            feedback_times[c["commit_id"]] = fb_min
+            if c["true_label"]:
+                culprit_times.append(fb_min)
+
+    # ---- Step 3: Fall back to TOB-style search over remaining unknowns ----
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the entire unknown region
+        still_fails = run_interval(lo, hi)
+        if not still_fails:
+            # No remaining regressors in unknown region; any clean-interval status
+            # and feedback was already applied when that interval was first tested.
+            break
+
+        # Standard midpoint-based binary search on the unknown region,
+        # but using our cached run_interval.
+        left = lo
+        right = hi
+        while left < right:
+            mid = (left + right) // 2
+            left_fails = run_interval(left, mid)
+            if left_fails:
+                right = mid
+            else:
+                left = mid + 1
+
+        culprit_idx = left
+        c = batch_sorted[culprit_idx]
+        if status[culprit_idx] != "defect_found":
+            status[culprit_idx] = "defect_found"
+            fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+            feedback_times[c["commit_id"]] = fb_min
+            if c["true_label"]:
+                culprit_times.append(fb_min)
 
     return total_tests_run, culprit_times, feedback_times

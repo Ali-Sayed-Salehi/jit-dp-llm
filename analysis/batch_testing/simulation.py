@@ -11,16 +11,20 @@ from batch_strats import (
     simulate_rasb_t_with_bisect,
     simulate_rapb_t_a_with_bisect,
     simulate_rrbb_with_bisect,
+    simulate_ratb_with_bisect,
 )
+
 from bisection_strats import (
     time_ordered_bisect,
     exhaustive_parallel,
     risk_weighted_adaptive_bisect,
+    topk_risk_first_bisect,
     TEST_DURATION_MIN,
     TESTS_PER_RUN,
     TestExecutor,
     run_test_suite,
 )
+
 
 # ====== CONFIG ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -33,6 +37,7 @@ RASB_THRESHOLD = 0.5
 RAPB_THRESHOLD = 0.35
 RAPB_AGING_PER_HOUR = 0.05
 RRBB_BUDGET = 1.0
+RATB_THRESHOLD = 0.5
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
@@ -41,17 +46,19 @@ RANDOM_SEED = 42
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
 BATCHING_STRATEGIES = [
-    ("TWB-N",    simulate_twb_with_bisect,     BATCH_HOURS),
-    ("FSB-N",    simulate_fsb_with_bisect,     FSB_SIZE),
-    ("RASB-T",   simulate_rasb_t_with_bisect,  RASB_THRESHOLD),
-    ("RAPB-T-a", simulate_rapb_t_a_with_bisect,(RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
-    ("RRBB-T",   simulate_rrbb_with_bisect,    RRBB_BUDGET),
+    ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
+    ("FSB",  simulate_fsb_with_bisect,      FSB_SIZE),
+    ("RASB", simulate_rasb_t_with_bisect,   RASB_THRESHOLD),
+    ("RAPB", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
+    ("RRBB", simulate_rrbb_with_bisect,     RRBB_BUDGET),
+    ("RATB", simulate_ratb_with_bisect,     RATB_THRESHOLD),
 ]
 
 BISECTION_STRATEGIES = [
-    ("TOB", time_ordered_bisect),
-    ("PAR", exhaustive_parallel),
+    ("TOB",  time_ordered_bisect),
+    ("PAR",  exhaustive_parallel),
     ("RWAB", risk_weighted_adaptive_bisect),
+    ("TKRB", topk_risk_first_bisect),
 ]
 
 random.seed(RANDOM_SEED)
@@ -266,7 +273,8 @@ def run_exhaustive_testing(commits):
 
     if feedback_times:
         mean_fb_hr = round(
-            (sum(feedback_times.values()) / len(feedback_times)) / 60.0, 2
+            (sum(feedback_times.values()) / len(feedback_times)) / 60.0,
+            2,
         )
     else:
         mean_fb_hr = 0.0
@@ -395,7 +403,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     base_commits_for_context = read_commits_from_all(
         ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
     )
-    et_results = run_exhaustive_testing(base_commits_for_context) if base_commits_for_context else {}
+    et_results = (
+        run_exhaustive_testing(base_commits_for_context)
+        if base_commits_for_context
+        else {}
+    )
     baseline = {}
     if base_commits_for_context:
         baseline = simulate_twb_with_bisect(
@@ -417,13 +429,17 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local
         ]
         if feas:
-            return min(feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"]))
-        return min(pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"]))
+            return min(
+                feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"])
+            )
+        return min(
+            pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"])
+        )
 
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline,
+        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline,
         "num_test_workers": NUM_TEST_WORKERS,
     }
 
@@ -437,23 +453,23 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
 
                 # Strategy-specific continuous/int params
-                if b_name == "TWB-N":
+                if b_name == "TWB":
                     param = trial.suggest_float("BATCH_HOURS", 0.25, 24.0)
-                elif b_name == "FSB-N":
+                elif b_name == "FSB":
                     param = trial.suggest_int("FSB_SIZE", 4, 200)
-                elif b_name == "RASB-T":
+                elif b_name == "RASB":
                     param = trial.suggest_float("RASB_THRESHOLD", 0.10, 0.95)
-                elif b_name == "RAPB-T-a":
+                elif b_name == "RAPB":
                     T = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
                     a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
                     param = (T, a)
-                elif b_name == "RRBB-T":
-                    # NEW: tune RRBB budget continuously over a range
-                    # (matches the old manual sweep range 0.25–6.0)
+                elif b_name == "RRBB":
                     param = trial.suggest_float("RRBB_BUDGET", 0.25, 6.0)
+                elif b_name == "RATB":
+                    param = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                 else:
-                    # Should not happen, but keep as a guard
                     return (float("inf"), float("inf"))
+
 
                 pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
                 commits = read_commits_from_all(
@@ -479,19 +495,21 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 pred_thr = params.get("pred_threshold", PRED_THRESHOLD)
 
                 # unpack for re-eval
-                if b_name == "TWB-N":
+                if b_name == "TWB":
                     param = params["BATCH_HOURS"]
-                elif b_name == "FSB-N":
+                elif b_name == "FSB":
                     param = int(params["FSB_SIZE"])
-                elif b_name == "RASB-T":
+                elif b_name == "RASB":
                     param = params["RASB_THRESHOLD"]
-                elif b_name == "RAPB-T-a":
+                elif b_name == "RAPB":
                     param = (
                         params["RAPB_THRESHOLD"],
                         params["RAPB_AGING_PER_HOUR"],
                     )
-                elif b_name == "RRBB-T":
+                elif b_name == "RRBB":
                     param = params["RRBB_BUDGET"]
+                elif b_name == "RATB":
+                    param = params["RATB_THRESHOLD"]
                 else:
                     continue
 
@@ -508,22 +526,22 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                         "pred_threshold_used": pred_thr,
                         "best_params": (
                             {"BATCH_HOURS": param}
-                            if b_name == "TWB-N"
+                            if b_name == "TWB"
                             else {"FSB_SIZE": param}
-                            if b_name == "FSB-N"
+                            if b_name == "FSB"
                             else {"RASB_THRESHOLD": param}
-                            if b_name == "RASB-T"
+                            if b_name == "RASB"
                             else {
                                 "RAPB_THRESHOLD": param[0],
                                 "RAPB_AGING_PER_HOUR": param[1],
                             }
-                            if b_name == "RAPB-T-a"
-                            else {"RRBB_BUDGET": param}  # NEW: RRBB
+                            if b_name == "RAPB"
+                            else {"RRBB_BUDGET": param}
+                            if b_name == "RRBB"
+                            else {"RATB_THRESHOLD": param}
                         ),
                         "total_tests_run": res.get("total_tests_run"),
-                        "mean_feedback_time_hr": res.get(
-                            "mean_feedback_time_hr"
-                        ),
+                        "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
                         "mean_time_to_culprit_hr": res.get(
                             "mean_time_to_culprit_hr"
                         ),
@@ -595,7 +613,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         if k
         not in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
+            "Baseline (TWB + TOB, BATCH_HOURS=4)",
             "num_test_workers",
         )
     ]
@@ -669,7 +687,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline_final,
+        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline_final,
         "final_window": {
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
@@ -683,7 +701,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for combo_name, val in eval_out.items():
         if combo_name in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
+            "Baseline (TWB + TOB, BATCH_HOURS=4)",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
@@ -709,13 +727,15 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         pred_thr = val.get("pred_threshold_used", PRED_THRESHOLD)
 
         # Unpack params for this strategy
-        if b_name == "RAPB-T-a":
+        if b_name == "RAPB":
             param = (
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
         else:
-            # single-valued dict e.g., {"BATCH_HOURS": x} or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} or {"RRBB_BUDGET": b}
+            # single-valued dict e.g., {"BATCH_HOURS": x} 
+            # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
+            # or {"RRBB_BUDGET": b} or {"RATB_THRESHOLD": t}
             try:
                 param = list(best_params.values())[0]
             except Exception:
@@ -766,7 +786,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for k, v in final_results.items():
         if k in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
+            "Baseline (TWB + TOB, BATCH_HOURS=4)",
             "final_window",
             "best_by_total_tests",
             "best_by_max_ttc",

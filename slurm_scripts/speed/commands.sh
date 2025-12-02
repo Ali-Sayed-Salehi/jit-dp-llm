@@ -44,10 +44,10 @@ echo "Running script ..."
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
 --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
 --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_150/batch_eval_mopt.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_150/batch_test_mopt.json \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_100/batch_eval_mopt.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_100/batch_test_mopt.json \
 --mopt-trials 200 \
---num-test-workers 150
+--num-test-workers 100
 # --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
