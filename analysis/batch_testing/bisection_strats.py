@@ -1,257 +1,529 @@
-# bisection_strats.py
-import random
 from datetime import timedelta
 
-# shared across all bisection algos
-TEST_DURATION_MIN = 10
-TOP_K_RISK_FIRST = 3  # for TKRB-K
+TEST_DURATION_MIN = 21
+
+TESTS_PER_BATCH_RUN = 850      # first test per batch
+TESTS_PER_BISECTION_RUN = 4    # follow-up tests
+TESTS_PER_RUN = TESTS_PER_BATCH_RUN
+
+TKRB_TOP_K = 1
+
+class TestExecutor:
+    """
+    Central test executor with a fixed number of workers.
+    Each test takes a fixed duration (TEST_DURATION_MIN).
+    When all workers are busy, new tests wait in a FIFO sense, implemented
+    by tracking each worker's 'free at' time and choosing the earliest.
+    """
+    def __init__(self, num_workers, test_duration_min):
+        self.num_workers = num_workers
+        self.test_duration = timedelta(minutes=test_duration_min)
+        # worker_free_times[i] = datetime when worker i becomes free
+        self.worker_free_times = [None] * num_workers
+
+    def _ensure_initialized(self, t0):
+        # Initialize all workers as free at t0 the first time we schedule.
+        for i in range(self.num_workers):
+            if self.worker_free_times[i] is None:
+                self.worker_free_times[i] = t0
+
+    def schedule(self, requested_start_time):
+        """
+        Submit a test that becomes 'ready' at requested_start_time.
+        Returns the actual finish time given current queue & workers.
+        """
+        self._ensure_initialized(requested_start_time)
+
+        # Find worker that becomes free earliest
+        idx = min(range(self.num_workers), key=lambda i: self.worker_free_times[i])
+        earliest_free = self.worker_free_times[idx]
+
+        actual_start = max(requested_start_time, earliest_free)
+        finish_time = actual_start + self.test_duration
+        self.worker_free_times[idx] = finish_time
+        return finish_time
+
+
+def run_test_suite(executor, requested_start_time, num_tests):
+    """
+    Run `num_tests` individual tests in parallel as much as the executor allows.
+    All of them become ready at `requested_start_time`.
+
+    Returns the time when the *last* of those tests finishes.
+    """
+    finish_times = []
+    for _ in range(num_tests):
+        finish_times.append(executor.schedule(requested_start_time))
+    return max(finish_times)
+
 
 def batch_has_regressor(batch):
     return any(c["true_label"] for c in batch)
 
+# ------------------ SHARED INTERVAL TEST HELPER ------------------ #
 
-def risk_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times):
-    total_tests_run += 1
-    finish_time = start_time + timedelta(minutes=TEST_DURATION_MIN)
-
-    if not batch_has_regressor(batch):
-        for c in batch:
-            cid = c["commit_id"]
-            if cid not in feedback_times:
-                fb_min = (finish_time - c["ts"]).total_seconds() / 60
-                feedback_times[cid] = fb_min
-        return total_tests_run, culprit_times, feedback_times
-
-    if len(batch) == 1:
-        c = batch[0]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        return total_tests_run, culprit_times, feedback_times
-
-    # order by risk, test risky half first
-    batch.sort(key=lambda x: x["risk"], reverse=True)
-    mid = len(batch) // 2
-    risky_half = batch[:mid]
-    safe_half = batch[mid:]
-
-    total_tests_run, culprit_times, feedback_times = risk_ordered_bisect(
-        risky_half, finish_time, total_tests_run, culprit_times, feedback_times
-    )
-    total_tests_run, culprit_times, feedback_times = risk_ordered_bisect(
-        safe_half, finish_time, total_tests_run, culprit_times, feedback_times
-    )
-    return total_tests_run, culprit_times, feedback_times
-
-
-def unordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times):
-    total_tests_run += 1
-    finish_time = start_time + timedelta(minutes=TEST_DURATION_MIN)
-
-    # if the whole batch passes, everyone gets feedback at finish_time
-    if not batch_has_regressor(batch):
-        for c in batch:
-            cid = c["commit_id"]
-            if cid not in feedback_times:
-                fb_min = (finish_time - c["ts"]).total_seconds() / 60
-                feedback_times[cid] = fb_min
-        return total_tests_run, culprit_times, feedback_times
-
-    # base case: single commit
-    if len(batch) == 1:
-        c = batch[0]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        return total_tests_run, culprit_times, feedback_times
-
-    # shuffle the batch itself so the two halves are random subsets
-    batch = list(batch)
-    random.shuffle(batch)
-
-    mid = len(batch) // 2
-    left = batch[:mid]
-    right = batch[mid:]
-
-    # we can still randomize which half to test first
-    halves = [left, right]
-    random.shuffle(halves)
-
-    for h in halves:
-        total_tests_run, culprit_times, feedback_times = unordered_bisect(
-            h, finish_time, total_tests_run, culprit_times, feedback_times
-        )
-
-    return total_tests_run, culprit_times, feedback_times
-
-
-
-def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times):
+def _run_interval_and_update(
+    batch_sorted,
+    status,
+    lo,
+    hi,
+    current_time,
+    first_test,
+    total_tests_run,
+    feedback_times,
+    executor,
+):
     """
-    Time-Ordered Bisection (TOB):
-    - sort by ts (oldest first)
-    - split
-    - test older half first
+    Shared helper for 'test_interval' used by multiple bisection strategies.
+
+    Parameters
+    ----------
+    batch_sorted : list[dict]
+        Commits in this batch, sorted by "ts".
+    status : list[str]
+        Per-commit status: "unknown", "clean", or "defect_found".
+    lo, hi : int
+        Inclusive index range within batch_sorted.
+    current_time : datetime
+        Logical current time at which this logical test run is scheduled.
+    first_test : bool
+        True if this is the first test in the batch (controls 850 vs 4 cost).
+    total_tests_run : int
+        Accumulated test count.
+    feedback_times : dict
+        commit_id -> feedback time in minutes.
+    executor : TestExecutor
+        Shared executor for scheduling physical tests.
+
+    Returns
+    -------
+    has_defect : bool
+    current_time : datetime
+    first_test : bool
+    total_tests_run : int
     """
-    total_tests_run += 1
-    finish_time = start_time + timedelta(minutes=TEST_DURATION_MIN)
+    if lo > hi:
+        return False, current_time, first_test, total_tests_run
 
-    if not batch_has_regressor(batch):
-        for c in batch:
-            cid = c["commit_id"]
-            if cid not in feedback_times:
-                fb_min = (finish_time - c["ts"]).total_seconds() / 60
-                feedback_times[cid] = fb_min
-        return total_tests_run, culprit_times, feedback_times
+    tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
+    first_test = False
 
-    if len(batch) == 1:
-        c = batch[0]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        return total_tests_run, culprit_times, feedback_times
+    # Cost accounting
+    total_tests_run += tests_this_run
 
-    # sort oldest -> newest
-    batch.sort(key=lambda x: x["ts"])
-    mid = len(batch) // 2
-    older_half = batch[:mid]
-    newer_half = batch[mid:]
+    # All physical tests for this logical run start at current_time
+    finish_time = run_test_suite(executor, current_time, tests_this_run)
 
-    # test older commits first, then newer
-    total_tests_run, culprit_times, feedback_times = time_ordered_bisect(
-        older_half, finish_time, total_tests_run, culprit_times, feedback_times
+    has_defect = any(
+        batch_sorted[i]["true_label"] and status[i] != "defect_found"
+        for i in range(lo, hi + 1)
     )
-    total_tests_run, culprit_times, feedback_times = time_ordered_bisect(
-        newer_half, finish_time, total_tests_run, culprit_times, feedback_times
-    )
-    return total_tests_run, culprit_times, feedback_times
 
-
-def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times):
-    """
-    Risk-Weighted Adaptive Bisection (RWAB)
-    - for failing batches, split into two sub-batches whose *total risk* is as balanced as possible
-    - recurse on the higher-risk sub-batch first
-    """
-    total_tests_run += 1
-    finish_time = start_time + timedelta(minutes=TEST_DURATION_MIN)
-
-    # if whole batch passes, everyone gets feedback
-    if not batch_has_regressor(batch):
-        for c in batch:
-            cid = c["commit_id"]
-            if cid not in feedback_times:
-                fb_min = (finish_time - c["ts"]).total_seconds() / 60
-                feedback_times[cid] = fb_min
-        return total_tests_run, culprit_times, feedback_times
-
-    # base case
-    if len(batch) == 1:
-        c = batch[0]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        return total_tests_run, culprit_times, feedback_times
-
-    # compute total risk
-    total_risk = sum(c["risk"] for c in batch)
-
-    # if there's no risk signal (all zeros), just split by length
-    if total_risk <= 0.0:
-        mid = len(batch) // 2
-        left = batch[:mid]
-        right = batch[mid:]
-        left_risk = 0.0
-        right_risk = 0.0
-    else:
-        # greedy risk-balancing:
-        # sort by risk desc, then assign each commit to the currently lighter side
-        sorted_batch = sorted(batch, key=lambda x: x["risk"], reverse=True)
-        left = []
-        right = []
-        left_risk = 0.0
-        right_risk = 0.0
-        for c in sorted_batch:
-            if left_risk <= right_risk:
-                left.append(c)
-                left_risk += c["risk"]
-            else:
-                right.append(c)
-                right_risk += c["risk"]
-
-    # test the riskier side first
-    first, second = (left, right) if left_risk >= right_risk else (right, left)
-
-    total_tests_run, culprit_times, feedback_times = risk_weighted_adaptive_bisect(
-        first, finish_time, total_tests_run, culprit_times, feedback_times
-    )
-    total_tests_run, culprit_times, feedback_times = risk_weighted_adaptive_bisect(
-        second, finish_time, total_tests_run, culprit_times, feedback_times
-    )
-    return total_tests_run, culprit_times, feedback_times
-
-
-def top_k_risk_first_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times):
-    """
-    Top-K Risk-First Bisection (TKRB-K)
-    - test whole batch (this call)
-    - if it fails, test the top-K riskiest commits one-by-one
-    - then run standard (risk-ordered) bisection on the remainder
-    """
-    total_tests_run += 1
-    finish_time = start_time + timedelta(minutes=TEST_DURATION_MIN)
-
-    # if whole batch passes, done
-    if not batch_has_regressor(batch):
-        for c in batch:
-            cid = c["commit_id"]
-            if cid not in feedback_times:
-                fb_min = (finish_time - c["ts"]).total_seconds() / 60
-                feedback_times[cid] = fb_min
-        return total_tests_run, culprit_times, feedback_times
-
-    # base case
-    if len(batch) == 1:
-        c = batch[0]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        return total_tests_run, culprit_times, feedback_times
-
-    # sort by risk desc
-    sorted_batch = sorted(batch, key=lambda x: x["risk"], reverse=True)
-    top_k = sorted_batch[:TOP_K_RISK_FIRST]
-    remainder = sorted_batch[TOP_K_RISK_FIRST:]
-
-    # now test each top-k commit individually, one after another
-    current_time = finish_time
-    for c in top_k:
-        total_tests_run += 1
-        indiv_finish = current_time + timedelta(minutes=TEST_DURATION_MIN)
-        fb_min = (indiv_finish - c["ts"]).total_seconds() / 60
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-        current_time = indiv_finish  # next test starts after this one
-
-    # after testing top-K, if there's remainder:
-    if remainder:
-        if batch_has_regressor(remainder):
-            # continue with standard (risk-ordered) bisection on the rest
-            total_tests_run, culprit_times, feedback_times = risk_ordered_bisect(
-                remainder, current_time, total_tests_run, culprit_times, feedback_times
-            )
-        else:
-            # all remaining are clean -> give them feedback at current_time
-            for c in remainder:
-                cid = c["commit_id"]
+    if not has_defect:
+        # Interval is clean; provide feedback for all unknown commits here.
+        for i in range(lo, hi + 1):
+            if status[i] == "unknown":
+                status[i] = "clean"
+                cid = batch_sorted[i]["commit_id"]
                 if cid not in feedback_times:
-                    fb_min = (current_time - c["ts"]).total_seconds() / 60
+                    fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
                     feedback_times[cid] = fb_min
+
+    current_time = finish_time
+    return has_defect, current_time, first_test, total_tests_run
+
+
+# ------------------ TOB (unchanged logic, uses helper) ------------------ #
+
+def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+    """
+    Time-Ordered Bisection (TOB) with central executor.
+
+    Tests are logically sequential (each test's result is needed to pick the next one),
+    so we submit them one at a time to the executor.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the entire unknown region
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+        )
+        if not still_fails:
+            break
+
+        left = lo
+        right = hi
+        # Standard midpoint-based binary search
+        while left < right:
+            mid = (left + right) // 2
+            left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted, status, left, mid, current_time, first_test, total_tests_run, feedback_times, executor
+            )
+            if left_fails:
+                right = mid
+            else:
+                left = mid + 1
+
+        idx = left
+        c = batch_sorted[idx]
+        status[idx] = "defect_found"
+
+        fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    return total_tests_run, culprit_times, feedback_times
+
+
+# ------------------ Exhaustive variants (unchanged) ------------------ #
+
+def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+    """
+    Parallel 'no-bisection' strategy.
+
+    Semantic A:
+      - Baseline is the commit *before* the first commit in the batch.
+      - All commits in the batch are potential culprits.
+
+    Semantics here:
+      - If is_batch_root:
+          * Run ONE expensive batch run (850 tests) for the whole batch (conceptually on tip).
+          * Then run cheap per-commit suites (4 tests) for all commits EXCEPT the last.
+          * The last commit (D) gets its feedback time when the LAST intermediate
+            cheap run finishes (i.e., after C for batch [A,B,C,D]).
+      - If not is_batch_root:
+          * Just run cheap per-commit suites (4 tests) for all commits independently.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
+
+    # === Degenerate case: only one commit in the batch ===
+    # Then there's no "intermediate"; the only commit's feedback is at the
+    # finish of its own tests (850 if root, 4 otherwise).
+    if n == 1:
+        if is_batch_root:
+            tests_this_run = TESTS_PER_BATCH_RUN
+        else:
+            tests_this_run = TESTS_PER_BISECTION_RUN
+        total_tests_run += tests_this_run
+        finish_time = run_test_suite(executor, start_time, tests_this_run)
+
+        c = batch_sorted[0]
+        cid = c["commit_id"]
+        fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[cid] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+        return total_tests_run, culprit_times, feedback_times
+
+    # === Normal case: at least 2 commits ===
+    if is_batch_root:
+        # 1) One "full" batch run: 850 tests.
+        total_tests_run += TESTS_PER_BATCH_RUN
+        finish_time_batch = run_test_suite(executor, start_time, TESTS_PER_BATCH_RUN)
+
+        # We'll run cheap per-commit tests for all intermediates (indices 0..n-2)
+        # starting after the batch run finishes.
+        requested_time = finish_time_batch
+    else:
+        # Non-root usage: no 850 run; just cheap tests from start_time.
+        requested_time = start_time
+
+    # 2) Cheap per-commit suites (4 tests) for all commits EXCEPT the last.
+    intermediate_finish_times = []
+    for idx in range(0, n - 1):
+        c = batch_sorted[idx]
+
+        tests_this_run = TESTS_PER_BISECTION_RUN
+        total_tests_run += tests_this_run
+
+        finish_time = run_test_suite(executor, requested_time, tests_this_run)
+        intermediate_finish_times.append(finish_time)
+
+        cid = c["commit_id"]
+        fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[cid] = fb_min
+
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    # 3) Feedback for the last commit (D):
+    #    Its status is resolved once the LAST intermediate's cheap run finishes.
+    #    (If there were no intermediates, n==1 case above already handled it.)
+    last_commit = batch_sorted[-1]
+    last_cid = last_commit["commit_id"]
+
+    if intermediate_finish_times:
+        last_intermediate_finish = max(intermediate_finish_times)
+    else:
+        # Should not happen for n>=2, but guard anyway: fall back to batch finish.
+        last_intermediate_finish = finish_time_batch if is_batch_root else requested_time
+
+    fb_min_last = (last_intermediate_finish - last_commit["ts"]).total_seconds() / 60.0
+    feedback_times[last_cid] = fb_min_last
+    if last_commit["true_label"]:
+        culprit_times.append(fb_min_last)
+
+    return total_tests_run, culprit_times, feedback_times
+
+
+
+# ------------------ RWAB using the same helper ------------------ #
+
+def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+    """
+    Risk-Weighted Adaptive Bisection (RWAB).
+
+    Like time_ordered_bisect, but splits failing intervals so that the sum of
+    predicted risk on the left and right halves is approximately balanced.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    # Prefix sums of risk
+    risk_prefix = [0.0] * (n + 1)
+    for i, c in enumerate(batch_sorted):
+        r = float(c.get("risk", 0.0) or 0.0)
+        risk_prefix[i + 1] = risk_prefix[i] + r
+
+    def risk_sum(lo, hi):
+        return risk_prefix[hi + 1] - risk_prefix[lo]
+
+    def choose_risk_balanced_split(lo, hi):
+        if lo >= hi:
+            return lo
+        total_risk = risk_sum(lo, hi)
+        if total_risk <= 0.0:
+            return (lo + hi) // 2
+
+        target = total_risk / 2.0
+        best_idx = lo
+        best_diff = float("inf")
+
+        for s in range(lo, hi):
+            left_risk = risk_sum(lo, s)
+            diff = abs(left_risk - target)
+            if diff < best_diff:
+                best_diff = diff
+                best_idx = s
+
+        return best_idx
+
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the whole unknown region
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+        )
+        if not still_fails:
+            break
+
+        left = lo
+        right = hi
+        # Risk-weighted "binary" search
+        while left < right:
+            split = choose_risk_balanced_split(left, right)
+            left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted, status, left, split, current_time, first_test, total_tests_run, feedback_times, executor
+            )
+            if left_fails:
+                right = split
+            else:
+                left = split + 1
+
+        idx = left
+        c = batch_sorted[idx]
+        status[idx] = "defect_found"
+
+        fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    return total_tests_run, culprit_times, feedback_times
+
+
+# ------------------ TKRB-K: Top-K Risk-First Bisection ------------------ #
+
+def topk_risk_first_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
+    """
+    Top-K Risk-First Bisection (TKRB-K).
+
+    On batch failure, first isolates and tests the top-K riskiest commits:
+
+      For each of the K riskiest commits (by predicted risk p):
+
+        1. Test subbatch [0 .. i]  (up to and including the risky commit)
+        2. Test subbatch [0 .. i-1] (up to and including the previous commit), if i > 0
+
+      If [0 .. i] fails and [0 .. i-1] does NOT fail, then commit i is identified
+      as a culprit (at least one regression must be at i).
+
+    If no culprit is found this way (or there are remaining unknown regressors),
+    we fall back to a TOB-style search over the remaining unknown region.
+
+    We keep results of any subbatches we already tested, and if TOB needs to
+    test exactly the same interval again, we reuse that outcome instead of
+    re-running tests.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    # Cache: (lo, hi) -> has_defect boolean, so we don't re-run identical intervals
+    interval_cache = {}
+
+    def run_interval(lo, hi):
+        """
+        Wrapper around _run_interval_and_update that:
+          - Skips empty intervals.
+          - Checks cache first.
+          - Otherwise runs the interval test, updates time/cost/status/feedback,
+            and stores the has_defect result in the cache.
+        """
+        nonlocal current_time, first_test, total_tests_run
+
+        if lo > hi:
+            return False
+
+        key = (lo, hi)
+        if key in interval_cache:
+            return interval_cache[key]
+
+        has_defect, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+        )
+        interval_cache[key] = has_defect
+        return has_defect
+
+    # ---- Step 1: Initial whole-batch test (like TOB) ----
+    whole_fails = run_interval(0, n - 1)
+    if not whole_fails:
+        # Entire batch clean; _run_interval_and_update has already filled feedback/status.
+        return total_tests_run, culprit_times, feedback_times
+
+    # ---- Step 2: Top-K risk-first probing ----
+    risks = [
+        (i, float(batch_sorted[i].get("risk", 0.0) or 0.0))
+        for i in range(n)
+    ]
+    # Sort by risk descending
+    risks.sort(key=lambda t: t[1], reverse=True)
+    top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
+
+    for idx in top_indices:
+        if status[idx] != "unknown":
+            continue
+
+        # Test subbatch [0 .. idx] (including risky commit)
+        curr_fails = run_interval(0, idx)
+
+        # Test subbatch [0 .. idx-1] if it exists
+        prev_fails = False
+        if idx > 0:
+            prev_fails = run_interval(0, idx - 1)
+
+        # If [0..idx] fails but [0..idx-1] is clean, then idx is a culprit
+        if curr_fails and not prev_fails:
+            c = batch_sorted[idx]
+            status[idx] = "defect_found"
+
+            fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+            feedback_times[c["commit_id"]] = fb_min
+            if c["true_label"]:
+                culprit_times.append(fb_min)
+
+    # ---- Step 3: Fall back to TOB-style search over remaining unknowns ----
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the entire unknown region
+        still_fails = run_interval(lo, hi)
+        if not still_fails:
+            # No remaining regressors in unknown region; any clean-interval status
+            # and feedback was already applied when that interval was first tested.
+            break
+
+        # Standard midpoint-based binary search on the unknown region,
+        # but using our cached run_interval.
+        left = lo
+        right = hi
+        while left < right:
+            mid = (left + right) // 2
+            left_fails = run_interval(left, mid)
+            if left_fails:
+                right = mid
+            else:
+                left = mid + 1
+
+        culprit_idx = left
+        c = batch_sorted[culprit_idx]
+        if status[culprit_idx] != "defect_found":
+            status[culprit_idx] = "defect_found"
+            fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+            feedback_times[c["commit_id"]] = fb_min
+            if c["true_label"]:
+                culprit_times.append(fb_min)
 
     return total_tests_run, culprit_times, feedback_times

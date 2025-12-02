@@ -12,6 +12,8 @@ import ast
 import os
 
 """
+NOTE: Delete output files befoe starting the script to avoid duplication
+
 Fetches recent performance alert summaries from Treeherder and extracts regression info.
 
 Flow:
