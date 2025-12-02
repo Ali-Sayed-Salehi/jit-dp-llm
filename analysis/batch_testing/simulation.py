@@ -10,11 +10,10 @@ from batch_strats import (
     simulate_fsb_with_bisect,
     simulate_rasb_t_with_bisect,
     simulate_rapb_t_a_with_bisect,
-    simulate_rrbb_with_bisect
+    simulate_rrbb_with_bisect,
 )
 from bisection_strats import (
     time_ordered_bisect,
-    exhaustive_sequential,
     exhaustive_parallel,
     risk_weighted_adaptive_bisect,
     TEST_DURATION_MIN,
@@ -23,7 +22,7 @@ from bisection_strats import (
     run_test_suite,
 )
 
-# ====== CONFIG (edit here) ======
+# ====== CONFIG ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
@@ -33,6 +32,7 @@ FSB_SIZE = 20
 RASB_THRESHOLD = 0.5
 RAPB_THRESHOLD = 0.35
 RAPB_AGING_PER_HOUR = 0.05
+RRBB_BUDGET = 1.0
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
@@ -41,115 +41,76 @@ RANDOM_SEED = 42
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
 BATCHING_STRATEGIES = [
-    ("TWB-N", simulate_twb_with_bisect, BATCH_HOURS),
-    ("FSB-N", simulate_fsb_with_bisect, FSB_SIZE),
-    ("RASB-T", simulate_rasb_t_with_bisect, RASB_THRESHOLD),
-    ("RAPB-T-a", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
-    ("RRBB-T", simulate_rrbb_with_bisect, 1.0),
+    ("TWB-N",    simulate_twb_with_bisect,     BATCH_HOURS),
+    ("FSB-N",    simulate_fsb_with_bisect,     FSB_SIZE),
+    ("RASB-T",   simulate_rasb_t_with_bisect,  RASB_THRESHOLD),
+    ("RAPB-T-a", simulate_rapb_t_a_with_bisect,(RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
+    ("RRBB-T",   simulate_rrbb_with_bisect,    RRBB_BUDGET),
 ]
 
 BISECTION_STRATEGIES = [
     ("TOB", time_ordered_bisect),
-    ("SEQ", exhaustive_sequential),
     ("PAR", exhaustive_parallel),
     ("RWAB", risk_weighted_adaptive_bisect),
 ]
-
-# ---- PARAM SWEEPS (kept for --mode sweep; uses existing frange/irange) ----
-def frange(start, stop, step, round_to=4):
-    vals = []
-    v = start
-    while v <= stop + 1e-9:
-        vals.append(round(v, round_to))
-        v += step
-    return vals
-
-def irange(start, stop, step=1):
-    return list(range(start, stop + 1, step))
-
-PRED_THRESHOLD_CANDIDATES = (
-    frange(0.30, 0.70, 0.01)
-    + frange(0.70, 0.90, 0.02)
-    + frange(0.90, 0.99, 0.005)
-    + [0.995]
-)
-
-_TWB_ALL = [{"BATCH_HOURS": v} for v in (
-    frange(0.25, 6.0, 0.25)
-    + frange(6.0, 12.0, 0.5)
-    + frange(12.0, 24.0, 1.0)
-)]
-_FSB_ALL = [{"FSB_SIZE": v} for v in (
-    irange(4, 20, 1) + irange(22, 50, 2) + irange(60, 200, 10)
-)]
-_RASB_ALL = [{"RASB_THRESHOLD": v} for v in (
-    frange(0.10, 0.30, 0.05)
-    + frange(0.30, 0.60, 0.01)
-    + frange(0.60, 0.95, 0.05)
-)]
-
-_RAPB_THRESH = (
-    frange(0.30, 0.45, 0.05)
-    + frange(0.45, 0.65, 0.01)
-    + frange(0.65, 0.80, 0.05)
-)
-_RAPB_AGING = (
-    frange(0.005, 0.020, 0.005)
-    + frange(0.020, 0.050, 0.005)
-    + frange(0.050, 0.200, 0.01)
-)
-_RAPB_ALL = [{"RAPB_THRESHOLD": t, "RAPB_AGING_PER_HOUR": a} for t in _RAPB_THRESH for a in _RAPB_AGING]
-
-_RRBB_ALL = [{"RRBB_BUDGET": v} for v in (
-    frange(0.25, 1.0, 0.05)   # fine-grained for low budgets
-    + frange(1.0, 3.0, 0.10)  # medium range
-    + frange(3.0, 6.0, 0.25)  # coarser for high budgets
-)]
-
-PARAM_SWEEPS = {
-    "TWB-N": _TWB_ALL,
-    "FSB-N": _FSB_ALL,
-    "RASB-T": _RASB_ALL,
-    "RAPB-T-a": _RAPB_ALL,
-    "RRBB-T": _RRBB_ALL
-}
 
 random.seed(RANDOM_SEED)
 
 # =================================
 def get_args():
-    parser = argparse.ArgumentParser(description="Batch-testing simulation")
-    parser.add_argument("--mode", choices=["sweep", "mopt"], default="sweep",
-                        help="sweep: grid/param sweep. mopt: multi-objective optimization with Optuna (continuous search).")
-    parser.add_argument("--mopt-trials", type=int, default=200,
-                        help="Number of Optuna trials per (batch,bisect) combo in mopt mode.")
+    parser = argparse.ArgumentParser(description="Batch-testing simulation (Optuna-only mopt).")
+
+    parser.add_argument(
+        "--mopt-trials",
+        type=int,
+        default=200,
+        help="Number of Optuna trials per (batch,bisect) combo.",
+    )
     parser.add_argument(
         "--input-json-eval",
-        default=os.path.join(REPO_ROOT, "analysis", "batch_testing", "final_test_results_perf_mbert_eval.json"),
-        help="Path to EVAL predictions json"
+        default=os.path.join(
+            REPO_ROOT,
+            "analysis",
+            "batch_testing",
+            "final_test_results_perf_mbert_eval.json",
+        ),
+        help="Path to EVAL predictions json",
     )
     parser.add_argument(
         "--input-json-final",
-        default=os.path.join(REPO_ROOT, "analysis", "batch_testing", "final_test_results_perf_mbert_final_test.json"),
-        help="Path to FINAL predictions json"
+        default=os.path.join(
+            REPO_ROOT,
+            "analysis",
+            "batch_testing",
+            "final_test_results_perf_mbert_final_test.json",
+        ),
+        help="Path to FINAL predictions json",
     )
     parser.add_argument(
         "--output-eval",
-        default=os.path.join(REPO_ROOT, "analysis", "batch_testing", "batch_sim_results_eval.json"),
-        help="Where to write EVAL sim results (and where --final-only will read from)"
+        default=os.path.join(
+            REPO_ROOT,
+            "analysis",
+            "batch_testing",
+            "batch_sim_results_eval.json",
+        ),
+        help="Where to write EVAL sim results (and where --final-only will read from)",
     )
     parser.add_argument(
         "--output-final",
-        default=os.path.join(REPO_ROOT, "analysis", "batch_testing", "batch_sim_results_final_test.json"),
-        help="Where to write FINAL sim results"
+        default=os.path.join(
+            REPO_ROOT,
+            "analysis",
+            "batch_testing",
+            "batch_sim_results_final_test.json",
+        ),
+        help="Where to write FINAL sim results",
     )
-    # skip eval and only run FINAL using precomputed eval results
     parser.add_argument(
         "--final-only",
         action="store_true",
-        help="Skip running eval; load eval results from --output-eval and run only the FINAL replay."
+        help="Skip running eval; load eval results from --output-eval and run only the FINAL replay.",
     )
-    # allow overriding num test workers from CLI
     parser.add_argument(
         "--num-test-workers",
         type=int,
@@ -254,13 +215,15 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
                 pred_label = 0
                 p_pos = 0.0
 
-            commits.append({
-                "commit_id": node,
-                "true_label": bool(true_label),
-                "prediction": pred_label,
-                "risk": p_pos,
-                "ts": ts,
-            })
+            commits.append(
+                {
+                    "commit_id": node,
+                    "true_label": bool(true_label),
+                    "prediction": pred_label,
+                    "risk": p_pos,
+                    "ts": ts,
+                }
+            )
 
     commits.sort(key=lambda x: x["ts"])
     return commits
@@ -302,7 +265,9 @@ def run_exhaustive_testing(commits):
             culprit_times.append(fb_min)
 
     if feedback_times:
-        mean_fb_hr = round((sum(feedback_times.values()) / len(feedback_times)) / 60.0, 2)
+        mean_fb_hr = round(
+            (sum(feedback_times.values()) / len(feedback_times)) / 60.0, 2
+        )
     else:
         mean_fb_hr = 0.0
 
@@ -326,10 +291,14 @@ def convert_result_minutes_to_hours(res):
         res["mean_feedback_time_hr"] = round(res["mean_feedback_time_min"] / 60.0, 2)
         del res["mean_feedback_time_min"]
     if "mean_time_to_culprit_min" in res:
-        res["mean_time_to_culprit_hr"] = round(res["mean_time_to_culprit_min"] / 60.0, 2)
+        res["mean_time_to_culprit_hr"] = round(
+            res["mean_time_to_culprit_min"] / 60.0, 2
+        )
         del res["mean_time_to_culprit_min"]
     if "max_time_to_culprit_min" in res:
-        res["max_time_to_culprit_hr"] = round(res["max_time_to_culprit_min"] / 60.0, 2)
+        res["max_time_to_culprit_hr"] = round(
+            res["max_time_to_culprit_min"] / 60.0, 2
+        )
         del res["max_time_to_culprit_min"]
     return res
 
@@ -398,145 +367,12 @@ def choose_best_overall_from_items(items):
     non_worse = [(name, v) for name, v in items if _is_better_or_equal_to_baseline(v)]
     candidate_pool = non_worse if non_worse else items
 
-    best_name, best_entry = max(candidate_pool, key=lambda kv: _overall_improvement_score(kv[1]))
+    best_name, best_entry = max(
+        candidate_pool, key=lambda kv: _overall_improvement_score(kv[1])
+    )
     if _overall_improvement_score(best_entry) <= 0.0:
         return "NA"
     return best_name
-
-
-# ------------------- SWEEP PIPELINE -------------------
-def run_evaluation_sweep(INPUT_JSON_EVAL):
-    # window from EVAL input
-    tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD_CANDIDATES[0])
-    dynamic_oldest, dynamic_newest = get_cutoff_from_input(ALL_COMMITS_PATH, tmp_pred_map)
-    lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
-    upper_cutoff = dynamic_newest
-
-    # ET & baseline
-    base_commits = read_commits_from_all(ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff)
-    if not base_commits:
-        return None
-
-    et_results = run_exhaustive_testing(base_commits)
-    baseline = simulate_twb_with_bisect(base_commits, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS)
-    baseline = convert_result_minutes_to_hours(baseline)
-
-    baseline_fb = baseline["mean_feedback_time_hr"]
-    baseline_mean_ttc = baseline["mean_time_to_culprit_hr"]
-    baseline_max_ttc = baseline["max_time_to_culprit_hr"]
-    baseline_tests = baseline["total_tests_run"]
-
-    def time_saved_pct(base, val):
-        return round((base - val) / base * 100.0, 2) if base and base > 0 else 0.0
-
-    ci_results = {}
-    for pred_thr in PRED_THRESHOLD_CANDIDATES:
-        pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
-        commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff)
-        if not commits:
-            continue
-
-        for b_name, b_fn, _b_default in BATCHING_STRATEGIES:
-            candidates = PARAM_SWEEPS.get(b_name, [])
-            for bis_name, bis_fn in BISECTION_STRATEGIES:
-                combo_name = f"{b_name} + {bis_name}"
-
-                best_res = None
-                best_params = None
-                best_tests = float("inf")
-                fb_res = None
-                fb_params = None
-                fb_best_max_ttc = float("inf")
-
-                for param_dict in candidates:
-                    if b_name == "RAPB-T-a":
-                        param = (param_dict["RAPB_THRESHOLD"], param_dict["RAPB_AGING_PER_HOUR"])
-                    else:
-                        param = list(param_dict.values())[0]
-
-                    res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
-                    res = convert_result_minutes_to_hours(res)
-
-                    if res["max_time_to_culprit_hr"] < fb_best_max_ttc:
-                        fb_best_max_ttc = res["max_time_to_culprit_hr"]
-                        fb_res = res
-                        fb_params = param_dict
-
-                    if res["max_time_to_culprit_hr"] <= baseline_max_ttc:
-                        if res["total_tests_run"] < best_tests:
-                            best_res = res
-                            best_params = param_dict
-                            best_tests = res["total_tests_run"]
-
-                candidate_final = None
-                if best_res is not None:
-                    saved_pct = time_saved_pct(baseline_tests, best_res["total_tests_run"])
-                    best_res.update({
-                        "best_params": best_params,
-                        "tests_saved_vs_baseline_pct": saved_pct,
-                        "violates_baseline": False,
-                        "pred_threshold_used": pred_thr,
-                        "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(baseline_fb, best_res["mean_feedback_time_hr"]),
-                        "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_mean_ttc, best_res["mean_time_to_culprit_hr"]),
-                        "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_max_ttc, best_res["max_time_to_culprit_hr"]),
-                    })
-                    candidate_final = best_res
-                else:
-                    if fb_res is None:
-                        continue
-                    saved_pct = time_saved_pct(baseline_tests, fb_res["total_tests_run"])
-                    fb_res.update({
-                        "best_params": fb_params,
-                        "tests_saved_vs_baseline_pct": saved_pct,
-                        "violates_baseline": True,
-                        "pred_threshold_used": pred_thr,
-                        "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(baseline_fb, fb_res["mean_feedback_time_hr"]),
-                        "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_mean_ttc, fb_res["mean_time_to_culprit_hr"]),
-                        "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_max_ttc, fb_res["max_time_to_culprit_hr"]),
-                    })
-                    candidate_final = fb_res
-
-                existing = ci_results.get(combo_name)
-                def is_better(new, old):
-                    if old is None: return True
-                    if not new["violates_baseline"] and old["violates_baseline"]: return True
-                    if new["violates_baseline"] and not old["violates_baseline"]: return False
-                    return new["total_tests_run"] < old["total_tests_run"]
-                if is_better(candidate_final, existing):
-                    ci_results[combo_name] = candidate_final
-
-    # summarize
-    out_eval = {
-        "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline,
-        "num_test_workers": NUM_TEST_WORKERS,
-    }
-    out_eval.update(ci_results)
-
-    # Per-metric bests
-    out_eval["best_by_total_tests"] = (
-        min(ci_results.items(), key=lambda kv: kv[1]["total_tests_run"])[0]
-        if ci_results else "-"
-    )
-    out_eval["best_by_max_ttc"] = (
-        min(ci_results.items(), key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
-        if ci_results else "-"
-    )
-    out_eval["best_by_mean_feedback_time"] = (
-        min(ci_results.items(), key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
-        if ci_results else "-"
-    )
-
-    # Best overall vs baseline (centralized logic)
-    items = list(ci_results.items())
-    out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(items)
-
-    return {
-        "eval_output": out_eval,
-        "eval_lower_cutoff": lower_cutoff.isoformat(),
-        "eval_upper_cutoff": upper_cutoff.isoformat() if upper_cutoff else None,
-        "mode": "sweep"
-    }
 
 
 # ------------------- MOPT (Optuna, continuous search) -------------------
@@ -544,30 +380,47 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     try:
         import optuna
     except ImportError as e:
-        raise RuntimeError("Optuna is required for --mode mopt. Install with `pip install optuna`.") from e
+        raise RuntimeError(
+            "Optuna is required for this script. Install with `pip install optuna`."
+        ) from e
 
-    tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD_CANDIDATES[0])
-    dynamic_oldest, dynamic_newest = get_cutoff_from_input(ALL_COMMITS_PATH, tmp_pred_map)
+    # Use a fixed default threshold just to determine the time window
+    tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
+    dynamic_oldest, dynamic_newest = get_cutoff_from_input(
+        ALL_COMMITS_PATH, tmp_pred_map
+    )
     lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
     upper_cutoff = dynamic_newest
 
-    base_commits_for_context = read_commits_from_all(ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff)
+    base_commits_for_context = read_commits_from_all(
+        ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
+    )
     et_results = run_exhaustive_testing(base_commits_for_context) if base_commits_for_context else {}
     baseline = {}
     if base_commits_for_context:
-        baseline = simulate_twb_with_bisect(base_commits_for_context, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS)
+        baseline = simulate_twb_with_bisect(
+            base_commits_for_context,
+            time_ordered_bisect,
+            BATCH_HOURS,
+            NUM_TEST_WORKERS,
+        )
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
 
     def pick_best(pareto, baseline_max_ttc_local):
         if not pareto:
             return None
-        feas = [r for r in pareto if baseline_max_ttc_local is None or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local]
+        feas = [
+            r
+            for r in pareto
+            if baseline_max_ttc_local is None
+            or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local
+        ]
         if feas:
             return min(feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"]))
         return min(pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"]))
 
-    # unified output (same shape as sweep)
+    # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
         "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline,
@@ -582,6 +435,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             def objective(trial):
                 # Shared continuous pred threshold
                 pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
+
                 # Strategy-specific continuous/int params
                 if b_name == "TWB-N":
                     param = trial.suggest_float("BATCH_HOURS", 0.25, 24.0)
@@ -593,17 +447,27 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     T = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
                     a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
                     param = (T, a)
+                elif b_name == "RRBB-T":
+                    # NEW: tune RRBB budget continuously over a range
+                    # (matches the old manual sweep range 0.25–6.0)
+                    param = trial.suggest_float("RRBB_BUDGET", 0.25, 6.0)
                 else:
+                    # Should not happen, but keep as a guard
                     return (float("inf"), float("inf"))
 
                 pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
-                commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff)
+                commits = read_commits_from_all(
+                    ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
+                )
                 if not commits:
                     return (float("inf"), float("inf"))
 
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
-                return (res.get("total_tests_run", float("inf")), res.get("max_time_to_culprit_hr", float("inf")))
+                return (
+                    res.get("total_tests_run", float("inf")),
+                    res.get("max_time_to_culprit_hr", float("inf")),
+                )
 
             study = optuna.create_study(directions=["minimize", "minimize"])
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
@@ -622,33 +486,57 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 elif b_name == "RASB-T":
                     param = params["RASB_THRESHOLD"]
                 elif b_name == "RAPB-T-a":
-                    param = (params["RAPB_THRESHOLD"], params["RAPB_AGING_PER_HOUR"])
+                    param = (
+                        params["RAPB_THRESHOLD"],
+                        params["RAPB_AGING_PER_HOUR"],
+                    )
+                elif b_name == "RRBB-T":
+                    param = params["RRBB_BUDGET"]
                 else:
                     continue
 
                 pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
-                commits = read_commits_from_all(ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff)
+                commits = read_commits_from_all(
+                    ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
+                )
                 if not commits:
                     continue
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
-                pareto.append({
-                    "pred_threshold_used": pred_thr,
-                    "best_params": (
-                        {"BATCH_HOURS": param} if b_name == "TWB-N" else
-                        {"FSB_SIZE": param} if b_name == "FSB-N" else
-                        {"RASB_THRESHOLD": param} if b_name == "RASB-T" else
-                        {"RAPB_THRESHOLD": param[0], "RAPB_AGING_PER_HOUR": param[1]}
-                    ),
-                    "total_tests_run": res.get("total_tests_run"),
-                    "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
-                    "mean_time_to_culprit_hr": res.get("mean_time_to_culprit_hr"),
-                    "max_time_to_culprit_hr": res.get("max_time_to_culprit_hr"),
-                    "violates_baseline": (
-                        baseline_max_ttc is not None and
-                        res.get("max_time_to_culprit_hr", 0) > baseline_max_ttc
-                    )
-                })
+                pareto.append(
+                    {
+                        "pred_threshold_used": pred_thr,
+                        "best_params": (
+                            {"BATCH_HOURS": param}
+                            if b_name == "TWB-N"
+                            else {"FSB_SIZE": param}
+                            if b_name == "FSB-N"
+                            else {"RASB_THRESHOLD": param}
+                            if b_name == "RASB-T"
+                            else {
+                                "RAPB_THRESHOLD": param[0],
+                                "RAPB_AGING_PER_HOUR": param[1],
+                            }
+                            if b_name == "RAPB-T-a"
+                            else {"RRBB_BUDGET": param}  # NEW: RRBB
+                        ),
+                        "total_tests_run": res.get("total_tests_run"),
+                        "mean_feedback_time_hr": res.get(
+                            "mean_feedback_time_hr"
+                        ),
+                        "mean_time_to_culprit_hr": res.get(
+                            "mean_time_to_culprit_hr"
+                        ),
+                        "max_time_to_culprit_hr": res.get(
+                            "max_time_to_culprit_hr"
+                        ),
+                        "violates_baseline": (
+                            baseline_max_ttc is not None
+                            and res.get("max_time_to_culprit_hr", 0)
+                            > baseline_max_ttc
+                        ),
+                    }
+                )
 
             selected = pick_best(pareto, baseline_max_ttc)
             if selected is None:
@@ -660,7 +548,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             baseline_tests = baseline.get("total_tests_run", None)
 
             def time_saved_pct(base, val):
-                return round((base - val) / base * 100.0, 2) if base and base > 0 else 0.0
+                return (
+                    round((base - val) / base * 100.0, 2)
+                    if base and base > 0
+                    else 0.0
+                )
 
             result_entry = {
                 "total_tests_run": selected["total_tests_run"],
@@ -670,11 +562,29 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 "violates_baseline": selected["violates_baseline"],
                 "best_params": selected["best_params"],
                 "pred_threshold_used": selected["pred_threshold_used"],
-                "tests_saved_vs_baseline_pct": time_saved_pct(baseline_tests, selected["total_tests_run"]) if baseline_tests else 0.0,
-                "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(baseline_fb, selected["mean_feedback_time_hr"]) if baseline_fb is not None else 0.0,
-                "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_mean_ttc, selected["mean_time_to_culprit_hr"]) if baseline_mean_ttc is not None else 0.0,
-                "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_max_ttc, selected["max_time_to_culprit_hr"]) if baseline_max_ttc is not None else 0.0,
-                "_mopt_pareto_sample_size": len(pareto)
+                "tests_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_tests, selected["total_tests_run"]
+                )
+                if baseline_tests
+                else 0.0,
+                "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_fb, selected["mean_feedback_time_hr"]
+                )
+                if baseline_fb is not None
+                else 0.0,
+                "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_mean_ttc,
+                    selected["mean_time_to_culprit_hr"],
+                )
+                if baseline_mean_ttc is not None
+                else 0.0,
+                "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_max_ttc,
+                    selected["max_time_to_culprit_hr"],
+                )
+                if baseline_max_ttc is not None
+                else 0.0,
+                "_mopt_pareto_sample_size": len(pareto),
             }
             out_eval[combo_key] = result_entry
 
@@ -682,7 +592,8 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     combo_items = [
         (k, v)
         for k, v in out_eval.items()
-        if k not in (
+        if k
+        not in (
             "Exhaustive Testing (ET)",
             "Baseline (TWB-N + TOB, BATCH_HOURS=4)",
             "num_test_workers",
@@ -692,43 +603,56 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # Per-metric bests
     out_eval["best_by_total_tests"] = (
         min(combo_items, key=lambda kv: kv[1]["total_tests_run"])[0]
-        if combo_items else "-"
+        if combo_items
+        else "-"
     )
     out_eval["best_by_max_ttc"] = (
         min(combo_items, key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
-        if combo_items else "-"
+        if combo_items
+        else "-"
     )
     out_eval["best_by_mean_feedback_time"] = (
         min(combo_items, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
-        if combo_items else "-"
+        if combo_items
+        else "-"
     )
 
     # Best overall vs baseline (centralized logic)
-    out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(combo_items)
+    out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(
+        combo_items
+    )
 
     return {
         "eval_output": out_eval,
         "eval_lower_cutoff": lower_cutoff.isoformat(),
         "eval_upper_cutoff": upper_cutoff.isoformat() if upper_cutoff else None,
-        "mode": "mopt"
+        "mode": "mopt",
     }
 
 
 # ------------------- FINAL REPLAY (unified) -------------------
 def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
-    # Build FINAL window from FINAL predictions
-    tmp_pred_map_final = load_predictions(INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD_CANDIDATES[0])
-    final_oldest, final_newest = get_cutoff_from_input(ALL_COMMITS_PATH, tmp_pred_map_final)
+    # Build FINAL window from FINAL predictions (use fixed PRED_THRESHOLD for window discovery)
+    tmp_pred_map_final = load_predictions(
+        INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD
+    )
+    final_oldest, final_newest = get_cutoff_from_input(
+        ALL_COMMITS_PATH, tmp_pred_map_final
+    )
     final_lower = final_oldest or DEFAULT_CUTOFF
     final_upper = final_newest
 
     # ET + Baseline on FINAL window
-    base_commits_final = read_commits_from_all(ALL_COMMITS_PATH, tmp_pred_map_final, final_lower, final_upper)
+    base_commits_final = read_commits_from_all(
+        ALL_COMMITS_PATH, tmp_pred_map_final, final_lower, final_upper
+    )
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
     et_results_final = run_exhaustive_testing(base_commits_final)
-    baseline_final = simulate_twb_with_bisect(base_commits_final, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS)
+    baseline_final = simulate_twb_with_bisect(
+        base_commits_final, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS
+    )
     baseline_final = convert_result_minutes_to_hours(baseline_final)
 
     baseline_fb = baseline_final["mean_feedback_time_hr"]
@@ -737,12 +661,19 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     baseline_tests = baseline_final["total_tests_run"]
 
     def time_saved_pct(base, val):
-        return round((base - val) / base * 100.0, 2) if base and base > 0 else 0.0
+        return (
+            round((base - val) / base * 100.0, 2)
+            if base and base > 0
+            else 0.0
+        )
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
         "Baseline (TWB-N + TOB, BATCH_HOURS=4)": baseline_final,
-        "final_window": {"lower": final_lower.isoformat(), "upper": final_upper.isoformat() if final_upper else None},
+        "final_window": {
+            "lower": final_lower.isoformat(),
+            "upper": final_upper.isoformat() if final_upper else None,
+        },
         "num_test_workers": NUM_TEST_WORKERS,
     }
 
@@ -779,10 +710,12 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
         # Unpack params for this strategy
         if b_name == "RAPB-T-a":
-            param = (best_params["RAPB_THRESHOLD"], best_params["RAPB_AGING_PER_HOUR"])
+            param = (
+                best_params["RAPB_THRESHOLD"],
+                best_params["RAPB_AGING_PER_HOUR"],
+            )
         else:
-            # single-valued dict e.g., {"BATCH_HOURS": x} or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t}
-            # take first (and only) value
+            # single-valued dict e.g., {"BATCH_HOURS": x} or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} or {"RRBB_BUDGET": b}
             try:
                 param = list(best_params.values())[0]
             except Exception:
@@ -790,25 +723,41 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
         # Build FINAL commits using FINAL predictions and the chosen threshold
         pred_map_final = load_predictions(INPUT_JSON_FINAL, pred_threshold=pred_thr)
-        commits_final = read_commits_from_all(ALL_COMMITS_PATH, pred_map_final, final_lower, final_upper)
+        commits_final = read_commits_from_all(
+            ALL_COMMITS_PATH, pred_map_final, final_lower, final_upper
+        )
         if not commits_final:
             continue
 
         res_final = b_fn(commits_final, bis_fn, param, NUM_TEST_WORKERS)
         res_final = convert_result_minutes_to_hours(res_final)
 
-        violates = res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
-        saved_pct = time_saved_pct(baseline_tests, res_final.get("total_tests_run", baseline_tests))
+        violates = (
+            res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
+        )
+        saved_pct = time_saved_pct(
+            baseline_tests, res_final.get("total_tests_run", baseline_tests)
+        )
 
-        res_final.update({
-            "violates_baseline": violates,
-            "tests_saved_vs_baseline_pct": saved_pct,
-            "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(baseline_fb, res_final.get("mean_feedback_time_hr", baseline_fb)),
-            "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_mean_ttc, res_final.get("mean_time_to_culprit_hr", baseline_mean_ttc)),
-            "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(baseline_max_ttc, res_final.get("max_time_to_culprit_hr", baseline_max_ttc)),
-            "best_params_from_eval": best_params,
-            "pred_threshold_used_from_eval": pred_thr,
-        })
+        res_final.update(
+            {
+                "violates_baseline": violates,
+                "tests_saved_vs_baseline_pct": saved_pct,
+                "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_fb, res_final.get("mean_feedback_time_hr", baseline_fb)
+                ),
+                "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_mean_ttc,
+                    res_final.get("mean_time_to_culprit_hr", baseline_mean_ttc),
+                ),
+                "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_max_ttc,
+                    res_final.get("max_time_to_culprit_hr", baseline_max_ttc),
+                ),
+                "best_params_from_eval": best_params,
+                "pred_threshold_used_from_eval": pred_thr,
+            }
+        )
 
         final_results[combo_name] = res_final
 
@@ -826,15 +775,30 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
             "num_test_workers",
         ):
             continue
-        if isinstance(v, dict) and all(m in v for m in ("total_tests_run", "max_time_to_culprit_hr", "mean_feedback_time_hr")):
+        if isinstance(v, dict) and all(
+            m in v
+            for m in (
+                "total_tests_run",
+                "max_time_to_culprit_hr",
+                "mean_feedback_time_hr",
+            )
+        ):
             eligible.append((k, v))
 
     if eligible:
-        final_results["best_by_total_tests"] = min(eligible, key=lambda kv: kv[1]["total_tests_run"])[0]
-        final_results["best_by_max_ttc"] = min(eligible, key=lambda kv: kv[1]["max_time_to_culprit_hr"])[0]
-        final_results["best_by_mean_feedback_time"] = min(eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
+        final_results["best_by_total_tests"] = min(
+            eligible, key=lambda kv: kv[1]["total_tests_run"]
+        )[0]
+        final_results["best_by_max_ttc"] = min(
+            eligible, key=lambda kv: kv[1]["max_time_to_culprit_hr"]
+        )[0]
+        final_results["best_by_mean_feedback_time"] = min(
+            eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
+        )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
-        final_results["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(eligible)
+        final_results["bet_overall_improvement_over_baseline"] = (
+            choose_best_overall_from_items(eligible)
+        )
     else:
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
@@ -877,11 +841,8 @@ def main():
         run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
         return
 
-    # Normal flow: run eval (sweep or mopt), save eval output, then FINAL replay
-    if args.mode == "mopt":
-        eval_payload = run_evaluation_mopt(INPUT_JSON_EVAL, n_trials=args.mopt_trials)
-    else:
-        eval_payload = run_evaluation_sweep(INPUT_JSON_EVAL)
+    # Normal flow: run Optuna evaluation (mopt), save eval output, then FINAL replay
+    eval_payload = run_evaluation_mopt(INPUT_JSON_EVAL, n_trials=args.mopt_trials)
 
     if eval_payload is None:
         raise RuntimeError("Evaluation was unsuccessful. No eval payload present")
@@ -891,7 +852,7 @@ def main():
         json.dump(eval_payload["eval_output"], f, indent=2)
     print("✅ Saved EVAL results to", OUTPUT_PATH_EVAL)
 
-    # Unified FINAL replay for both modes
+    # Unified FINAL replay
     run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
 
 

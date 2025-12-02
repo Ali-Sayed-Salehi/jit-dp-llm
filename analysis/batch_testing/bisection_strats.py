@@ -59,7 +59,6 @@ def run_test_suite(executor, requested_start_time, num_tests):
 def batch_has_regressor(batch):
     return any(c["true_label"] for c in batch)
 
-
 # ------------------ SHARED INTERVAL TEST HELPER ------------------ #
 
 def _run_interval_and_update(
@@ -194,61 +193,72 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
 
 # ------------------ Exhaustive variants (unchanged) ------------------ #
 
-def exhaustive_sequential(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
-    """
-    Sequential 'no-bisection' strategy with central executor.
-    Tests commits one-by-one from oldest to newest.
-    """
-    if not batch:
-        return total_tests_run, culprit_times, feedback_times
-
-    batch_sorted = sorted(batch, key=lambda c: c["ts"])
-    current_time = start_time
-    first_test = bool(is_batch_root)
-
-    for c in batch_sorted:
-        tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
-        first_test = False
-
-        total_tests_run += tests_this_run
-
-        # Fire all `tests_this_run` tests at once for this commit’s run
-        finish_time = run_test_suite(executor, current_time, tests_this_run)
-
-        cid = c["commit_id"]
-        fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[cid] = fb_min
-
-        if c["true_label"]:
-            culprit_times.append(fb_min)
-
-        current_time = finish_time
-
-    return total_tests_run, culprit_times, feedback_times
-
-
 def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
     """
     Parallel 'no-bisection' strategy.
 
-    Similar to exhaustive_sequential, but instead of waiting for each test to
-    finish before submitting the next one, we submit *all* per-commit tests for
-    this batch at the same time.
+    Semantic A:
+      - Baseline is the commit *before* the first commit in the batch.
+      - All commits in the batch are potential culprits.
+
+    Semantics here:
+      - If is_batch_root:
+          * Run ONE expensive batch run (850 tests) for the whole batch (conceptually on tip).
+          * Then run cheap per-commit suites (4 tests) for all commits EXCEPT the last.
+          * The last commit (D) gets its feedback time when the LAST intermediate
+            cheap run finishes (i.e., after C for batch [A,B,C,D]).
+      - If not is_batch_root:
+          * Just run cheap per-commit suites (4 tests) for all commits independently.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    n = len(batch_sorted)
 
-    first_test = bool(is_batch_root)
-    requested_time = start_time   # all tests are "ready" at this time
+    # === Degenerate case: only one commit in the batch ===
+    # Then there's no "intermediate"; the only commit's feedback is at the
+    # finish of its own tests (850 if root, 4 otherwise).
+    if n == 1:
+        if is_batch_root:
+            tests_this_run = TESTS_PER_BATCH_RUN
+        else:
+            tests_this_run = TESTS_PER_BISECTION_RUN
+        total_tests_run += tests_this_run
+        finish_time = run_test_suite(executor, start_time, tests_this_run)
 
-    for c in batch_sorted:
-        tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
-        first_test = False
+        c = batch_sorted[0]
+        cid = c["commit_id"]
+        fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[cid] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+        return total_tests_run, culprit_times, feedback_times
+
+    # === Normal case: at least 2 commits ===
+    if is_batch_root:
+        # 1) One "full" batch run: 850 tests.
+        total_tests_run += TESTS_PER_BATCH_RUN
+        finish_time_batch = run_test_suite(executor, start_time, TESTS_PER_BATCH_RUN)
+
+        # We'll run cheap per-commit tests for all intermediates (indices 0..n-2)
+        # starting after the batch run finishes.
+        requested_time = finish_time_batch
+    else:
+        # Non-root usage: no 850 run; just cheap tests from start_time.
+        requested_time = start_time
+
+    # 2) Cheap per-commit suites (4 tests) for all commits EXCEPT the last.
+    intermediate_finish_times = []
+    for idx in range(0, n - 1):
+        c = batch_sorted[idx]
+
+        tests_this_run = TESTS_PER_BISECTION_RUN
         total_tests_run += tests_this_run
 
         finish_time = run_test_suite(executor, requested_time, tests_this_run)
+        intermediate_finish_times.append(finish_time)
 
         cid = c["commit_id"]
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
@@ -257,7 +267,25 @@ def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedb
         if c["true_label"]:
             culprit_times.append(fb_min)
 
+    # 3) Feedback for the last commit (D):
+    #    Its status is resolved once the LAST intermediate's cheap run finishes.
+    #    (If there were no intermediates, n==1 case above already handled it.)
+    last_commit = batch_sorted[-1]
+    last_cid = last_commit["commit_id"]
+
+    if intermediate_finish_times:
+        last_intermediate_finish = max(intermediate_finish_times)
+    else:
+        # Should not happen for n>=2, but guard anyway: fall back to batch finish.
+        last_intermediate_finish = finish_time_batch if is_batch_root else requested_time
+
+    fb_min_last = (last_intermediate_finish - last_commit["ts"]).total_seconds() / 60.0
+    feedback_times[last_cid] = fb_min_last
+    if last_commit["true_label"]:
+        culprit_times.append(fb_min_last)
+
     return total_tests_run, culprit_times, feedback_times
+
 
 
 # ------------------ RWAB using the same helper ------------------ #

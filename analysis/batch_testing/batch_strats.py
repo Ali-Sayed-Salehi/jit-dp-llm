@@ -178,7 +178,7 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
 
 def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     """
-    Rolling Risk Budget (RRB) batching.
+    Rolling Risk Budget batching (RRBB).
 
     - Stream commits in time order.
     - Maintain a cumulative risk_sum = Σ p_i in the current batch.

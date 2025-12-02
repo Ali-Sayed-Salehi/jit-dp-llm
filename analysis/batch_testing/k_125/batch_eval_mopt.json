@@ -1,0 +1,262 @@
+{
+  "Exhaustive Testing (ET)": {
+    "total_tests_run": 4588300,
+    "mean_feedback_time_hr": 5969.5,
+    "mean_time_to_culprit_hr": 5700.44,
+    "max_time_to_culprit_hr": 11741.76
+  },
+  "Baseline (TWB-N + TOB, BATCH_HOURS=4)": {
+    "total_tests_run": 154142,
+    "mean_feedback_time_hr": 4.72,
+    "mean_time_to_culprit_hr": 6.04,
+    "max_time_to_culprit_hr": 8.72
+  },
+  "num_test_workers": 125,
+  "TWB-N + TOB": {
+    "total_tests_run": 114232,
+    "mean_feedback_time_hr": 5.81,
+    "mean_time_to_culprit_hr": 8.04,
+    "max_time_to_culprit_hr": 11.24,
+    "violates_baseline": true,
+    "best_params": {
+      "BATCH_HOURS": 5.713188703143116
+    },
+    "pred_threshold_used": 0.5350513488605293,
+    "tests_saved_vs_baseline_pct": 25.89,
+    "mean_feedback_time_saved_vs_baseline_pct": -23.09,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -33.11,
+    "max_time_to_culprit_saved_vs_baseline_pct": -28.9,
+    "_mopt_pareto_sample_size": 1
+  },
+  "TWB-N + PAR": {
+    "total_tests_run": 90964,
+    "mean_feedback_time_hr": 8.09,
+    "mean_time_to_culprit_hr": 8.03,
+    "max_time_to_culprit_hr": 12.16,
+    "violates_baseline": true,
+    "best_params": {
+      "BATCH_HOURS": 9.574755704153551
+    },
+    "pred_threshold_used": 0.8936750047084232,
+    "tests_saved_vs_baseline_pct": 40.99,
+    "mean_feedback_time_saved_vs_baseline_pct": -71.4,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -32.95,
+    "max_time_to_culprit_saved_vs_baseline_pct": -39.45,
+    "_mopt_pareto_sample_size": 2
+  },
+  "TWB-N + RWAB": {
+    "total_tests_run": 140606,
+    "mean_feedback_time_hr": 5.09,
+    "mean_time_to_culprit_hr": 7.48,
+    "max_time_to_culprit_hr": 10.47,
+    "violates_baseline": true,
+    "best_params": {
+      "BATCH_HOURS": 4.456716765640548
+    },
+    "pred_threshold_used": 0.4869184561246327,
+    "tests_saved_vs_baseline_pct": 8.78,
+    "mean_feedback_time_saved_vs_baseline_pct": -7.84,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -23.84,
+    "max_time_to_culprit_saved_vs_baseline_pct": -20.07,
+    "_mopt_pareto_sample_size": 1
+  },
+  "FSB-N + TOB": {
+    "total_tests_run": 73436,
+    "mean_feedback_time_hr": 7.64,
+    "mean_time_to_culprit_hr": 7.6,
+    "max_time_to_culprit_hr": 13.09,
+    "violates_baseline": true,
+    "best_params": {
+      "FSB_SIZE": 63
+    },
+    "pred_threshold_used": 0.917533961475179,
+    "tests_saved_vs_baseline_pct": 52.36,
+    "mean_feedback_time_saved_vs_baseline_pct": -61.86,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -25.83,
+    "max_time_to_culprit_saved_vs_baseline_pct": -50.11,
+    "_mopt_pareto_sample_size": 2
+  },
+  "FSB-N + PAR": {
+    "total_tests_run": 56278,
+    "mean_feedback_time_hr": 13.53,
+    "mean_time_to_culprit_hr": 10.06,
+    "max_time_to_culprit_hr": 18.75,
+    "violates_baseline": true,
+    "best_params": {
+      "FSB_SIZE": 132
+    },
+    "pred_threshold_used": 0.8808181090075757,
+    "tests_saved_vs_baseline_pct": 63.49,
+    "mean_feedback_time_saved_vs_baseline_pct": -186.65,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -66.56,
+    "max_time_to_culprit_saved_vs_baseline_pct": -115.02,
+    "_mopt_pareto_sample_size": 1
+  },
+  "FSB-N + RWAB": {
+    "total_tests_run": 78520,
+    "mean_feedback_time_hr": 7.37,
+    "mean_time_to_culprit_hr": 8.38,
+    "max_time_to_culprit_hr": 14.44,
+    "violates_baseline": true,
+    "best_params": {
+      "FSB_SIZE": 59
+    },
+    "pred_threshold_used": 0.543751246879151,
+    "tests_saved_vs_baseline_pct": 49.06,
+    "mean_feedback_time_saved_vs_baseline_pct": -56.14,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -38.74,
+    "max_time_to_culprit_saved_vs_baseline_pct": -65.6,
+    "_mopt_pareto_sample_size": 2
+  },
+  "RASB-T + TOB": {
+    "total_tests_run": 103114,
+    "mean_feedback_time_hr": 9.83,
+    "mean_time_to_culprit_hr": 5.74,
+    "max_time_to_culprit_hr": 10.5,
+    "violates_baseline": true,
+    "best_params": {
+      "RASB_THRESHOLD": 0.5173916412202484
+    },
+    "pred_threshold_used": 0.5102468820748873,
+    "tests_saved_vs_baseline_pct": 33.1,
+    "mean_feedback_time_saved_vs_baseline_pct": -108.26,
+    "mean_time_to_culprit_saved_vs_baseline_pct": 4.97,
+    "max_time_to_culprit_saved_vs_baseline_pct": -20.41,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RASB-T + PAR": {
+    "total_tests_run": 137494,
+    "mean_feedback_time_hr": 9.99,
+    "mean_time_to_culprit_hr": 6.44,
+    "max_time_to_culprit_hr": 11.99,
+    "violates_baseline": true,
+    "best_params": {
+      "RASB_THRESHOLD": 0.4370204953035548
+    },
+    "pred_threshold_used": 0.9872951235062377,
+    "tests_saved_vs_baseline_pct": 10.8,
+    "mean_feedback_time_saved_vs_baseline_pct": -111.65,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -6.62,
+    "max_time_to_culprit_saved_vs_baseline_pct": -37.5,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RASB-T + RWAB": {
+    "total_tests_run": 143084,
+    "mean_feedback_time_hr": 8.83,
+    "mean_time_to_culprit_hr": 7.55,
+    "max_time_to_culprit_hr": 10.86,
+    "violates_baseline": true,
+    "best_params": {
+      "RASB_THRESHOLD": 0.34107641799119737
+    },
+    "pred_threshold_used": 0.5024326101572618,
+    "tests_saved_vs_baseline_pct": 7.17,
+    "mean_feedback_time_saved_vs_baseline_pct": -87.08,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -25.0,
+    "max_time_to_culprit_saved_vs_baseline_pct": -24.54,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RAPB-T-a + TOB": {
+    "total_tests_run": 141352,
+    "mean_feedback_time_hr": 5.05,
+    "mean_time_to_culprit_hr": 6.03,
+    "max_time_to_culprit_hr": 9.15,
+    "violates_baseline": true,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.7390827221496588,
+      "RAPB_AGING_PER_HOUR": 0.011489275929266518
+    },
+    "pred_threshold_used": 0.6230586644345338,
+    "tests_saved_vs_baseline_pct": 8.3,
+    "mean_feedback_time_saved_vs_baseline_pct": -6.99,
+    "mean_time_to_culprit_saved_vs_baseline_pct": 0.17,
+    "max_time_to_culprit_saved_vs_baseline_pct": -4.93,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RAPB-T-a + PAR": {
+    "total_tests_run": 375220,
+    "mean_feedback_time_hr": 144.56,
+    "mean_time_to_culprit_hr": 142.05,
+    "max_time_to_culprit_hr": 271.76,
+    "violates_baseline": true,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.7385725555991984,
+      "RAPB_AGING_PER_HOUR": 0.15971491028827944
+    },
+    "pred_threshold_used": 0.7276322979928415,
+    "tests_saved_vs_baseline_pct": -143.42,
+    "mean_feedback_time_saved_vs_baseline_pct": -2962.71,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -2251.82,
+    "max_time_to_culprit_saved_vs_baseline_pct": -3016.51,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RAPB-T-a + RWAB": {
+    "total_tests_run": 199176,
+    "mean_feedback_time_hr": 7.55,
+    "mean_time_to_culprit_hr": 10.89,
+    "max_time_to_culprit_hr": 18.96,
+    "violates_baseline": true,
+    "best_params": {
+      "RAPB_THRESHOLD": 0.535369269561101,
+      "RAPB_AGING_PER_HOUR": 0.012817551929851342
+    },
+    "pred_threshold_used": 0.4078962220379213,
+    "tests_saved_vs_baseline_pct": -29.22,
+    "mean_feedback_time_saved_vs_baseline_pct": -59.96,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -80.3,
+    "max_time_to_culprit_saved_vs_baseline_pct": -117.43,
+    "_mopt_pareto_sample_size": 1
+  },
+  "RRBB-T + TOB": {
+    "total_tests_run": 18270,
+    "mean_feedback_time_hr": 22.34,
+    "mean_time_to_culprit_hr": 16.82,
+    "max_time_to_culprit_hr": 28.91,
+    "violates_baseline": true,
+    "best_params": {
+      "RRBB_BUDGET": 4.435767618065363
+    },
+    "pred_threshold_used": 0.337172393179859,
+    "tests_saved_vs_baseline_pct": 88.15,
+    "mean_feedback_time_saved_vs_baseline_pct": -373.31,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -178.48,
+    "max_time_to_culprit_saved_vs_baseline_pct": -231.54,
+    "_mopt_pareto_sample_size": 2
+  },
+  "RRBB-T + PAR": {
+    "total_tests_run": 151030,
+    "mean_feedback_time_hr": 10.31,
+    "mean_time_to_culprit_hr": 7.62,
+    "max_time_to_culprit_hr": 11.46,
+    "violates_baseline": true,
+    "best_params": {
+      "RRBB_BUDGET": 0.4460026984113853
+    },
+    "pred_threshold_used": 0.7428602670033695,
+    "tests_saved_vs_baseline_pct": 2.02,
+    "mean_feedback_time_saved_vs_baseline_pct": -118.43,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -26.16,
+    "max_time_to_culprit_saved_vs_baseline_pct": -31.42,
+    "_mopt_pareto_sample_size": 2
+  },
+  "RRBB-T + RWAB": {
+    "total_tests_run": 28478,
+    "mean_feedback_time_hr": 18.23,
+    "mean_time_to_culprit_hr": 25.42,
+    "max_time_to_culprit_hr": 66.99,
+    "violates_baseline": true,
+    "best_params": {
+      "RRBB_BUDGET": 2.776135705356169
+    },
+    "pred_threshold_used": 0.7332230659329348,
+    "tests_saved_vs_baseline_pct": 81.52,
+    "mean_feedback_time_saved_vs_baseline_pct": -286.23,
+    "mean_time_to_culprit_saved_vs_baseline_pct": -320.86,
+    "max_time_to_culprit_saved_vs_baseline_pct": -668.23,
+    "_mopt_pareto_sample_size": 2
+  },
+  "best_by_total_tests": "RRBB-T + TOB",
+  "best_by_max_ttc": "RAPB-T-a + TOB",
+  "best_by_mean_feedback_time": "RAPB-T-a + TOB",
+  "bet_overall_improvement_over_baseline": "FSB-N + TOB"
+}
