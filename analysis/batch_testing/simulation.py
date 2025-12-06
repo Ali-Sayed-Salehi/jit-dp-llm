@@ -190,7 +190,7 @@ def get_args():
 
 
 def load_predictions(path, pred_threshold):
-    logger.info("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
+    logger.debug("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
     if not os.path.exists(path):
         logger.warning("Prediction file %s does not exist; returning empty predictions", path)
         return {}
@@ -237,7 +237,7 @@ def get_cutoff_from_input(all_commits_path, pred_map):
     if not pred_map:
         logger.warning("Prediction map is empty in get_cutoff_from_input")
         return None, None
-    logger.info(
+    logger.debug(
         "Scanning %s to determine cutoff window for %d predicted commits",
         all_commits_path,
         len(pred_map),
@@ -262,8 +262,8 @@ def get_cutoff_from_input(all_commits_path, pred_map):
                 newest = ts
             scanned += 1
             if scanned % 50000 == 0:
-                logger.info("Processed %d lines while computing cutoff window...", scanned)
-    logger.info(
+                logger.debug("Processed %d lines while computing cutoff window...", scanned)
+    logger.debug(
         "Computed cutoff window: oldest=%s newest=%s (scanned %d lines)",
         oldest,
         newest,
@@ -273,7 +273,7 @@ def get_cutoff_from_input(all_commits_path, pred_map):
 
 
 def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
-    logger.info(
+    logger.debug(
         "Reading commits from %s with lower_cutoff=%s upper_cutoff=%s (pred_map size=%d)",
         all_commits_path,
         lower_cutoff,
@@ -322,10 +322,10 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
 
             processed += 1
             if processed % 50000 == 0:
-                logger.info("Processed %d commits so far while building commit list...", processed)
+                logger.debug("Processed %d commits so far while building commit list...", processed)
 
     commits.sort(key=lambda x: x["ts"])
-    logger.info("Finished building commit list: %d commits within window", len(commits))
+    logger.debug("Finished building commit list: %d commits within window", len(commits))
     return commits
 
 

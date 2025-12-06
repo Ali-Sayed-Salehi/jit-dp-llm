@@ -401,11 +401,9 @@ def time_ordered_bisect(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.debug(
-        "time_ordered_bisect: batch_size=%d, is_batch_root=%s",
-        n,
-        is_batch_root,
-    )
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("time_ordered_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
@@ -468,10 +466,20 @@ def time_ordered_bisect(
         if c["true_label"]:
             culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
     logger.debug(
-        "time_ordered_bisect: finished; total_tests_run=%d, num_culprits=%d",
-        total_tests_run,
+        "time_ordered_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
         len(culprit_times),
+        total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times
 
@@ -489,9 +497,7 @@ def exhaustive_parallel(
 ):
     """
     Parallel 'no-bisection' strategy with realistic durations.
-
-    New cost/time model (aligned with your intent):
-
+    
       - For each batch:
           * First test: ONE "full" batch run using ALL signatures
             from job_durations.csv.
@@ -514,11 +520,9 @@ def exhaustive_parallel(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.debug(
-        "exhaustive_parallel: batch_size=%d, is_batch_root=%s",
-        n,
-        is_batch_root,
-    )
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("exhaustive_parallel: starting batch_size=%d", n)
 
     # Precompute batch-level failing signatures (same set used everywhere in this batch)
     batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
@@ -594,10 +598,20 @@ def exhaustive_parallel(
     if last_commit["true_label"]:
         culprit_times.append(fb_min_last)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
     logger.debug(
-        "exhaustive_parallel: finished; total_tests_run=%d, num_culprits=%d",
-        total_tests_run,
+        "exhaustive_parallel: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
         len(culprit_times),
+        total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times
 
@@ -630,11 +644,9 @@ def risk_weighted_adaptive_bisect(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.debug(
-        "risk_weighted_adaptive_bisect: batch_size=%d, is_batch_root=%s",
-        n,
-        is_batch_root,
-    )
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("risk_weighted_adaptive_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
@@ -726,10 +738,20 @@ def risk_weighted_adaptive_bisect(
         if c["true_label"]:
             culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
     logger.debug(
-        "risk_weighted_adaptive_bisect: finished; total_tests_run=%d, num_culprits=%d",
-        total_tests_run,
+        "risk_weighted_adaptive_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
         len(culprit_times),
+        total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times
 
@@ -759,6 +781,9 @@ def topk_risk_first_bisect(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("topk_risk_first_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
@@ -923,10 +948,20 @@ def topk_risk_first_bisect(
             if c["true_label"]:
                 culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
     logger.debug(
-        "topk_risk_first_bisect: finished; total_tests_run=%d, num_culprits=%d, cache_entries=%d",
-        total_tests_run,
+        "topk_risk_first_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "cache_entries=%d, total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
         len(culprit_times),
         len(interval_cache),
+        total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times
