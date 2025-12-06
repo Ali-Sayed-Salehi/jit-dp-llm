@@ -8,6 +8,7 @@ import random
 from datetime import datetime, timedelta, timezone
 import argparse
 import csv
+import logging
 
 from batch_strats import (
     simulate_twb_with_bisect,
@@ -26,6 +27,9 @@ from bisection_strats import (
     TestExecutor,
     run_test_suite,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # ====== CONFIG ======
@@ -168,7 +172,9 @@ def get_args():
 
 
 def load_predictions(path, pred_threshold):
+    logger.info("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
     if not os.path.exists(path):
+        logger.warning("Prediction file %s does not exist; returning empty predictions", path)
         return {}
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -211,8 +217,15 @@ def get_cutoff_from_input(all_commits_path, pred_map):
     oldest = None
     newest = None
     if not pred_map:
+        logger.warning("Prediction map is empty in get_cutoff_from_input")
         return None, None
+    logger.info(
+        "Scanning %s to determine cutoff window for %d predicted commits",
+        all_commits_path,
+        len(pred_map),
+    )
     with open(all_commits_path, "r", encoding="utf-8") as f:
+        scanned = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -229,12 +242,29 @@ def get_cutoff_from_input(all_commits_path, pred_map):
                 oldest = ts
             if newest is None or ts > newest:
                 newest = ts
+            scanned += 1
+            if scanned % 50000 == 0:
+                logger.info("Processed %d lines while computing cutoff window...", scanned)
+    logger.info(
+        "Computed cutoff window: oldest=%s newest=%s (scanned %d lines)",
+        oldest,
+        newest,
+        scanned,
+    )
     return oldest, newest
 
 
 def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
+    logger.info(
+        "Reading commits from %s with lower_cutoff=%s upper_cutoff=%s (pred_map size=%d)",
+        all_commits_path,
+        lower_cutoff,
+        upper_cutoff,
+        len(pred_map),
+    )
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
+        processed = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -272,12 +302,19 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
                 }
             )
 
+            processed += 1
+            if processed % 50000 == 0:
+                logger.info("Processed %d commits so far while building commit list...", processed)
+
     commits.sort(key=lambda x: x["ts"])
+    logger.info("Finished building commit list: %d commits within window", len(commits))
     return commits
 
 
 def run_exhaustive_testing(commits):
+    logger.info("Starting exhaustive testing over %d commits", len(commits))
     if not commits:
+        logger.info("No commits provided to run_exhaustive_testing; returning zeros.")
         return {
             "total_tests_run": 0,
             "mean_feedback_time_hr": 0.0,
@@ -290,8 +327,9 @@ def run_exhaustive_testing(commits):
     feedback_times = {}
 
     executor = TestExecutor(NUM_TEST_WORKERS)
+    logger.debug("Created TestExecutor with %d workers for exhaustive testing", NUM_TEST_WORKERS)
 
-    for c in commits:
+    for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
         durations = BATCH_SIGNATURE_DURATIONS_ET  # full suite
@@ -303,6 +341,13 @@ def run_exhaustive_testing(commits):
         feedback_times[c["commit_id"]] = fb_min
         if c["true_label"]:
             culprit_times.append(fb_min)
+
+        if idx % 100 == 0:
+            logger.info(
+                "Exhaustive testing progress: processed %d/%d commits",
+                idx,
+                len(commits),
+            )
 
     if feedback_times:
         mean_fb_hr = round(
@@ -425,6 +470,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             "Optuna is required for this script. Install with `pip install optuna`."
         ) from e
 
+    logger.info(
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d",
+        INPUT_JSON_EVAL,
+        n_trials,
+    )
+
     # Use a fixed default threshold just to determine the time window
     tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
     dynamic_oldest, dynamic_newest = get_cutoff_from_input(
@@ -443,6 +494,10 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     )
     baseline = {}
     if base_commits_for_context:
+        logger.info(
+            "Running baseline TWB + TOB simulation for context on %d commits",
+            len(base_commits_for_context),
+        )
         baseline = simulate_twb_with_bisect(
             base_commits_for_context,
             time_ordered_bisect,
@@ -477,11 +532,28 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     }
 
     # Per combo study with continuous/int ranges
+    logger.info(
+        "Beginning Optuna studies over %d batching strategies x %d bisection strategies",
+        len(BATCHING_STRATEGIES),
+        len(BISECTION_STRATEGIES),
+    )
     for b_name, b_fn, _ in BATCHING_STRATEGIES:
         for bis_name, bis_fn in BISECTION_STRATEGIES:
             combo_key = f"{b_name} + {bis_name}"
+            logger.info(
+                "Creating Optuna study for combo %s with %d trials",
+                combo_key,
+                n_trials,
+            )
 
             def objective(trial):
+                if trial.number % 10 == 0:
+                    logger.info(
+                        "Optuna trial %d/%d for combo %s",
+                        trial.number,
+                        n_trials,
+                        combo_key,
+                    )
                 # Shared continuous pred threshold
                 pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
 
@@ -511,6 +583,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
                 )
                 if not commits:
+                    logger.warning(
+                        "No commits returned for combo %s at trial %d (pred_thr=%.4f)",
+                        combo_key,
+                        trial.number,
+                        pred_thr,
+                    )
                     return (float("inf"), float("inf"))
 
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
@@ -522,6 +600,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
             study = optuna.create_study(directions=["minimize", "minimize"])
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+            logger.info(
+                "Completed Optuna study for combo %s; best trial count=%d",
+                combo_key,
+                len(study.best_trials),
+            )
 
             # Build Pareto & choose a single best for unified eval_output
             pareto = []
@@ -603,6 +686,10 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
             selected = pick_best(pareto, baseline_max_ttc)
             if selected is None:
+                logger.warning(
+                    "No Pareto-optimal configuration selected for combo %s; skipping",
+                    combo_key,
+                )
                 continue
 
             # compute deltas vs baseline for the selected
@@ -695,6 +782,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
 # ------------------- FINAL REPLAY (unified) -------------------
 def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
+    logger.info(
+        "Starting FINAL replay with INPUT_JSON_FINAL=%s, OUTPUT_PATH_FINAL=%s",
+        INPUT_JSON_FINAL,
+        OUTPUT_PATH_FINAL,
+    )
     # Build FINAL window from FINAL predictions (use fixed PRED_THRESHOLD for window discovery)
     tmp_pred_map_final = load_predictions(
         INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD
@@ -879,12 +971,23 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
     with open(OUTPUT_PATH_FINAL, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=2)
-    print("✅ Saved FINAL replay to", OUTPUT_PATH_FINAL)
+    logger.info("Saved FINAL replay to %s", OUTPUT_PATH_FINAL)
     return final_results
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+    logger.info("Starting batch-testing simulation CLI")
     args = get_args()
+    logger.info(
+        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d",
+        args.mopt_trials,
+        args.final_only,
+        args.num_test_workers,
+    )
 
     # Apply CLI override to global NUM_TEST_WORKERS
     global NUM_TEST_WORKERS
@@ -907,7 +1010,10 @@ def main():
 
         # Shape expected by run_final_test_unified
         eval_payload = {"eval_output": reused_eval_output}
-        print(f"🔁 Reusing eval results from {OUTPUT_PATH_EVAL}; running FINAL only...")
+        logger.info(
+            "Reusing eval results from %s; running FINAL only...",
+            OUTPUT_PATH_EVAL,
+        )
         run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
         return
 
@@ -920,7 +1026,7 @@ def main():
     os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
     with open(OUTPUT_PATH_EVAL, "w", encoding="utf-8") as f:
         json.dump(eval_payload["eval_output"], f, indent=2)
-    print("✅ Saved EVAL results to", OUTPUT_PATH_EVAL)
+    logger.info("Saved EVAL results to %s", OUTPUT_PATH_EVAL)
 
     # Unified FINAL replay
     run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
