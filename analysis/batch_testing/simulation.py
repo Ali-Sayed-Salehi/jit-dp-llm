@@ -806,6 +806,14 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         if combo_items
         else "-"
     )
+    out_eval["best_by_cpu_time"] = (
+        min(
+            combo_items,
+            key=lambda kv: kv[1].get("total_cpu_time_hr", float("inf")),
+        )[0]
+        if combo_items
+        else "-"
+    )
 
     # Best overall vs baseline (centralized logic)
     out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(
@@ -980,6 +988,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
+            "best_by_cpu_time",
             "bet_overall_improvement_over_baseline",
             "num_test_workers",
         ):
@@ -990,6 +999,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
                 "total_tests_run",
                 "max_time_to_culprit_hr",
                 "mean_feedback_time_hr",
+                "total_cpu_time_hr",
             )
         ):
             eligible.append((k, v))
@@ -1004,6 +1014,9 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         final_results["best_by_mean_feedback_time"] = min(
             eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
         )[0]
+        final_results["best_by_cpu_time"] = min(
+            eligible, key=lambda kv: kv[1]["total_cpu_time_hr"]
+        )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
         final_results["bet_overall_improvement_over_baseline"] = (
             choose_best_overall_from_items(eligible)
@@ -1012,6 +1025,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
+        final_results["best_by_cpu_time"] = "-"
         final_results["bet_overall_improvement_over_baseline"] = "NA"
 
     # Save FINAL
