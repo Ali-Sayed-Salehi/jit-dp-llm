@@ -188,12 +188,6 @@ def get_args():
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Logging level for the simulation.",
     )
-    parser.add_argument(
-        "--random-seed",
-        type=int,
-        default=RANDOM_SEED,
-        help="Random seed for reproducible Optuna studies and sampling.",
-    )
     return parser.parse_args()
 
 
@@ -1046,7 +1040,7 @@ def main():
     )
     # Apply random seed override as early as possible for reproducibility
     global RANDOM_SEED
-    RANDOM_SEED = int(getattr(args, "random_seed", RANDOM_SEED))
+    RANDOM_SEED = int(RANDOM_SEED)
     random.seed(RANDOM_SEED)
 
     logger.info("Starting batch-testing simulation CLI")
