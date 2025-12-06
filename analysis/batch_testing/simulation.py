@@ -26,11 +26,10 @@ from bisection_strats import (
     topk_risk_first_bisect,
     TestExecutor,
     run_test_suite,
+    configure_bisection_defaults,
 )
 
-
 logger = logging.getLogger(__name__)
-
 
 # ====== CONFIG ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -56,6 +55,10 @@ RANDOM_SEED = 42
 DEFAULT_TEST_DURATION_MIN = 21.0
 
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
+
+# Number of perf signatures to run for each "full suite" batch test step.
+# If this is None or larger than the available signatures, all signatures are used.
+FULL_SUITE_SIGNATURES_PER_RUN = 200
 
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
@@ -167,6 +170,21 @@ def get_args():
         type=int,
         default=NUM_TEST_WORKERS,
         help="Number of parallel test workers (central test machine capacity K).",
+    )
+    parser.add_argument(
+        "--full-suite-sigs-per-run",
+        type=int,
+        default=FULL_SUITE_SIGNATURES_PER_RUN,
+        help=(
+            "Number of perf signatures to run per 'full suite' batch test step "
+            "(<= 0 means use all signatures)."
+        ),
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level for the simulation.",
     )
     return parser.parse_args()
 
@@ -332,7 +350,14 @@ def run_exhaustive_testing(commits):
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        durations = BATCH_SIGNATURE_DURATIONS_ET  # full suite
+        # Full suite, but capped to a fixed random subset of signatures if requested.
+        if FULL_SUITE_SIGNATURES_PER_RUN and len(BATCH_SIGNATURE_DURATIONS_ET) > FULL_SUITE_SIGNATURES_PER_RUN:
+            durations = random.sample(
+                BATCH_SIGNATURE_DURATIONS_ET,
+                FULL_SUITE_SIGNATURES_PER_RUN,
+            )
+        else:
+            durations = BATCH_SIGNATURE_DURATIONS_ET
         finish_time = run_test_suite(executor, submit_time, durations)
 
         total_tests_run += len(durations)
@@ -976,22 +1001,39 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
 
 def main():
+    args = get_args()
+
+    log_level_name = getattr(args, "log_level", "INFO")
+    log_level = getattr(logging, log_level_name.upper(), logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
     logger.info("Starting batch-testing simulation CLI")
-    args = get_args()
     logger.info(
-        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d",
+        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
+        "full_suite_sigs_per_run=%s, log_level=%s",
         args.mopt_trials,
         args.final_only,
         args.num_test_workers,
+        str(args.full_suite_sigs_per_run),
+        log_level_name,
     )
 
-    # Apply CLI override to global NUM_TEST_WORKERS
-    global NUM_TEST_WORKERS
+    # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
+    global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN
     NUM_TEST_WORKERS = args.num_test_workers
+    # <= 0 means "use all signatures"
+    if args.full_suite_sigs_per_run and args.full_suite_sigs_per_run > 0:
+        FULL_SUITE_SIGNATURES_PER_RUN = args.full_suite_sigs_per_run
+    else:
+        FULL_SUITE_SIGNATURES_PER_RUN = None
+
+    # Propagate defaults/knobs to bisection_strats
+    configure_bisection_defaults(
+        default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
+        full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
+    )
 
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval

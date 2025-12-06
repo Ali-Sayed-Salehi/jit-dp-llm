@@ -3,6 +3,7 @@ import os
 import csv
 import json
 import logging
+import random
 
 # ---------- Perf metadata loading ----------
 
@@ -16,8 +17,9 @@ ALERT_FAIL_SIGS_CSV = os.path.join(
     REPO_ROOT, "datasets", "mozilla_perf", "alert_summary_fail_perf_sigs.csv"
 )
 
-# Fallback if CSVs are missing
-DEFAULT_TEST_DURATION_MIN = 21.0
+# Fallbacks and knobs (configured by the main simulation script).
+_default_test_duration_min = 21.0
+_full_suite_signatures_per_run = None
 
 # signature_id -> duration_minutes
 SIGNATURE_DURATIONS = {}
@@ -26,8 +28,39 @@ REVISION_FAIL_SIG_IDS = {}
 # list[float] of durations for the "full" batch test (all signatures)
 BATCH_SIGNATURE_DURATIONS = []
 
+TKRB_TOP_K = 1
 
 logger = logging.getLogger(__name__)
+
+
+def configure_bisection_defaults(
+    default_test_duration_min=None,
+    full_suite_signatures_per_run=None,
+):
+    """
+    Configure default test duration and the number of signatures used
+    for each 'full suite' batch test step.
+
+    These knobs are typically set by the main simulation script so that
+    all strategies share the same configuration.
+    """
+    global _default_test_duration_min, _full_suite_signatures_per_run
+
+    if default_test_duration_min is not None:
+        _default_test_duration_min = float(default_test_duration_min)
+
+    if full_suite_signatures_per_run is not None:
+        if full_suite_signatures_per_run <= 0:
+            _full_suite_signatures_per_run = None
+        else:
+            _full_suite_signatures_per_run = int(full_suite_signatures_per_run)
+
+    logger.info(
+        "Configured bisection defaults: default_test_duration_min=%.2f, "
+        "full_suite_signatures_per_run=%s",
+        _default_test_duration_min,
+        str(_full_suite_signatures_per_run),
+    )
 
 
 def _load_perf_metadata():
@@ -62,15 +95,15 @@ def _load_perf_metadata():
                 sig_durations[sig_id] = duration
     except FileNotFoundError:
         logger.warning(
-            "job_durations.csv not found at %s; using DEFAULT_TEST_DURATION_MIN=%s",
+            "job_durations.csv not found at %s; using default_test_duration_min=%s",
             JOB_DURATIONS_CSV,
-            DEFAULT_TEST_DURATION_MIN,
+            _default_test_duration_min,
         )
         sig_durations = {}
 
     SIGNATURE_DURATIONS = sig_durations
     BATCH_SIGNATURE_DURATIONS = list(SIGNATURE_DURATIONS.values()) or [
-        DEFAULT_TEST_DURATION_MIN
+        _default_test_duration_min
     ]
     logger.info(
         "Loaded %d signature durations; BATCH_SIGNATURE_DURATIONS length=%d",
@@ -122,15 +155,27 @@ def _load_perf_metadata():
     )
 
 
-_load_perf_metadata()
-
-
 def get_batch_signature_durations():
     """
     Durations (minutes) for a full perf batch run:
-    all signatures from job_durations.csv.
+    all signatures from job_durations.csv, optionally downsampled to
+    a fixed-size random subset controlled by _full_suite_signatures_per_run.
     """
-    return BATCH_SIGNATURE_DURATIONS or [DEFAULT_TEST_DURATION_MIN]
+    _load_perf_metadata()
+
+    if not BATCH_SIGNATURE_DURATIONS:
+        return [_default_test_duration_min]
+
+    limit = _full_suite_signatures_per_run
+    if limit and len(BATCH_SIGNATURE_DURATIONS) > limit:
+        durations = random.sample(
+            BATCH_SIGNATURE_DURATIONS,
+            limit,
+        )
+    else:
+        durations = BATCH_SIGNATURE_DURATIONS
+
+    return durations
 
 
 def get_failing_signature_durations_for_batch(batch_sorted):
@@ -146,6 +191,8 @@ def get_failing_signature_durations_for_batch(batch_sorted):
       - First full batch run fails on some signatures.
       - All bisection steps then only run those failing signatures.
     """
+    _load_perf_metadata()
+
     sig_ids = set()
 
     for c in batch_sorted:
@@ -169,9 +216,6 @@ def get_failing_signature_durations_for_batch(batch_sorted):
         len(durations),
     )
     return durations
-
-
-TKRB_TOP_K = 1
 
 class TestExecutor:
     """
@@ -357,7 +401,7 @@ def time_ordered_bisect(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.info(
+    logger.debug(
         "time_ordered_bisect: batch_size=%d, is_batch_root=%s",
         n,
         is_batch_root,
@@ -424,7 +468,7 @@ def time_ordered_bisect(
         if c["true_label"]:
             culprit_times.append(fb_min)
 
-    logger.info(
+    logger.debug(
         "time_ordered_bisect: finished; total_tests_run=%d, num_culprits=%d",
         total_tests_run,
         len(culprit_times),
@@ -470,7 +514,7 @@ def exhaustive_parallel(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.info(
+    logger.debug(
         "exhaustive_parallel: batch_size=%d, is_batch_root=%s",
         n,
         is_batch_root,
@@ -550,7 +594,7 @@ def exhaustive_parallel(
     if last_commit["true_label"]:
         culprit_times.append(fb_min_last)
 
-    logger.info(
+    logger.debug(
         "exhaustive_parallel: finished; total_tests_run=%d, num_culprits=%d",
         total_tests_run,
         len(culprit_times),
@@ -586,7 +630,7 @@ def risk_weighted_adaptive_bisect(
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
-    logger.info(
+    logger.debug(
         "risk_weighted_adaptive_bisect: batch_size=%d, is_batch_root=%s",
         n,
         is_batch_root,
@@ -682,7 +726,7 @@ def risk_weighted_adaptive_bisect(
         if c["true_label"]:
             culprit_times.append(fb_min)
 
-    logger.info(
+    logger.debug(
         "risk_weighted_adaptive_bisect: finished; total_tests_run=%d, num_culprits=%d",
         total_tests_run,
         len(culprit_times),
@@ -879,7 +923,7 @@ def topk_risk_first_bisect(
             if c["true_label"]:
                 culprit_times.append(fb_min)
 
-    logger.info(
+    logger.debug(
         "topk_risk_first_bisect: finished; total_tests_run=%d, num_culprits=%d, cache_entries=%d",
         total_tests_run,
         len(culprit_times),
