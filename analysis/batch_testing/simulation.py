@@ -370,13 +370,6 @@ def run_exhaustive_testing(commits):
         if c["true_label"]:
             culprit_times.append(fb_min)
 
-        if idx % 100 == 0:
-            logger.info(
-                "Exhaustive testing progress: processed %d/%d commits",
-                idx,
-                len(commits),
-            )
-
     if feedback_times:
         mean_fb_min = sum(feedback_times.values()) / len(feedback_times)
     else:

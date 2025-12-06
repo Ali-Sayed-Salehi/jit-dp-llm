@@ -35,10 +35,9 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
 
 def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
     logger.info(
-        "simulate_twb_with_bisect: %d commits, batch_hours=%.2f, num_workers=%d, bisect_fn=%s",
+        "simulate_twb_with_bisect: %d commits, batch_hours=%.2f, bisect_fn=%s",
         len(commits),
         batch_hours,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
     total_tests_run = 0
@@ -80,7 +79,7 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
         )
 
     logger.info(
-        "simulate_twb_with_bisect: finished; total_tests_run=%d, batches processed",
+        "simulate_twb_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
     return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
@@ -88,10 +87,9 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
 
 def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
     logger.info(
-        "simulate_fsb_with_bisect: %d commits, batch_size=%d, num_workers=%d, bisect_fn=%s",
+        "simulate_fsb_with_bisect: %d commits, batch_size=%d, bisect_fn=%s",
         len(commits),
         batch_size,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
     total_tests_run = 0
@@ -136,10 +134,9 @@ def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
     Uses a central executor shared by all batch tests in this simulation.
     """
     logger.info(
-        "simulate_rasb_t_with_bisect: %d commits, threshold=%.4f, num_workers=%d, bisect_fn=%s",
+        "simulate_rasb_t_with_bisect: %d commits, threshold=%.4f, bisect_fn=%s",
         len(commits),
         threshold,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -194,11 +191,10 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
     threshold_T, aging_rate = params
 
     logger.info(
-        "simulate_rapb_t_a_with_bisect: %d commits, threshold_T=%.4f, aging_rate=%.4f, num_workers=%d, bisect_fn=%s",
+        "simulate_rapb_t_a_with_bisect: %d commits, threshold_T=%.4f, aging_rate=%.4f, bisect_fn=%s",
         len(commits),
         threshold_T,
         aging_rate,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -271,10 +267,9 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
       risk_budget: e.g. 1.0 ~ "about one expected failing commit per batch"
     """
     logger.info(
-        "simulate_rrbb_with_bisect: %d commits, risk_budget=%.4f, num_workers=%d, bisect_fn=%s",
+        "simulate_rrbb_with_bisect: %d commits, risk_budget=%.4f, bisect_fn=%s",
         len(commits),
         risk_budget,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -354,11 +349,10 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
         time_window_hours = 4.0
 
     logger.info(
-        "simulate_ratb_with_bisect: %d commits, threshold=%.4f, time_window_hours=%.2f, num_workers=%d, bisect_fn=%s",
+        "simulate_ratb_with_bisect: %d commits, threshold=%.4f, time_window_hours=%.2f, bisect_fn=%s",
         len(commits),
         threshold,
         time_window_hours,
-        num_workers,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
