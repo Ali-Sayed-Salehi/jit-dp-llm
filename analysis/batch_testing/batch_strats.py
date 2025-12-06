@@ -11,7 +11,7 @@ from bisection_strats import (
 
 logger = logging.getLogger(__name__)
 
-def build_results(total_tests_run, culprit_times, feedback_times):
+def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time_min):
     if feedback_times:
         mean_fb = sum(feedback_times.values()) / len(feedback_times)
     else:
@@ -29,6 +29,7 @@ def build_results(total_tests_run, culprit_times, feedback_times):
         "mean_feedback_time_min": round(mean_fb, 2),
         "mean_time_to_culprit_min": round(mean_ttc, 2),
         "max_time_to_culprit_min": round(max_ttc, 2),
+        "total_cpu_time_min": round(float(total_cpu_time_min or 0.0), 2),
     }
 
 
@@ -49,7 +50,7 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
 
     if not commits:
         logger.info("simulate_twb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times)
+        return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
     batch_start = commits[0]["ts"]
     batch_end = batch_start + timedelta(hours=batch_hours)
@@ -82,7 +83,7 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
         "simulate_twb_with_bisect: finished; total_tests_run=%d, batches processed",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
@@ -126,7 +127,7 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
     logger.info(
         "simulate_fsb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
@@ -183,7 +184,7 @@ def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
     logger.info(
         "simulate_rasb_t_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
@@ -254,7 +255,7 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
         "simulate_rapb_t_a_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
@@ -283,7 +284,7 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
 
     if not commits:
         logger.info("simulate_rrbb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times)
+        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
 
     executor = TestExecutor(num_workers)
 
@@ -319,7 +320,7 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     logger.info(
         "simulate_rrbb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 from datetime import timedelta
@@ -367,7 +368,7 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
 
     if not commits:
         logger.info("simulate_ratb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times)
+        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
 
     executor = TestExecutor(num_workers)
 
@@ -448,4 +449,4 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
     logger.info(
         "simulate_ratb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times)
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)

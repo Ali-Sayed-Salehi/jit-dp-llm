@@ -228,6 +228,8 @@ class TestExecutor:
         self.num_workers = num_workers
         # worker_free_times[i] = datetime when worker i becomes free
         self.worker_free_times = [None] * num_workers
+        # Cumulative CPU time in minutes across all scheduled tests
+        self.total_cpu_minutes = 0.0
         logger.debug("Created TestExecutor with %d workers", num_workers)
 
     def _ensure_initialized(self, t0):
@@ -252,6 +254,11 @@ class TestExecutor:
         actual_start = max(requested_start_time, earliest_free)
         finish_time = actual_start + timedelta(minutes=duration_minutes)
         self.worker_free_times[idx] = finish_time
+        # Accumulate CPU time regardless of parallelism
+        try:
+            self.total_cpu_minutes += float(duration_minutes)
+        except (TypeError, ValueError):
+            pass
         logger.debug(
             "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
             idx,

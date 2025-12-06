@@ -76,6 +76,8 @@ BISECTION_STRATEGIES = [
     ("TKRB", topk_risk_first_bisect),
 ]
 
+# Seed will be finalized in main(), but we also provide a
+# deterministic default at import time.
 random.seed(RANDOM_SEED)
 
 # =================================
@@ -185,6 +187,12 @@ def get_args():
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Logging level for the simulation.",
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=RANDOM_SEED,
+        help="Random seed for reproducible Optuna studies and sampling.",
     )
     return parser.parse_args()
 
@@ -338,6 +346,7 @@ def run_exhaustive_testing(commits):
             "mean_feedback_time_hr": 0.0,
             "mean_time_to_culprit_hr": 0.0,
             "max_time_to_culprit_hr": 0.0,
+            "total_cpu_time_hr": 0.0,
         }
 
     total_tests_run = 0
@@ -375,26 +384,30 @@ def run_exhaustive_testing(commits):
             )
 
     if feedback_times:
-        mean_fb_hr = round(
-            (sum(feedback_times.values()) / len(feedback_times)) / 60.0,
-            2,
-        )
+        mean_fb_min = sum(feedback_times.values()) / len(feedback_times)
     else:
-        mean_fb_hr = 0.0
+        mean_fb_min = 0.0
 
     if culprit_times:
-        mean_ttc_hr = round((sum(culprit_times) / len(culprit_times)) / 60.0, 2)
-        max_ttc_hr = round(max(culprit_times) / 60.0, 2)
+        mean_ttc_min = sum(culprit_times) / len(culprit_times)
+        max_ttc_min = max(culprit_times)
     else:
-        mean_ttc_hr = 0.0
-        max_ttc_hr = 0.0
+        mean_ttc_min = 0.0
+        max_ttc_min = 0.0
 
-    return {
+    total_cpu_time_min = getattr(executor, "total_cpu_minutes", 0.0)
+
+    res = {
         "total_tests_run": total_tests_run,
-        "mean_feedback_time_hr": mean_fb_hr,
-        "mean_time_to_culprit_hr": mean_ttc_hr,
-        "max_time_to_culprit_hr": max_ttc_hr,
+        "mean_feedback_time_min": round(mean_fb_min, 2),
+        "mean_time_to_culprit_min": round(mean_ttc_min, 2),
+        "max_time_to_culprit_min": round(max_ttc_min, 2),
+        "total_cpu_time_min": round(float(total_cpu_time_min or 0.0), 2),
     }
+
+    # Reuse common conversion helper for consistency
+    res = convert_result_minutes_to_hours(res)
+    return res
 
 
 def convert_result_minutes_to_hours(res):
@@ -411,6 +424,11 @@ def convert_result_minutes_to_hours(res):
             res["max_time_to_culprit_min"] / 60.0, 2
         )
         del res["max_time_to_culprit_min"]
+    if "total_cpu_time_min" in res:
+        res["total_cpu_time_hr"] = round(
+            res["total_cpu_time_min"] / 60.0, 2
+        )
+        del res["total_cpu_time_min"]
     return res
 
 
@@ -434,6 +452,7 @@ BEST_OVERALL_FIELDS = [
     "mean_feedback_time_saved_vs_baseline_pct",
     "mean_time_to_culprit_saved_vs_baseline_pct",
     "max_time_to_culprit_saved_vs_baseline_pct",
+    "cpu_time_saved_vs_baseline_pct",
 ]
 
 
@@ -449,6 +468,7 @@ def _overall_improvement_score(entry):
     mean_fb = entry.get("mean_feedback_time_saved_vs_baseline_pct", 0.0)
     mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
     max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    # CPU time is tracked separately but not included in this aggregate score.
     return tests_saved + (mean_fb + mean_ttc + max_ttc) / 3.0
 
 
@@ -531,6 +551,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         )
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
+    baseline_cpu = baseline.get("total_cpu_time_hr", None)
 
     def pick_best(pareto, baseline_max_ttc_local):
         if not pareto:
@@ -721,6 +742,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             baseline_fb = baseline.get("mean_feedback_time_hr", None)
             baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
             baseline_tests = baseline.get("total_tests_run", None)
+            baseline_cpu_time = baseline.get("total_cpu_time_hr", None)
 
             def time_saved_pct(base, val):
                 return (
@@ -758,6 +780,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     selected["max_time_to_culprit_hr"],
                 )
                 if baseline_max_ttc is not None
+                else 0.0,
+                "cpu_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_cpu_time,
+                    selected.get("total_cpu_time_hr", baseline_cpu_time),
+                )
+                if baseline_cpu_time is not None
                 else 0.0,
                 "_mopt_pareto_sample_size": len(pareto),
             }
@@ -839,6 +867,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     baseline_mean_ttc = baseline_final["mean_time_to_culprit_hr"]
     baseline_max_ttc = baseline_final["max_time_to_culprit_hr"]
     baseline_tests = baseline_final["total_tests_run"]
+    baseline_cpu_time = baseline_final.get("total_cpu_time_hr", None)
 
     def time_saved_pct(base, val):
         return (
@@ -941,6 +970,12 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
                     baseline_max_ttc,
                     res_final.get("max_time_to_culprit_hr", baseline_max_ttc),
                 ),
+                "cpu_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_cpu_time,
+                    res_final.get("total_cpu_time_hr", baseline_cpu_time),
+                )
+                if baseline_cpu_time is not None
+                else 0.0,
                 "best_params_from_eval": best_params,
                 "pred_threshold_used_from_eval": pred_thr,
             }
@@ -1009,15 +1044,21 @@ def main():
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
+    # Apply random seed override as early as possible for reproducibility
+    global RANDOM_SEED
+    RANDOM_SEED = int(getattr(args, "random_seed", RANDOM_SEED))
+    random.seed(RANDOM_SEED)
+
     logger.info("Starting batch-testing simulation CLI")
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
-        "full_suite_sigs_per_run=%s, log_level=%s",
+        "full_suite_sigs_per_run=%s, log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
         args.num_test_workers,
         str(args.full_suite_sigs_per_run),
         log_level_name,
+        RANDOM_SEED,
     )
 
     # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
