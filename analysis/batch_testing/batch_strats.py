@@ -4,8 +4,7 @@ from datetime import timedelta
 import math
 
 from bisection_strats import (
-    TEST_DURATION_MIN,
-    TestExecutor,
+    TestExecutor
 )
 
 def build_results(total_tests_run, culprit_times, feedback_times):
@@ -35,7 +34,7 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
     feedback_times = {}
 
     # One central executor per simulation run
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     batch_start = commits[0]["ts"]
     batch_end = batch_start + timedelta(hours=batch_hours)
@@ -65,7 +64,7 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
     culprit_times = []
     feedback_times = {}
 
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     current_batch = []
     current_end_time = None
@@ -97,7 +96,7 @@ def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
     culprit_times = []
     feedback_times = {}
 
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     current_batch = []
     prod_clean = 1.0
@@ -137,7 +136,7 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
     culprit_times = []
     feedback_times = {}
 
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     current_batch = []
     entry_times = []
@@ -197,7 +196,7 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     if not commits:
         return build_results(total_tests_run, culprit_times, feedback_times)
 
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     current_batch = []
     current_end_time = None
@@ -261,7 +260,7 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
     if not commits:
         return build_results(total_tests_run, culprit_times, feedback_times)
 
-    executor = TestExecutor(num_workers, TEST_DURATION_MIN)
+    executor = TestExecutor(num_workers)
 
     current_batch = []
     current_end_time = None

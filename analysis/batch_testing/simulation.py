@@ -7,6 +7,7 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 import argparse
+import csv
 
 from batch_strats import (
     simulate_twb_with_bisect,
@@ -22,8 +23,6 @@ from bisection_strats import (
     exhaustive_parallel,
     risk_weighted_adaptive_bisect,
     topk_risk_first_bisect,
-    TEST_DURATION_MIN,
-    TESTS_PER_RUN,
     TestExecutor,
     run_test_suite,
 )
@@ -33,6 +32,9 @@ from bisection_strats import (
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
+JOB_DURATIONS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "job_durations.csv"
+)
 
 BATCH_HOURS = 4
 FSB_SIZE = 20
@@ -46,6 +48,8 @@ RATB_TIME_WINDOW_HOURS = 4
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
+
+DEFAULT_TEST_DURATION_MIN = 21.0
 
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
@@ -68,6 +72,38 @@ BISECTION_STRATEGIES = [
 random.seed(RANDOM_SEED)
 
 # =================================
+
+def _load_batch_signature_durations(path):
+    """
+    Load durations (in minutes) for a 'full batch run':
+    all signatures from job_durations.csv.
+    Only the durations are needed here (we don't care about ids for ET).
+    """
+    durations = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                dur = row.get("duration_minutes")
+                if not dur:
+                    continue
+                try:
+                    durations.append(float(dur))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        pass
+
+    if not durations:
+        durations = [DEFAULT_TEST_DURATION_MIN]
+
+    return durations
+
+
+# Used by run_exhaustive_testing
+BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(JOB_DURATIONS_CSV)
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="Batch-testing simulation (Optuna-only mopt).")
 
@@ -241,13 +277,6 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
 
 
 def run_exhaustive_testing(commits):
-    """
-    Exhaustive Testing (ET) with a central executor:
-    - Every commit gets its own full perf run.
-    - Tests are submitted at the commit timestamp.
-    - A central machine with NUM_TEST_WORKERS workers runs them, each taking TEST_DURATION_MIN.
-    - Queue wait time is reflected in feedback metrics.
-    """
     if not commits:
         return {
             "total_tests_run": 0,
@@ -260,15 +289,15 @@ def run_exhaustive_testing(commits):
     culprit_times = []
     feedback_times = {}
 
-    # Central executor for this ET run
-    executor = TestExecutor(NUM_TEST_WORKERS, TEST_DURATION_MIN)
+    executor = TestExecutor(NUM_TEST_WORKERS)
 
     for c in commits:
-        submit_time = c["ts"]  # test becomes available when the commit lands
-        finish_time = run_test_suite(executor, submit_time, TESTS_PER_RUN)
+        submit_time = c["ts"]
 
-        # Count the test cost just like before
-        total_tests_run += TESTS_PER_RUN
+        durations = BATCH_SIGNATURE_DURATIONS_ET  # full suite
+        finish_time = run_test_suite(executor, submit_time, durations)
+
+        total_tests_run += len(durations)
 
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
         feedback_times[c["commit_id"]] = fb_min
