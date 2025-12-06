@@ -1,3 +1,5 @@
+# bisection_strats.py
+
 from datetime import timedelta
 
 TEST_DURATION_MIN = 21

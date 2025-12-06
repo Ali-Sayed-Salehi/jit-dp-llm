@@ -1,3 +1,5 @@
+# batch_strats.py
+
 from datetime import timedelta
 import math
 

@@ -10,6 +10,7 @@ import json
 import os
 from typing import Dict, Set, List, Any
 
+
 def repo_root() -> str:
     # This file is expected at: repo-root/data_extraction/treeherder/get_failing_perf_sigs.py
     # So repo root is two levels up from this file.
@@ -55,18 +56,26 @@ def load_needed_summary_ids(alerts_with_bug_path: str) -> Set[str]:
     return ids
 
 
-def load_alert_summaries(alert_summaries_path: str, needed_ids: Set[str]) -> Dict[str, str]:
+def load_alert_summaries(
+    alert_summaries_path: str, needed_ids: Set[str]
+) -> Dict[str, Dict[str, str]]:
     """
-    Load alerts field from alert_summaries.csv for the summary IDs we care about.
-    Returns a mapping: summary_id -> alerts_string
+    Load alerts and revision fields from alert_summaries.csv
+    for the summary IDs we care about.
+
+    Returns a mapping:
+        summary_id -> {"alerts": alerts_string, "revision": revision_string}
     """
-    summaries: Dict[str, str] = {}
+    summaries: Dict[str, Dict[str, str]] = {}
     with open(alert_summaries_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             sid = row.get("id")
             if sid and sid in needed_ids:
-                summaries[sid] = row.get("alerts", "") or ""
+                summaries[sid] = {
+                    "alerts": row.get("alerts", "") or "",
+                    "revision": row.get("revision", "") or "",
+                }
     return summaries
 
 
@@ -123,6 +132,7 @@ def main(alerts_with_bug_path: str, alert_summaries_path: str, output_path: str)
 
     # Prepare rows for output
     rows = []
+
     # Sort IDs numerically when possible, otherwise lexicographically
     def sort_key(x: str):
         try:
@@ -131,18 +141,27 @@ def main(alerts_with_bug_path: str, alert_summaries_path: str, output_path: str)
             return x
 
     for sid in sorted(needed_ids, key=sort_key):
-        alerts_raw = summaries.get(sid, "")
+        summary_info = summaries.get(sid, {})
+        alerts_raw = summary_info.get("alerts", "")
+        revision = summary_info.get("revision", "")
+
         fail_sig_ids = get_failing_sig_ids_from_alerts(alerts_raw, summary_id=sid)
         rows.append(
             {
                 "alert_summary_id": sid,
+                "revision": revision,
                 "fail_perf_sig_ids": json.dumps(fail_sig_ids),
                 "num_fail_perf_sig_ids": len(fail_sig_ids),
             }
         )
 
     # Write output CSV
-    fieldnames = ["alert_summary_id", "fail_perf_sig_ids", "num_fail_perf_sig_ids"]
+    fieldnames = [
+        "alert_summary_id",
+        "revision",
+        "fail_perf_sig_ids",
+        "num_fail_perf_sig_ids",
+    ]
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
