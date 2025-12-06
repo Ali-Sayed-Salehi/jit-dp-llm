@@ -38,6 +38,7 @@ RAPB_THRESHOLD = 0.35
 RAPB_AGING_PER_HOUR = 0.05
 RRBB_BUDGET = 1.0
 RATB_THRESHOLD = 0.5
+RATB_TIME_WINDOW_HOURS = 4
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
@@ -51,7 +52,7 @@ BATCHING_STRATEGIES = [
     ("RASB", simulate_rasb_t_with_bisect,   RASB_THRESHOLD),
     ("RAPB", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
     ("RRBB", simulate_rrbb_with_bisect,     RRBB_BUDGET),
-    ("RATB", simulate_ratb_with_bisect,     RATB_THRESHOLD),
+    ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
 ]
 
 BISECTION_STRATEGIES = [
@@ -466,7 +467,9 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 elif b_name == "RRBB":
                     param = trial.suggest_float("RRBB_BUDGET", 0.25, 6.0)
                 elif b_name == "RATB":
-                    param = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
+                    thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
+                    tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
+                    param = (thr, tw)
                 else:
                     return (float("inf"), float("inf"))
 
@@ -509,7 +512,10 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 elif b_name == "RRBB":
                     param = params["RRBB_BUDGET"]
                 elif b_name == "RATB":
-                    param = params["RATB_THRESHOLD"]
+                    param = (
+                        params["RATB_THRESHOLD"],
+                        params["RATB_TIME_WINDOW_HOURS"],
+                    )
                 else:
                     continue
 
@@ -521,25 +527,32 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     continue
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
+
+                if b_name == "TWB":
+                    best_param_dict = {"BATCH_HOURS": param}
+                elif b_name == "FSB":
+                    best_param_dict = {"FSB_SIZE": param}
+                elif b_name == "RASB":
+                    best_param_dict = {"RASB_THRESHOLD": param}
+                elif b_name == "RAPB":
+                    best_param_dict = {
+                        "RAPB_THRESHOLD": param[0],
+                        "RAPB_AGING_PER_HOUR": param[1],
+                    }
+                elif b_name == "RRBB":
+                    best_param_dict = {"RRBB_BUDGET": param}
+                elif b_name == "RATB":
+                    best_param_dict = {
+                        "RATB_THRESHOLD": param[0],
+                        "RATB_TIME_WINDOW_HOURS": param[1],
+                    }
+                else:
+                    continue
+
                 pareto.append(
                     {
                         "pred_threshold_used": pred_thr,
-                        "best_params": (
-                            {"BATCH_HOURS": param}
-                            if b_name == "TWB"
-                            else {"FSB_SIZE": param}
-                            if b_name == "FSB"
-                            else {"RASB_THRESHOLD": param}
-                            if b_name == "RASB"
-                            else {
-                                "RAPB_THRESHOLD": param[0],
-                                "RAPB_AGING_PER_HOUR": param[1],
-                            }
-                            if b_name == "RAPB"
-                            else {"RRBB_BUDGET": param}
-                            if b_name == "RRBB"
-                            else {"RATB_THRESHOLD": param}
-                        ),
+                        "best_params": best_param_dict,
                         "total_tests_run": res.get("total_tests_run"),
                         "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
                         "mean_time_to_culprit_hr": res.get(
@@ -732,10 +745,15 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
+        elif b_name == "RATB":
+            param = (
+                best_params["RATB_THRESHOLD"],
+                best_params["RATB_TIME_WINDOW_HOURS"],
+            )
         else:
             # single-valued dict e.g., {"BATCH_HOURS": x} 
             # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
-            # or {"RRBB_BUDGET": b} or {"RATB_THRESHOLD": t}
+            # or {"RRBB_BUDGET": b}
             try:
                 param = list(best_params.values())[0]
             except Exception:

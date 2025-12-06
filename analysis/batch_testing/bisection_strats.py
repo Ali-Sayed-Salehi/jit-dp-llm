@@ -396,10 +396,10 @@ def topk_risk_first_bisect(
       For each of the K riskiest commits (by predicted risk p):
 
         1. Test subbatch [0 .. i]  (up to and including the risky commit)
-        2. Test subbatch [0 .. i-1] (up to and including the previous commit), if i > 0
-
-      If [0 .. i] fails and [0 .. i-1] does NOT fail, then commit i is identified
-      as a culprit (at least one regression must be at i).
+        2. If [0 .. i] fails, test [0 .. i-1] (if i > 0).
+           - If [0 .. i] fails and [0 .. i-1] is clean, i is a culprit.
+           - If both [0 .. i] and [0 .. i-1] fail, run a TOB-style bisection
+             restricted to [0 .. i-1].
 
     If no culprit is found this way (or there are remaining unknown regressors),
     we fall back to a TOB-style search over the remaining unknown region.
@@ -452,6 +452,52 @@ def topk_risk_first_bisect(
         interval_cache[key] = has_defect
         return has_defect
 
+    def tob_bisect_on_range(lo_bound, hi_bound):
+        """
+        Run a TOB-style bisection restricted to [lo_bound .. hi_bound],
+        using run_interval (with cache) for physical runs.
+
+        This can discover one or more culprits inside that subrange.
+        """
+        nonlocal current_time, first_test, total_tests_run
+
+        while True:
+            unknown_indices = [
+                i for i in range(lo_bound, hi_bound + 1)
+                if status[i] == "unknown"
+            ]
+            if not unknown_indices:
+                break
+
+            lo = unknown_indices[0]
+            hi = unknown_indices[-1]
+
+            still_fails = run_interval(lo, hi)
+            if not still_fails:
+                # This unknown region is actually clean; _run_interval_and_update
+                # already updated status + feedback for its commits.
+                break
+
+            # Standard midpoint-based binary search
+            left = lo
+            right = hi
+            while left < right:
+                mid = (left + right) // 2
+                left_fails = run_interval(left, mid)
+                if left_fails:
+                    right = mid
+                else:
+                    left = mid + 1
+
+            culprit_idx = left
+            c = batch_sorted[culprit_idx]
+            if status[culprit_idx] != "defect_found":
+                status[culprit_idx] = "defect_found"
+                fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+                feedback_times[c["commit_id"]] = fb_min
+                if c["true_label"]:
+                    culprit_times.append(fb_min)
+
     # ---- Step 1: Initial whole-batch test (like TOB) ----
     whole_fails = run_interval(0, n - 1)
     if not whole_fails:
@@ -474,12 +520,12 @@ def topk_risk_first_bisect(
         # Test subbatch [0 .. idx] (including risky commit)
         curr_fails = run_interval(0, idx)
 
-        # Test subbatch [0 .. idx-1] if it exists
+        # Only test [0 .. idx-1] if [0 .. idx] fails.
         prev_fails = False
-        if idx > 0:
+        if curr_fails and idx > 0:
             prev_fails = run_interval(0, idx - 1)
 
-        # If [0..idx] fails but [0..idx-1] is clean, then idx is a culprit
+        # Case 1: [0..idx] fails, [0..idx-1] clean => idx is a culprit.
         if curr_fails and not prev_fails:
             c = batch_sorted[idx]
             status[idx] = "defect_found"
@@ -488,6 +534,10 @@ def topk_risk_first_bisect(
             feedback_times[c["commit_id"]] = fb_min
             if c["true_label"]:
                 culprit_times.append(fb_min)
+
+        # Case 2: BOTH [0..idx] and [0..idx-1] fail => do TOB on [0..idx-1].
+        elif curr_fails and prev_fails and idx > 0:
+            tob_bisect_on_range(0, idx - 1)
 
     # ---- Step 3: Fall back to TOB-style search over remaining unknowns ----
     while True:

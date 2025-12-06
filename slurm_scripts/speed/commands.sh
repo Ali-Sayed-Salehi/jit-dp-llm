@@ -41,13 +41,13 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
---input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
---input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_100/batch_eval_mopt.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_100/batch_test_mopt.json \
---mopt-trials 200 \
---num-test-workers 100
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
+# --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
+# --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
+# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_test/batch_eval_mopt.json \
+# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_test/batch_test_mopt.json \
+# --mopt-trials 2 \
+# --num-test-workers 100
 # --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
@@ -65,8 +65,10 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulatio
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
 
 echo "Script finished"

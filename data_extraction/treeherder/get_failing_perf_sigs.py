@@ -10,8 +10,6 @@ import json
 import os
 from typing import Dict, Set, List, Any
 
-
-
 def repo_root() -> str:
     # This file is expected at: repo-root/data_extraction/treeherder/get_failing_perf_sigs.py
     # So repo root is two levels up from this file.

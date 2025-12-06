@@ -2,12 +2,14 @@
 
 import os
 import csv
-import json  # NEW: for stats output
+import json
 import math
 from collections import defaultdict
-from datetime import datetime, timedelta  # NEW: for timestamp handling
-from statistics import mean, median, geometric_mean, quantiles  # NEW
-import matplotlib.pyplot as plt  # NEW: for plotting
+from datetime import datetime, timedelta
+from statistics import mean, median, geometric_mean, quantiles
+import matplotlib.pyplot as plt
+import requests
+from requests.exceptions import Timeout, RequestException
 
 from thclient import TreeherderClient
 
@@ -32,11 +34,11 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 # ---------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------
-TIMEFRAME = 60 * 24 * 60 * 60  # 60 days
+TIMEFRAME = 90 * 24 * 60 * 60
 REPOSITORY = "autoland"
 
-# NEW: how many days back counts as "last month" for push_timestamp
-RECENT_PUSH_DAYS = 30
+# how many days back counts as "recent" for push_timestamp
+RECENT_PUSH_DAYS = 60
 
 client = TreeherderClient()
 
@@ -68,7 +70,30 @@ def fetch_jobs_for_signature(signature_id: int):
         "replicates": False,
     }
 
-    data_list = client._get_json("performance/summary", **params)
+    try:
+        data_list = client._get_json("performance/summary", **params)
+    except Timeout as e:
+        # This covers ReadTimeout and other timeout variants
+        print(
+            f"[WARN] Timeout when fetching jobs for signature {signature_id}: {e}. "
+            "Skipping this signature."
+        )
+        return []
+    except RequestException as e:
+        # Any other requests-related network error
+        print(
+            f"[WARN] Request error when fetching jobs for signature {signature_id}: {e}. "
+            "Skipping this signature."
+        )
+        return []
+    except Exception as e:
+        # Last-resort guard so a weird error doesn't kill the whole script
+        print(
+            f"[WARN] Unexpected error when fetching jobs for signature {signature_id}: {e}. "
+            "Skipping this signature."
+        )
+        return []
+
     if not data_list:
         return []
 

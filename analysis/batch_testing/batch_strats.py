@@ -222,22 +222,36 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     return build_results(total_tests_run, culprit_times, feedback_times)
 
 
-def simulate_ratb_with_bisect(commits, bisect_fn, threshold, num_workers):
-    """
-    Hybrid Risk-Aware Batching (RATB).
+from datetime import timedelta
 
-    Stream commits in time order. Maintain a current batch of contiguous commits.
-    - For each commit c:
-        * Add c to the current batch.
-        * If c["risk"] >= threshold (T), immediately flush the batch
-          (all commits since the last flush, including c) to bisect_fn.
-          Then start a new batch.
-    - At the end, if there are remaining commits that never triggered the threshold,
-      flush them as one final batch.
-
-    Param:
-      threshold (T): risk cutoff; any commit with risk >= T triggers a batch.
+def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
     """
+    Risk-Aware Trigger Batching (RATB) with TWB-style time-window fallback.
+
+    params:
+      - threshold (T): risk cutoff; any commit with risk >= T triggers an immediate flush.
+      - time_window_hours: TWB-like max age of a batch; if the span between the
+        first commit in the batch and the current commit exceeds this window,
+        we flush the batch even if no high-risk commit appeared.
+
+    Behavior:
+      - Stream commits in time order.
+      - Maintain a current batch of contiguous commits.
+      - For each commit c:
+          * Add c to the current batch.
+          * If c["risk"] >= threshold, flush the batch (including c).
+          * Else, if the current batch duration exceeds time_window_hours,
+            flush the previous batch and start a new one with c.
+      - At the end, flush any remaining commits.
+    """
+    # Backward compatibility: allow scalar `params` (just threshold),
+    # defaulting the time window to 4h.
+    if isinstance(params, tuple):
+        threshold, time_window_hours = params
+    else:
+        threshold = float(params)
+        time_window_hours = 4.0
+
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
@@ -249,14 +263,25 @@ def simulate_ratb_with_bisect(commits, bisect_fn, threshold, num_workers):
 
     current_batch = []
     current_end_time = None
+    batch_start_time = None
+    window_delta = timedelta(hours=time_window_hours)
 
     for c in commits:
-        current_batch.append(c)
-        current_end_time = c["ts"]
-
+        c_ts = c["ts"]
         risk = float(c.get("risk", 0.0) or 0.0)
+
+        # If starting a new batch
+        if not current_batch:
+            current_batch = [c]
+            batch_start_time = c_ts
+            current_end_time = c_ts
+            continue
+
+        # First, risk-triggered flush: include c then flush.
         if risk >= threshold:
-            # Flush the batch up to and including this high-risk commit
+            current_batch.append(c)
+            current_end_time = c_ts
+
             total_tests_run, culprit_times, feedback_times = bisect_fn(
                 current_batch,
                 current_end_time,
@@ -266,9 +291,34 @@ def simulate_ratb_with_bisect(commits, bisect_fn, threshold, num_workers):
                 executor,
             )
             current_batch = []
+            batch_start_time = None
             current_end_time = None
+            continue
 
-    # Flush any leftover commits that never triggered the risk threshold
+        # Otherwise, apply TWB-style time-window rule.
+        batch_end = batch_start_time + window_delta
+        if c_ts >= batch_end:
+            # Flush the existing batch (without c),
+            # using the last commit time in that batch as end time.
+            prev_end_time = current_batch[-1]["ts"]
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                current_batch,
+                prev_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+            )
+            # Start a new batch with c.
+            current_batch = [c]
+            batch_start_time = c_ts
+            current_end_time = c_ts
+        else:
+            # Still within time window: just extend the batch.
+            current_batch.append(c)
+            current_end_time = c_ts
+
+    # Flush any leftover commits
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
             current_batch,
@@ -280,5 +330,3 @@ def simulate_ratb_with_bisect(commits, bisect_fn, threshold, num_workers):
         )
 
     return build_results(total_tests_run, culprit_times, feedback_times)
-
-
