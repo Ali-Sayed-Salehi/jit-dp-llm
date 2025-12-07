@@ -18,7 +18,7 @@ import json
 import random
 import argparse
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from statistics import mean, median, geometric_mean, quantiles
 import matplotlib.pyplot as plt
 from requests.exceptions import Timeout, RequestException
@@ -53,12 +53,12 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 # Parameters
 # ---------------------------------------------------------
 # Inclusive date range (UTC) for revisions to include in the output
-REVISION_START_DATE = datetime(2025, 6, 19)
-REVISION_END_DATE = datetime(2025, 10, 25)
+REVISION_START_DATE = datetime(2025, 6, 19, tzinfo=UTC)
+REVISION_END_DATE = datetime(2025, 10, 25, tzinfo=UTC)
 
 # How far back to fetch jobs from Treeherder (in days), chosen so that
 # the interval reaches at least REVISION_START_DATE.
-TIMEFRAME_DAYS = max(1, (datetime.utcnow() - REVISION_START_DATE).days + 2)
+TIMEFRAME_DAYS = max(1, (datetime.now(UTC) - REVISION_START_DATE).days + 2)
 
 REPOSITORY = "autoland"
 
@@ -93,7 +93,7 @@ def load_revisions_from_all_commits(jsonl_path: str):
 
             # date is [unix_timestamp, offset]; use the unix timestamp in UTC
             try:
-                commit_dt = datetime.utcfromtimestamp(date_field[0])
+                commit_dt = datetime.fromtimestamp(date_field[0], UTC)
             except Exception:
                 continue
 
@@ -183,8 +183,13 @@ def aggregate_revision_counts(signatures, allowed_revisions):
     # For tracking which signatures ran for each revision
     revision_signatures = defaultdict(set)
 
+    # Debug: track signatures that have jobs submitted before this date
+    # Uses submit_time coming from the Treeherder performance/summary API.
+    early_submit_cutoff = datetime(2025, 8, 8)
+    early_submit_signatures = set()
+
     dt_format = "%Y-%m-%dT%H:%M:%S"
-    max_diff = timedelta(minutes=5)
+    max_diff = timedelta(minutes=10)
 
     total = len(signatures)
     for idx, sig_id in enumerate(signatures, start=1):
@@ -209,6 +214,16 @@ def aggregate_revision_counts(signatures, allowed_revisions):
             except ValueError:
                 # Skip jobs with malformed timestamps for counting
                 continue
+
+            # Debug logging: signatures with jobs submitted before cutoff date,
+            # based solely on data returned by performance/summary.
+            if submit_time < early_submit_cutoff and sig_id not in early_submit_signatures:
+                print(
+                    "[DEBUG] Signature %s has job for revision %s with submit_time %s "
+                    "before 2025-08-08"
+                    % (sig_id, rev, submit_time.isoformat())
+                )
+                early_submit_signatures.add(sig_id)
 
             diff = submit_time - push_ts
             # Only consider jobs where submit_time is in [push_ts, push_ts + 5 min]
