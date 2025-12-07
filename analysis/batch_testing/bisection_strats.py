@@ -17,7 +17,7 @@ ALERT_FAIL_SIGS_CSV = os.path.join(
     REPO_ROOT, "datasets", "mozilla_perf", "alert_summary_fail_perf_sigs.csv"
 )
 PERF_JOBS_PER_REV_JSON = os.path.join(
-    REPO_ROOT, "datasets", "mozilla_perf", "perf_jobs_per_revision_details.json"
+    REPO_ROOT, "datasets", "mozilla_perf", "perf_jobs_per_revision_details.jsonl"
 )
 
 # Fallbacks and knobs (configured by the main simulation script).
@@ -213,7 +213,7 @@ def _load_perf_jobs_per_revision():
                 mapping[rev] = sig_ids_int
     except FileNotFoundError:
         logger.warning(
-            "perf_jobs_per_revision_details.json not found at %s; "
+            "perf_jobs_per_revision_details.jsonl not found at %s; "
             "REVISION_TESTED_SIG_IDS will be empty",
             PERF_JOBS_PER_REV_JSON,
         )
@@ -292,7 +292,7 @@ def get_failing_signature_durations_for_batch(batch_sorted):
 def get_tested_signatures_for_revision(revision):
     """
     Return the list of signature IDs that were actually tested for the given
-    revision according to perf_jobs_per_revision_details.json.
+    revision according to perf_jobs_per_revision_details.jsonl.
     """
     _load_perf_jobs_per_revision()
     return REVISION_TESTED_SIG_IDS.get(revision, [])
