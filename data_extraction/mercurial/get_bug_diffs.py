@@ -20,9 +20,6 @@ DIFFREV_LINE_RE = re.compile(r"^\s*Differential\s+Revision:\s*\S+\s*$", re.IGNOR
 
 def load_commits(path: str) -> List[Dict]:
     commits: List[Dict] = []
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Commits JSONL not found at: {path}")
-
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             try:
@@ -77,23 +74,21 @@ def contiguous_prev_same_bug(commits: List[Dict], start_idx: int, bug_id: str) -
 def hgdate_to_iso(date_field) -> str:
     """Convert Mercurial 'date' array [epoch_seconds, tz_offset_seconds] to ISO-8601."""
     if not isinstance(date_field, (list, tuple)) or len(date_field) != 2:
-        raise TypeError(
-            f"Unexpected Mercurial date_field shape: {date_field!r}"
-        )
+        return ""
     epoch, tzoff = date_field
     try:
         tz = timezone(timedelta(seconds=int(tzoff)))
         return datetime.fromtimestamp(float(epoch), tz).isoformat(timespec="seconds")
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to convert Mercurial date_field to ISO string: {date_field!r}"
-        ) from exc
+    except Exception:
+        try:
+            return datetime.utcfromtimestamp(float(epoch)).replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+        except Exception:
+            return ""
 
 def main():
     if not os.path.isdir(HG_REPO):
-        raise FileNotFoundError(
-            f"Mercurial repo missing at expected path: {HG_REPO}"
-        )
+        print("Mercurial repo missing.", file=sys.stderr)
+        sys.exit(1)
 
     # Ensure output directory exists and truncate output file at start.
     os.makedirs(os.path.dirname(OUT_JSONL), exist_ok=True)
