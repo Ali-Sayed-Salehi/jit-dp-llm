@@ -33,7 +33,7 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         "mean_feedback_time_min": round(mean_fb, 2),
         "mean_time_to_culprit_min": round(mean_ttc, 2),
         "max_time_to_culprit_min": round(max_ttc, 2),
-        "total_cpu_time_min": round(float(total_cpu_time_min or 0.0), 2),
+        "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
 
 
@@ -421,7 +421,9 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     for idx, c in enumerate(commits, start=1):
         current_batch.append(c)
         current_end_time = c["ts"]
-        risk_sum += float(c.get("risk", 0.0) or 0.0)
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(f"Missing or None 'risk' value for commit at index {idx}: {c!r}")
+        risk_sum += float(c["risk"])
 
         if risk_sum >= risk_budget:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
@@ -504,7 +506,9 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
 
     for idx, c in enumerate(commits, start=1):
         c_ts = c["ts"]
-        risk = float(c.get("risk", 0.0) or 0.0)
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(f"Missing or None 'risk' value for commit at index {idx}: {c!r}")
+        risk = float(c["risk"])
 
         # If starting a new batch
         if not current_batch:

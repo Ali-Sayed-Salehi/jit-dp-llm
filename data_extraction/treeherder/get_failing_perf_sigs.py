@@ -35,6 +35,11 @@ def default_paths():
 def load_needed_summary_ids(alerts_with_bug_path: str) -> Set[str]:
     """Collect unique perf_reg_alert_summary_id values from the first CSV."""
     ids: Set[str] = set()
+    if not os.path.exists(alerts_with_bug_path):
+        raise FileNotFoundError(
+            f"alerts_with_bug CSV not found at: {alerts_with_bug_path}"
+        )
+
     with open(alerts_with_bug_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         total_rows = 0
@@ -67,6 +72,11 @@ def load_alert_summaries(
         summary_id -> {"alerts": alerts_string, "revision": revision_string}
     """
     summaries: Dict[str, Dict[str, str]] = {}
+    if not os.path.exists(alert_summaries_path):
+        raise FileNotFoundError(
+            f"alert_summaries CSV not found at: {alert_summaries_path}"
+        )
+
     with open(alert_summaries_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:

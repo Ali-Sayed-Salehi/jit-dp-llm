@@ -102,11 +102,15 @@ def _load_batch_signature_durations(path):
                     durations.append(float(dur))
                 except ValueError:
                     continue
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Batch signature durations CSV not found at: {path}"
+        ) from exc
 
     if not durations:
-        durations = [DEFAULT_TEST_DURATION_MIN]
+        raise RuntimeError(
+            f"No valid duration_minutes entries found in CSV at: {path}"
+        )
 
     return durations
 
@@ -196,8 +200,7 @@ def get_args():
 def load_predictions(path, pred_threshold):
     logger.debug("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
     if not os.path.exists(path):
-        logger.warning("Prediction file %s does not exist; returning empty predictions", path)
-        return {}
+        raise FileNotFoundError(f"Prediction file does not exist: {path}")
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -231,7 +234,9 @@ def parse_hg_date(date_field):
         return dt_local
     if isinstance(date_field, str):
         return datetime.fromisoformat(date_field)
-    return datetime.now(timezone.utc)
+    raise TypeError(
+        f"Unsupported hg date_field type {type(date_field)!r}; expected list[ts, offset] or ISO string."
+    )
 
 
 def get_cutoff_from_input(all_commits_path, pred_map):
@@ -239,8 +244,7 @@ def get_cutoff_from_input(all_commits_path, pred_map):
     oldest = None
     newest = None
     if not pred_map:
-        logger.warning("Prediction map is empty in get_cutoff_from_input")
-        return None, None
+        raise ValueError("Prediction map is empty in get_cutoff_from_input")
     logger.debug(
         "Scanning %s to determine cutoff window for %d predicted commits",
         all_commits_path,
@@ -391,7 +395,7 @@ def run_exhaustive_testing(commits):
         "mean_feedback_time_min": round(mean_fb_min, 2),
         "mean_time_to_culprit_min": round(mean_ttc_min, 2),
         "max_time_to_culprit_min": round(max_ttc_min, 2),
-        "total_cpu_time_min": round(float(total_cpu_time_min or 0.0), 2),
+        "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
 
     # Reuse common conversion helper for consistency

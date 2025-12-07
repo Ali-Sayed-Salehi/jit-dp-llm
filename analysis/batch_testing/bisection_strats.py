@@ -98,18 +98,17 @@ def _load_perf_metadata():
                 except ValueError:
                     continue
                 sig_durations[sig_id] = duration
-    except FileNotFoundError:
-        logger.warning(
-            "job_durations.csv not found at %s; using default_test_duration_min=%s",
-            JOB_DURATIONS_CSV,
-            _default_test_duration_min,
-        )
-        sig_durations = {}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"job_durations.csv not found at {JOB_DURATIONS_CSV}"
+        ) from exc
 
     SIGNATURE_DURATIONS = sig_durations
-    BATCH_SIGNATURE_DURATIONS = list(SIGNATURE_DURATIONS.values()) or [
-        _default_test_duration_min
-    ]
+    if not SIGNATURE_DURATIONS:
+        raise RuntimeError(
+            f"No valid job duration rows loaded from {JOB_DURATIONS_CSV}"
+        )
+    BATCH_SIGNATURE_DURATIONS = list(SIGNATURE_DURATIONS.values())
     logger.info(
         "Loaded %d signature durations; BATCH_SIGNATURE_DURATIONS length=%d",
         len(SIGNATURE_DURATIONS),
@@ -146,14 +145,16 @@ def _load_perf_metadata():
                                 continue
 
                 rev_fail[rev] = sig_ids
-    except FileNotFoundError:
-        logger.warning(
-            "alert_summary_fail_perf_sigs.csv not found at %s; REVISION_FAIL_SIG_IDS will be empty",
-            ALERT_FAIL_SIGS_CSV,
-        )
-        rev_fail = {}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"alert_summary_fail_perf_sigs.csv not found at {ALERT_FAIL_SIGS_CSV}"
+        ) from exc
 
     REVISION_FAIL_SIG_IDS = rev_fail
+    if not REVISION_FAIL_SIG_IDS:
+        raise RuntimeError(
+            f"No failing perf signatures loaded from {ALERT_FAIL_SIGS_CSV}"
+        )
     logger.info(
         "Loaded failing signature mapping for %d revisions",
         len(REVISION_FAIL_SIG_IDS),
@@ -211,15 +212,16 @@ def _load_perf_jobs_per_revision():
                 except (TypeError, ValueError):
                     sig_ids_int = []
                 mapping[rev] = sig_ids_int
-    except FileNotFoundError:
-        logger.warning(
-            "perf_jobs_per_revision_details.jsonl not found at %s; "
-            "REVISION_TESTED_SIG_IDS will be empty",
-            PERF_JOBS_PER_REV_JSON,
-        )
-        mapping = {}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"perf_jobs_per_revision_details.jsonl not found at {PERF_JOBS_PER_REV_JSON}"
+        ) from exc
 
     REVISION_TESTED_SIG_IDS = mapping
+    if not REVISION_TESTED_SIG_IDS:
+        raise RuntimeError(
+            f"No tested perf signatures loaded from {PERF_JOBS_PER_REV_JSON}"
+        )
     logger.info(
         "Loaded tested signatures for %d revisions",
         len(REVISION_TESTED_SIG_IDS),
@@ -429,13 +431,17 @@ class TestExecutor:
         earliest_free = self.worker_free_times[idx]
 
         actual_start = max(requested_start_time, earliest_free)
-        finish_time = actual_start + timedelta(minutes=duration_minutes)
+        try:
+            duration_float = float(duration_minutes)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"Invalid duration_minutes value passed to TestExecutor.schedule: {duration_minutes!r}"
+            ) from exc
+
+        finish_time = actual_start + timedelta(minutes=duration_float)
         self.worker_free_times[idx] = finish_time
         # Accumulate CPU time regardless of parallelism
-        try:
-            self.total_cpu_minutes += float(duration_minutes)
-        except (TypeError, ValueError):
-            pass
+        self.total_cpu_minutes += duration_float
         logger.debug(
             "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
             idx,
@@ -836,7 +842,11 @@ def risk_weighted_adaptive_bisect(
     # Prefix sums of risk
     risk_prefix = [0.0] * (n + 1)
     for i, c in enumerate(batch_sorted):
-        r = float(c.get("risk", 0.0) or 0.0)
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                f"Missing or None 'risk' value in batch for risk_weighted_adaptive_bisect at index {i}: {c!r}"
+            )
+        r = float(c["risk"])
         risk_prefix[i + 1] = risk_prefix[i] + r
 
     def risk_sum(lo, hi):
@@ -1067,10 +1077,14 @@ def topk_risk_first_bisect(
         return total_tests_run, culprit_times, feedback_times
 
     # ---- Step 2: Top-K risk-first probing ----
-    risks = [
-        (i, float(batch_sorted[i].get("risk", 0.0) or 0.0))
-        for i in range(n)
-    ]
+    risks = []
+    for i in range(n):
+        c = batch_sorted[i]
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                f"Missing or None 'risk' value in batch for topk_risk_first_bisect at index {i}: {c!r}"
+            )
+        risks.append((i, float(c["risk"])))
     risks.sort(key=lambda t: t[1], reverse=True)
     top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
 
