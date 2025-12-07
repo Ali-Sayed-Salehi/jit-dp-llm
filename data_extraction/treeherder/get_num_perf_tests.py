@@ -35,6 +35,9 @@ JOB_DURATIONS_CSV = os.path.join(DATASET_DIR, "job_durations.csv")
 # Output CSV: counts of perf jobs per revision
 REVISION_COUNTS_CSV = os.path.join(DATASET_DIR, "perf_jobs_per_revision.csv")
 
+# Output JSONL: per-revision details including signature IDs
+REVISION_DETAILS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_per_revision_details.jsonl")
+
 # Input JSONL: all commits on the repository (Mercurial autoland)
 ALL_COMMITS_JSONL = os.path.join(DATASET_DIR, "all_commits.jsonl")
 
@@ -47,9 +50,13 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 # ---------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------
-TIMEFRAME_DAYS = 90
-# how many days back counts as "recent" for commit submission
-RECENT_SUBMISSION_DAYS = 60
+# Inclusive date range (UTC) for revisions to include in the output
+REVISION_START_DATE = datetime(2024, 10, 10)
+REVISION_END_DATE = datetime(2025, 10, 21, 23, 59, 59)
+
+# How far back to fetch jobs from Treeherder (in days), chosen so that
+# the interval reaches at least REVISION_START_DATE.
+TIMEFRAME_DAYS = max(1, (datetime.utcnow() - REVISION_START_DATE).days + 2)
 
 REPOSITORY = "autoland"
 
@@ -58,16 +65,11 @@ client = TreeherderClient()
 def load_revisions_from_all_commits(jsonl_path: str):
     """
     Load revisions from all_commits.jsonl that:
-      - fall within the TIMEFRAME_DAYS window, and
-      - are older than RECENT_SUBMISSION_DAYS (i.e., ignore very recent submissions).
+      - have commit timestamps between REVISION_START_DATE and REVISION_END_DATE (inclusive).
 
     Returns a dict: {revision_hash -> submission_datetime_utc}.
     """
     revisions = {}
-
-    now = datetime.utcnow()
-    timeframe_cutoff = now - timedelta(days=TIMEFRAME_DAYS)
-    recent_cutoff = now - timedelta(days=RECENT_SUBMISSION_DAYS)
 
     if not os.path.exists(jsonl_path):
         raise FileNotFoundError(f"all_commits.jsonl not found at {jsonl_path}")
@@ -93,19 +95,15 @@ def load_revisions_from_all_commits(jsonl_path: str):
             except Exception:
                 continue
 
-            # Filter by timeframe first
-            if commit_dt < timeframe_cutoff:
-                continue
-
-            # Ignore revisions that were submitted in the last RECENT_SUBMISSION_DAYS days
-            if commit_dt >= recent_cutoff:
+            # Keep only revisions whose commit time is inside the configured window
+            if commit_dt < REVISION_START_DATE or commit_dt > REVISION_END_DATE:
                 continue
 
             revisions[node] = commit_dt
 
     print(
         f"Loaded {len(revisions)} revisions from all_commits.jsonl "
-        f"within timeframe and older than {RECENT_SUBMISSION_DAYS} days."
+        f"between {REVISION_START_DATE.date()} and {REVISION_END_DATE.date()}."
     )
     return revisions
 
@@ -175,11 +173,13 @@ def aggregate_revision_counts(signatures, allowed_revisions):
     Rules:
       - Only count jobs where submit_time is within 5 minutes AFTER push_timestamp.
       - Only consider revisions present in allowed_revisions, which are:
-          * within the TIMEFRAME_DAYS window, and
-          * older than RECENT_SUBMISSION_DAYS days (recent submissions are ignored).
+          * whose commit timestamps fall within the configured revision
+            date window [REVISION_START_DATE, REVISION_END_DATE].
     """
     # For counting jobs that pass the 5-minute filter
     revision_jobs = defaultdict(int)
+    # For tracking which signatures ran for each revision
+    revision_signatures = defaultdict(set)
 
     dt_format = "%Y-%m-%dT%H:%M:%S"
     max_diff = timedelta(minutes=5)
@@ -213,15 +213,17 @@ def aggregate_revision_counts(signatures, allowed_revisions):
             if diff < timedelta(0) or diff > max_diff:
                 continue
 
-            # Tentatively count; we'll drop revisions in recent_revisions later
+            # Count the job and record its signature for this revision
             revision_jobs[rev] += 1
+            revision_signatures[rev].add(sig_id)
 
     # Ensure all allowed revisions are present, even if they had zero jobs
     for rev in allowed_revisions:
         revision_jobs.setdefault(rev, 0)
+        revision_signatures.setdefault(rev, set())
 
     print(f"Collected job counts for {len(revision_jobs)} revisions.")
-    return dict(revision_jobs)
+    return dict(revision_jobs), {rev: sorted(sigs) for rev, sigs in revision_signatures.items()}
 
 
 def write_revision_counts_csv(revision_counts, revision_timestamps, out_path: str):
@@ -249,6 +251,38 @@ def write_revision_counts_csv(revision_counts, revision_timestamps, out_path: st
             writer.writerow([rev, ts.isoformat(), count])
 
     print(f"Wrote revision counts CSV to {out_path}")
+
+
+def write_revision_details_jsonl(
+    revision_counts, revision_signatures, revision_timestamps, out_path: str
+):
+    """
+    Write per-revision details to JSONL:
+      {"revision", "submit_time_iso", "total_jobs", "signature_ids"}.
+
+    Lines are sorted by submission timestamp ascending.
+    """
+    rows = []
+    for rev, count in revision_counts.items():
+        ts = revision_timestamps.get(rev)
+        if ts is None:
+            continue
+        sigs = revision_signatures.get(rev, [])
+        rows.append((rev, ts, sigs, count))
+
+    rows.sort(key=lambda x: x[1])
+
+    with open(out_path, "w") as f:
+        for rev, ts, sigs, count in rows:
+            record = {
+                "revision": rev,
+                "submit_time_iso": ts.isoformat(),
+                "total_jobs": count,
+                "signature_ids": sigs,
+            }
+            f.write(json.dumps(record) + "\n")
+
+    print(f"Wrote revision details JSONL to {out_path}")
 
 
 # NEW: utilities for stats & plotting, using the saved CSV
@@ -307,8 +341,9 @@ def compute_statistics(counts):
         trimmed = sorted_counts
     trimmed_mean_val = mean(trimmed)
 
-    # Geometric mean (requires all counts > 0; that's true here)
-    geo_mean_val = geometric_mean(sorted_counts)
+    # Geometric mean: only defined for strictly positive values.
+    positive_counts = [c for c in sorted_counts if c > 0]
+    geo_mean_val = geometric_mean(positive_counts) if positive_counts else None
 
     # Round a bit for nicer JSON output (you can adjust precision)
     def r(x):
@@ -328,7 +363,7 @@ def compute_statistics(counts):
             "99": r(p99),
         },
         "trimmed_mean_10pct": r(trimmed_mean_val),
-        "geometric_mean": r(geo_mean_val),
+        "geometric_mean": (r(geo_mean_val) if geo_mean_val is not None else None),
     }
 
     return stats
@@ -374,12 +409,22 @@ def main():
     revision_timestamps = load_revisions_from_all_commits(ALL_COMMITS_JSONL)
 
     # 3) Fetch all jobs and aggregate revision counts (with filters)
-    revision_counts = aggregate_revision_counts(signatures, revision_timestamps)
+    revision_counts, revision_signatures = aggregate_revision_counts(
+        signatures, revision_timestamps
+    )
 
-    # 4) Save summary CSV (sorted by submission time, with timestamp column)
+    # 4) Save summary CSV (sorted by submission time, with timestamp column only)
     write_revision_counts_csv(revision_counts, revision_timestamps, REVISION_COUNTS_CSV)
 
-    # 5) Reload counts from CSV and compute stats + plot
+    # 5) Save detailed JSONL with signature_ids included
+    write_revision_details_jsonl(
+        revision_counts,
+        revision_signatures,
+        revision_timestamps,
+        REVISION_DETAILS_JSONL,
+    )
+
+    # 6) Reload counts from CSV and compute stats + plot
     counts = load_counts_from_csv(REVISION_COUNTS_CSV)
     write_stats_json(counts, STATS_JSON)
     plot_distribution(counts, DIST_PLOT_PNG)
