@@ -183,11 +183,6 @@ def aggregate_revision_counts(signatures, allowed_revisions):
     # For tracking which signatures ran for each revision
     revision_signatures = defaultdict(set)
 
-    # Debug: track signatures that have jobs submitted before this date
-    # Uses submit_time coming from the Treeherder performance/summary API.
-    early_submit_cutoff = datetime(2025, 8, 8)
-    early_submit_signatures = set()
-
     dt_format = "%Y-%m-%dT%H:%M:%S"
     max_diff = timedelta(minutes=10)
 
@@ -204,8 +199,16 @@ def aggregate_revision_counts(signatures, allowed_revisions):
             push_ts_str = job.get("push_timestamp")
             submit_time_str = job.get("submit_time")
 
-            # Only count jobs that pass the 5-minute condition
-            if not push_ts_str or not submit_time_str:
+            # If submit_time is missing (jobs older than 2025-08-08), accept the job without applying
+            # the 5-minute condition.
+            if not submit_time_str:
+                revision_jobs[rev] += 1
+                revision_signatures[rev].add(sig_id)
+                continue
+
+            # For jobs with a submit_time, we require push_timestamp and
+            # enforce the 5-minute window.
+            if not push_ts_str:
                 continue
 
             try:
@@ -214,16 +217,6 @@ def aggregate_revision_counts(signatures, allowed_revisions):
             except ValueError:
                 # Skip jobs with malformed timestamps for counting
                 continue
-
-            # Debug logging: signatures with jobs submitted before cutoff date,
-            # based solely on data returned by performance/summary.
-            if submit_time < early_submit_cutoff and sig_id not in early_submit_signatures:
-                print(
-                    "[DEBUG] Signature %s has job for revision %s with submit_time %s "
-                    "before 2025-08-08"
-                    % (sig_id, rev, submit_time.isoformat())
-                )
-                early_submit_signatures.add(sig_id)
 
             diff = submit_time - push_ts
             # Only consider jobs where submit_time is in [push_ts, push_ts + 5 min]
