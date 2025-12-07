@@ -527,12 +527,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     baseline = {}
     if base_commits_for_context:
         logger.info(
-            "Running baseline TWB + TOB simulation for context on %d commits",
+            "Running baseline TWB + PAR simulation for context on %d commits",
             len(base_commits_for_context),
         )
         baseline = simulate_twb_with_bisect(
             base_commits_for_context,
-            time_ordered_bisect,
+            exhaustive_parallel,
             BATCH_HOURS,
             NUM_TEST_WORKERS,
         )
@@ -560,7 +560,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline,
+        "Baseline (TWB + PAR, BATCH_HOURS=4)": baseline,
         "num_test_workers": NUM_TEST_WORKERS,
     }
 
@@ -709,6 +709,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                         "max_time_to_culprit_hr": res.get(
                             "max_time_to_culprit_hr"
                         ),
+                        "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                         "violates_baseline": (
                             baseline_max_ttc is not None
                             and res.get("max_time_to_culprit_hr", 0)
@@ -729,7 +730,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             baseline_fb = baseline.get("mean_feedback_time_hr", None)
             baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
             baseline_tests = baseline.get("total_tests_run", None)
-            baseline_cpu_time = baseline.get("total_cpu_time_hr", None)
 
             def time_saved_pct(base, val):
                 return (
@@ -743,6 +743,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 "mean_feedback_time_hr": selected["mean_feedback_time_hr"],
                 "mean_time_to_culprit_hr": selected["mean_time_to_culprit_hr"],
                 "max_time_to_culprit_hr": selected["max_time_to_culprit_hr"],
+                "total_cpu_time_hr": selected.get("total_cpu_time_hr"),
                 "violates_baseline": selected["violates_baseline"],
                 "best_params": selected["best_params"],
                 "pred_threshold_used": selected["pred_threshold_used"],
@@ -767,12 +768,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     selected["max_time_to_culprit_hr"],
                 )
                 if baseline_max_ttc is not None
-                else 0.0,
-                "cpu_time_saved_vs_baseline_pct": time_saved_pct(
-                    baseline_cpu_time,
-                    selected.get("total_cpu_time_hr", baseline_cpu_time),
-                )
-                if baseline_cpu_time is not None
                 else 0.0,
                 "_mopt_pareto_sample_size": len(pareto),
             }
@@ -803,14 +798,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     )
     out_eval["best_by_mean_feedback_time"] = (
         min(combo_items, key=lambda kv: kv[1]["mean_feedback_time_hr"])[0]
-        if combo_items
-        else "-"
-    )
-    out_eval["best_by_cpu_time"] = (
-        min(
-            combo_items,
-            key=lambda kv: kv[1].get("total_cpu_time_hr", float("inf")),
-        )[0]
         if combo_items
         else "-"
     )
@@ -854,7 +841,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     et_results_final = run_exhaustive_testing(base_commits_final)
     baseline_final = simulate_twb_with_bisect(
-        base_commits_final, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS
+        base_commits_final, exhaustive_parallel, BATCH_HOURS, NUM_TEST_WORKERS
     )
     baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -862,7 +849,6 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     baseline_mean_ttc = baseline_final["mean_time_to_culprit_hr"]
     baseline_max_ttc = baseline_final["max_time_to_culprit_hr"]
     baseline_tests = baseline_final["total_tests_run"]
-    baseline_cpu_time = baseline_final.get("total_cpu_time_hr", None)
 
     def time_saved_pct(base, val):
         return (
@@ -873,7 +859,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline_final,
+        "Baseline (TWB + PAR, BATCH_HOURS=4)": baseline_final,
         "final_window": {
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
@@ -887,7 +873,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for combo_name, val in eval_out.items():
         if combo_name in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWB + PAR, BATCH_HOURS=4)",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
@@ -965,12 +951,6 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
                     baseline_max_ttc,
                     res_final.get("max_time_to_culprit_hr", baseline_max_ttc),
                 ),
-                "cpu_time_saved_vs_baseline_pct": time_saved_pct(
-                    baseline_cpu_time,
-                    res_final.get("total_cpu_time_hr", baseline_cpu_time),
-                )
-                if baseline_cpu_time is not None
-                else 0.0,
                 "best_params_from_eval": best_params,
                 "pred_threshold_used_from_eval": pred_thr,
             }
@@ -983,12 +963,11 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for k, v in final_results.items():
         if k in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWB + PAR, BATCH_HOURS=4)",
             "final_window",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
-            "best_by_cpu_time",
             "bet_overall_improvement_over_baseline",
             "num_test_workers",
         ):
@@ -999,7 +978,6 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
                 "total_tests_run",
                 "max_time_to_culprit_hr",
                 "mean_feedback_time_hr",
-                "total_cpu_time_hr",
             )
         ):
             eligible.append((k, v))
@@ -1014,9 +992,6 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         final_results["best_by_mean_feedback_time"] = min(
             eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
         )[0]
-        final_results["best_by_cpu_time"] = min(
-            eligible, key=lambda kv: kv[1]["total_cpu_time_hr"]
-        )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
         final_results["bet_overall_improvement_over_baseline"] = (
             choose_best_overall_from_items(eligible)
@@ -1025,7 +1000,6 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
-        final_results["best_by_cpu_time"] = "-"
         final_results["bet_overall_improvement_over_baseline"] = "NA"
 
     # Save FINAL

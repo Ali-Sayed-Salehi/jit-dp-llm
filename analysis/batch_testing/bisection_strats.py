@@ -518,9 +518,6 @@ def exhaustive_parallel(
           * The last commit's feedback time is when the last per-commit
             suite finishes (no additional tests for the last one).
 
-      - If is_batch_root is False:
-          * Skip the full batch run and just schedule per-commit runs
-            using the batch-level failing signatures.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
