@@ -35,7 +35,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 
 DATASET_DIR = os.path.join(REPO_ROOT, "datasets", "mozilla_perf")
-JOB_DURATIONS_CSV = os.path.join(DATASET_DIR, "job_durations.csv")
 
 # Output CSV: counts of perf jobs per revision
 REVISION_COUNTS_CSV = os.path.join(DATASET_DIR, "perf_jobs_per_revision.csv")
@@ -119,21 +118,26 @@ def load_revisions_from_all_commits(jsonl_path: str):
     return revisions
 
 
-def load_signatures_from_csv(csv_path: str):
-    """Load all signature IDs from job_durations.csv."""
-    signatures = set()
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if not row:
-                continue
-            try:
-                signatures.add(int(row[0]))
-            except Exception:
-                pass
-    print(f"Loaded {len(signatures)} signatures.")
-    return signatures
+def load_signatures_from_api(repository: str):
+    """
+    Load all performance signature IDs from Treeherder for the given repository.
+
+    This mirrors the behavior in get_job_duration.py, but only returns the
+    integer signature IDs. Some signatures may not have any jobs in the
+    requested timeframe; those are handled later when fetching jobs.
+    """
+    try:
+        signatures = client._get_json("performance/signatures", repository)
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch signatures from Treeherder: {e}")
+
+    if not signatures:
+        print("Warning: no signatures returned from Treeherder.")
+        return set()
+
+    sig_ids = {int(sig["id"]) for sig in signatures.values() if "id" in sig}
+    print(f"Loaded {len(sig_ids)} signatures from Treeherder for '{repository}'.")
+    return sig_ids
 
 
 def fetch_jobs_for_signature(signature_id: int):
@@ -522,8 +526,10 @@ def plot_distribution(counts, out_path: str):
 
 
 def main(debug: bool = False):
-    # 1) Load signatures from job_durations.csv
-    signatures = load_signatures_from_csv(JOB_DURATIONS_CSV)
+    # 1) Load signatures from Treeherder via the performance/signatures API.
+    #    Some signatures may not have any jobs; those will simply contribute
+    #    zero jobs when we fetch and aggregate.
+    signatures = load_signatures_from_api(REPOSITORY)
 
     if debug:
         # In debug mode, only use a random subset of 20 signatures

@@ -2,15 +2,15 @@
 Fetch Treeherder performance signatures and sample job durations
 over a configurable time window, saving a CSV, statistics JSON,
 and a histogram plot of job durations.
+
+This version reads pre-fetched jobs from perf_jobs_by_signature.jsonl
+produced by get_num_perf_tests.py, instead of making API calls.
 """
 
-from math import ceil
 import math
 import os
 import csv
 import matplotlib.pyplot as plt
-from thclient import TreeherderClient
-from pprint import pprint
 import statistics as stats
 import json
 
@@ -22,29 +22,77 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 DATASET_DIR = os.path.join(REPO_ROOT, "datasets", "mozilla_perf")
 CSV_PATH = os.path.join(DATASET_DIR, "job_durations.csv")
 PLOT_PATH = os.path.join(DATASET_DIR, "job_durations.png")
-NO_DATA_SIG_PATH = os.path.join(DATASET_DIR, "no_data_signatures.txt")
 
-# Timeframe (in days). Adjust this value as needed.
-TIMEFRAME_DAYS = 365
-TIMEFRAME = TIMEFRAME_DAYS * 24 * 60 * 60
+# Input: per-signature jobs cache produced by get_num_perf_tests.py
+SIGNATURE_JOBS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_by_signature.jsonl")
 
-client = TreeherderClient()
 
 os.makedirs(DATASET_DIR, exist_ok=True)
 
-# -------------------------
-# Load no-data signatures
-# -------------------------
-no_data_signatures = set()
-if os.path.exists(NO_DATA_SIG_PATH):
-    with open(NO_DATA_SIG_PATH, "r") as f:
-        for line in f:
-            try:
-                no_data_signatures.add(int(line.strip()))
-            except:
-                pass
 
-print(f"Loaded {len(no_data_signatures)} signatures with no jobs from previous runs.")
+def load_signature_jobs(jsonl_path: str):
+    """
+    Load per-signature jobs from perf_jobs_by_signature.jsonl.
+
+    Each line is:
+      {"signature_id": <int>, "jobs": [<job dicts>]}
+    Returns dict[int, list[dict]] mapping signature_id -> jobs list.
+    """
+    signature_jobs = {}
+
+    if not os.path.exists(jsonl_path):
+        raise FileNotFoundError(
+            f"Signature jobs JSONL not found at {jsonl_path}. "
+            "Run get_num_perf_tests.py first to generate it."
+        )
+
+    with open(jsonl_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            sig_id = record.get("signature_id")
+            jobs = record.get("jobs", [])
+            if sig_id is None:
+                continue
+            try:
+                sig_id_int = int(sig_id)
+            except Exception:
+                continue
+
+            signature_jobs[sig_id_int] = jobs
+
+    print(
+        f"Loaded jobs for {len(signature_jobs)} signatures "
+        f"from {jsonl_path}."
+    )
+    return signature_jobs
+
+
+def job_duration_minutes(job: dict):
+    """
+    Best-effort extraction of job duration in minutes from a cached job dict.
+
+    The duration is computed strictly as:
+        (end_timestamp - start_timestamp) / 60
+    If either timestamp is missing or invalid, returns None.
+    """
+    if not isinstance(job, dict):
+        return None
+
+    if "start_timestamp" not in job or "end_timestamp" not in job:
+        return None
+
+    try:
+        dur_seconds = float(job["end_timestamp"]) - float(job["start_timestamp"])
+        return dur_seconds / 60.0
+    except Exception:
+        return None
 
 # -------------------------
 # Load already-processed signatures
@@ -64,64 +112,48 @@ if csv_exists:
 print(f"Loaded {len(processed_signatures)} processed signatures from previous runs.")
 
 # -------------------------
-# Fetch all signatures
+# Load all signature jobs from cache
 # -------------------------
-signatures = client._get_json("performance/signatures", "autoland")
-print(f"Signatures size: {len(signatures)}")
+signature_jobs = load_signature_jobs(SIGNATURE_JOBS_JSONL)
+print(f"Total signatures in cache: {len(signature_jobs)}")
 
 # -------------------------
 # Write CSV row-by-row
 # -------------------------
 csv_mode = "a" if csv_exists else "w"
 
-with open(CSV_PATH, csv_mode, newline="") as csvfile, \
-     open(NO_DATA_SIG_PATH, "a") as no_data_file:
+with open(CSV_PATH, csv_mode, newline="") as csvfile:
 
     writer = csv.writer(csvfile)
 
     if not csv_exists:
         writer.writerow(["signature_id", "duration_minutes"])
 
-    for sig in signatures.values():
-        signature_id = sig["id"]
-
-        # Skip signatures already processed or known to have no jobs
-        if signature_id in processed_signatures or signature_id in no_data_signatures:
+    for signature_id, jobs_list in signature_jobs.items():
+        # Skip signatures already processed
+        if signature_id in processed_signatures:
             continue
 
-        performance_summary_params = {
-            "repository": "autoland",
-            "signature": signature_id,
-            "interval": TIMEFRAME,
-            "all_data": True,
-            "replicates": False,
-        }
-
-        data_list = client._get_json("performance/summary", **performance_summary_params)
-        if not data_list:
-            continue
-
-        jobs_list = data_list[0].get("data", [])
-        if not jobs_list:
-            # Save only if summary exists but no jobs
-            if signature_id not in no_data_signatures:
-                no_data_signatures.add(signature_id)
-                no_data_file.write(f"{signature_id}\n")
-                no_data_file.flush()
+        # Require at least 3 jobs in the cache; otherwise skip this signature
+        if not jobs_list or len(jobs_list) < 3:
             continue
 
         # Pick first, middle, last jobs
         ids_to_fetch = [
-            jobs_list[0]["job_id"],
-            jobs_list[len(jobs_list) // 2]["job_id"],
-            jobs_list[-1]["job_id"],
+            jobs_list[0],
+            jobs_list[len(jobs_list) // 2],
+            jobs_list[-1],
         ]
 
         durations = []
-        for job_id in ids_to_fetch:
-            job_info = client.get_jobs("autoland", id=job_id)[0]
-            dur_s = job_info["end_timestamp"] - job_info["start_timestamp"]
-            durations.append(dur_s / 60.0)
+        for job in ids_to_fetch:
+            dur = job_duration_minutes(job)
+            if dur is not None:
+                durations.append(dur)
+
+        # If we couldn't compute at least 3 durations, skip this signature
+        if len(durations) < 3:
+            continue
 
         # Mean of sampled durations
         duration_mean = sum(durations) / len(durations)
@@ -134,7 +166,6 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile, \
         csvfile.flush()
 
 print(f"CSV written row-by-row to {CSV_PATH}")
-print(f"Updated no-jobs signatures saved to {NO_DATA_SIG_PATH}")
 
 # ============================================================
 # 4) PLOT USING THE CSV FILE (NOT IN-MEMORY DURATIONS)
