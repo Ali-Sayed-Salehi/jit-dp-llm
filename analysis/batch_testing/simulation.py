@@ -17,6 +17,7 @@ from batch_strats import (
     simulate_rapb_t_a_with_bisect,
     simulate_rrbb_with_bisect,
     simulate_ratb_with_bisect,
+    simulate_twsb_with_bisect,
 )
 
 from bisection_strats import (
@@ -420,6 +421,10 @@ def convert_result_minutes_to_hours(res):
 
 
 def lookup_batching(name):
+    # Special-case TWSB so it can appear in eval/final combos without being
+    # part of the Optuna-tuned BATCHING_STRATEGIES grid.
+    if name == "TWSB":
+        return simulate_twsb_with_bisect, None
     for n, fn, default_param in BATCHING_STRATEGIES:
         if n == name:
             return fn, default_param
@@ -527,18 +532,29 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     baseline = {}
     if base_commits_for_context:
         logger.info(
-            "Running baseline TWB + PAR simulation for context on %d commits",
+            "Running baseline TWSB + PAR simulation for context on %d commits",
             len(base_commits_for_context),
         )
-        baseline = simulate_twb_with_bisect(
+        baseline = simulate_twsb_with_bisect(
             base_commits_for_context,
             exhaustive_parallel,
-            BATCH_HOURS,
+            None,
             NUM_TEST_WORKERS,
         )
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
     baseline_cpu = baseline.get("total_cpu_time_hr", None)
+
+    baseline_fb = baseline.get("mean_feedback_time_hr", None)
+    baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
+    baseline_tests = baseline.get("total_tests_run", None)
+
+    def time_saved_pct(base, val):
+        return (
+            round((base - val) / base * 100.0, 2)
+            if base and base > 0
+            else 0.0
+        )
 
     def pick_best(pareto, baseline_max_ttc_local):
         if not pareto:
@@ -560,7 +576,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB + PAR, BATCH_HOURS=4)": baseline,
+        "Baseline (TWSB + PAR)": baseline,
         "num_test_workers": NUM_TEST_WORKERS,
     }
 
@@ -727,17 +743,6 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 continue
 
             # compute deltas vs baseline for the selected
-            baseline_fb = baseline.get("mean_feedback_time_hr", None)
-            baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
-            baseline_tests = baseline.get("total_tests_run", None)
-
-            def time_saved_pct(base, val):
-                return (
-                    round((base - val) / base * 100.0, 2)
-                    if base and base > 0
-                    else 0.0
-                )
-
             result_entry = {
                 "total_tests_run": selected["total_tests_run"],
                 "mean_feedback_time_hr": selected["mean_feedback_time_hr"],
@@ -773,6 +778,67 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             }
             out_eval[combo_key] = result_entry
 
+    # Also evaluate fixed-parameter TWSB with all bisection strategies on the
+    # same base commit set used for the baseline.
+    if base_commits_for_context:
+        for bis_name, bis_fn in BISECTION_STRATEGIES:
+            combo_key = f"TWSB + {bis_name}"
+            logger.info(
+                "Running fixed TWSB combo %s on %d commits",
+                combo_key,
+                len(base_commits_for_context),
+            )
+            res = simulate_twsb_with_bisect(
+                base_commits_for_context,
+                bis_fn,
+                None,
+                NUM_TEST_WORKERS,
+            )
+            res = convert_result_minutes_to_hours(res)
+
+            violates = (
+                baseline_max_ttc is not None
+                and res.get("max_time_to_culprit_hr", 0)
+                > baseline_max_ttc
+            )
+
+            result_entry = {
+                "total_tests_run": res.get("total_tests_run"),
+                "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
+                "mean_time_to_culprit_hr": res.get("mean_time_to_culprit_hr"),
+                "max_time_to_culprit_hr": res.get("max_time_to_culprit_hr"),
+                "total_cpu_time_hr": res.get("total_cpu_time_hr"),
+                "violates_baseline": violates,
+                "best_params": {},  # no tunable params for TWSB
+                "pred_threshold_used": PRED_THRESHOLD,
+                "tests_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_tests,
+                    res.get("total_tests_run", baseline_tests),
+                )
+                if baseline_tests is not None
+                else 0.0,
+                "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_fb,
+                    res.get("mean_feedback_time_hr", baseline_fb),
+                )
+                if baseline_fb is not None
+                else 0.0,
+                "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_mean_ttc,
+                    res.get("mean_time_to_culprit_hr", baseline_mean_ttc),
+                )
+                if baseline_mean_ttc is not None
+                else 0.0,
+                "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_max_ttc,
+                    res.get("max_time_to_culprit_hr", baseline_max_ttc),
+                )
+                if baseline_max_ttc is not None
+                else 0.0,
+                "_mopt_pareto_sample_size": 1,
+            }
+            out_eval[combo_key] = result_entry
+
     # summary (unified)
     combo_items = [
         (k, v)
@@ -780,7 +846,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         if k
         not in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "num_test_workers",
         )
     ]
@@ -840,8 +906,8 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
     et_results_final = run_exhaustive_testing(base_commits_final)
-    baseline_final = simulate_twb_with_bisect(
-        base_commits_final, exhaustive_parallel, BATCH_HOURS, NUM_TEST_WORKERS
+    baseline_final = simulate_twsb_with_bisect(
+        base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
     )
     baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -859,7 +925,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWB + PAR, BATCH_HOURS=4)": baseline_final,
+        "Baseline (TWSB + PAR)": baseline_final,
         "final_window": {
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
@@ -873,7 +939,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for combo_name, val in eval_out.items():
         if combo_name in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + PAR, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
@@ -891,29 +957,34 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         if b_fn is None or bis_fn is None:
             continue
 
-        best_params = val.get("best_params")
-        if not isinstance(best_params, dict):
-            # Skip malformed entries
-            continue
-
         pred_thr = val.get("pred_threshold_used", PRED_THRESHOLD)
 
         # Unpack params for this strategy
+        best_params = val.get("best_params")
         if b_name == "RAPB":
+            if not isinstance(best_params, dict):
+                continue
             param = (
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
         elif b_name == "RATB":
+            if not isinstance(best_params, dict):
+                continue
             param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
             )
+        elif b_name == "TWSB":
+            # No tunable params for TWSB
+            param = None
         else:
             # single-valued dict e.g., {"BATCH_HOURS": x} 
             # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
             # or {"RRBB_BUDGET": b}
             try:
+                if not isinstance(best_params, dict):
+                    continue
                 param = list(best_params.values())[0]
             except Exception:
                 continue
@@ -963,7 +1034,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for k, v in final_results.items():
         if k in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + PAR, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "final_window",
             "best_by_total_tests",
             "best_by_max_ttc",

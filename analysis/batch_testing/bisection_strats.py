@@ -16,6 +16,9 @@ JOB_DURATIONS_CSV = os.path.join(
 ALERT_FAIL_SIGS_CSV = os.path.join(
     REPO_ROOT, "datasets", "mozilla_perf", "alert_summary_fail_perf_sigs.csv"
 )
+PERF_JOBS_PER_REV_JSON = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "perf_jobs_per_revision_details.json"
+)
 
 # Fallbacks and knobs (configured by the main simulation script).
 _default_test_duration_min = 21.0
@@ -25,6 +28,8 @@ _full_suite_signatures_per_run = None
 SIGNATURE_DURATIONS = {}
 # revision (commit_id) -> list[int signature_id]
 REVISION_FAIL_SIG_IDS = {}
+# revision (commit_id) -> list[int signature_id] actually tested on that revision
+REVISION_TESTED_SIG_IDS = {}
 # list[float] of durations for the "full" batch test (all signatures)
 BATCH_SIGNATURE_DURATIONS = []
 
@@ -155,6 +160,72 @@ def _load_perf_metadata():
     )
 
 
+def _load_perf_jobs_per_revision():
+    """
+    Load:
+      - perf_jobs_per_revision_details.jsonl => REVISION_TESTED_SIG_IDS
+
+    The JSON file can be either:
+      * a JSON-lines file (one JSON object per line), or
+      * a single JSON list of objects.
+    Each object is expected to have:
+      - 'revision': str
+      - 'signature_ids': list[int]
+    """
+    global REVISION_TESTED_SIG_IDS
+
+    if REVISION_TESTED_SIG_IDS:
+        logger.debug(
+            "Revision->tested-signatures mapping already loaded; skipping reload."
+        )
+        return
+
+    mapping = {}
+    try:
+        logger.info(
+            "Loading tested perf signatures per revision from %s (JSONL)",
+            PERF_JOBS_PER_REV_JSON,
+        )
+        with open(PERF_JOBS_PER_REV_JSON, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSONL line in %s: %s",
+                        PERF_JOBS_PER_REV_JSON,
+                        line[:200],
+                    )
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                rev = obj.get("revision")
+                sig_ids = obj.get("signature_ids") or []
+                if not rev:
+                    continue
+                try:
+                    sig_ids_int = [int(s) for s in sig_ids]
+                except (TypeError, ValueError):
+                    sig_ids_int = []
+                mapping[rev] = sig_ids_int
+    except FileNotFoundError:
+        logger.warning(
+            "perf_jobs_per_revision_details.json not found at %s; "
+            "REVISION_TESTED_SIG_IDS will be empty",
+            PERF_JOBS_PER_REV_JSON,
+        )
+        mapping = {}
+
+    REVISION_TESTED_SIG_IDS = mapping
+    logger.info(
+        "Loaded tested signatures for %d revisions",
+        len(REVISION_TESTED_SIG_IDS),
+    )
+
+
 def get_batch_signature_durations():
     """
     Durations (minutes) for a full perf batch run:
@@ -216,6 +287,44 @@ def get_failing_signature_durations_for_batch(batch_sorted):
         len(durations),
     )
     return durations
+
+
+def get_tested_signatures_for_revision(revision):
+    """
+    Return the list of signature IDs that were actually tested for the given
+    revision according to perf_jobs_per_revision_details.json.
+    """
+    _load_perf_jobs_per_revision()
+    return REVISION_TESTED_SIG_IDS.get(revision, [])
+
+
+def get_signature_durations_for_ids(signature_ids):
+    """
+    Map a collection of signature IDs to their durations (in minutes) using
+    job_durations.csv. For any unknown signature, we fall back to
+    _default_test_duration_min.
+    """
+    _load_perf_metadata()
+    durations = []
+    for sig in signature_ids:
+        try:
+            sig_id = int(sig)
+        except (TypeError, ValueError):
+            continue
+        dur = SIGNATURE_DURATIONS.get(sig_id, _default_test_duration_min)
+        durations.append(dur)
+    if not durations:
+        durations = [_default_test_duration_min]
+    return durations
+
+
+def get_failing_signatures_for_revision(revision):
+    """
+    Return the list of failing signature IDs for a given revision according to
+    alert_summary_fail_perf_sigs.csv.
+    """
+    _load_perf_metadata()
+    return REVISION_FAIL_SIG_IDS.get(revision, [])
 
 class TestExecutor:
     """

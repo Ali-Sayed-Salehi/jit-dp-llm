@@ -5,7 +5,11 @@ import math
 import logging
 
 from bisection_strats import (
-    TestExecutor
+    TestExecutor,
+    run_test_suite,
+    get_tested_signatures_for_revision,
+    get_signature_durations_for_ids,
+    get_failing_signatures_for_revision,
 )
 
 
@@ -31,6 +35,133 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         "max_time_to_culprit_min": round(max_ttc, 2),
         "total_cpu_time_min": round(float(total_cpu_time_min or 0.0), 2),
     }
+
+
+def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
+    """
+    Time-Window Subset Batching (TWSB).
+
+    For each revision, we run only the perf signatures that Mozilla actually
+    executed for that revision (from perf_jobs_per_revision_details.json).
+    When this per-revision subset first exercises any failing signature for a
+    regressor that lies between the last known clean revision and the current
+    revision, we trigger a bisection between that last clean revision and the
+    current revision, using the provided bisect_fn.
+
+    Each bisection step uses the same failing-signature suite as other
+    bisection strategies (via bisection_strats).
+    """
+    logger.info(
+        "simulate_twsb_with_bisect: %d commits, bisect_fn=%s",
+        len(commits),
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    if not commits:
+        logger.info("simulate_twsb_with_bisect: no commits; returning empty results")
+        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+
+    executor = TestExecutor(num_workers)
+
+    # Precompute, for each commit, the set of perf signatures that actually ran.
+    tested_sig_sets = []
+    for c in commits:
+        rev = c["commit_id"]
+        tested_sig_sets.append(set(get_tested_signatures_for_revision(rev)))
+
+    # For each regressor commit j, precompute:
+    #   - fail_sigs[j]: its failing signatures (from alert_summary_fail_perf_sigs.csv)
+    #   - last_clean_for_regressor[j]: index of the most recent commit k < j
+    #     that ran at least one of those failing signatures (i.e., was clean
+    #     when exercising them, since the bug has not landed yet).
+    regressor_fail_sigs = {}
+    last_clean_for_regressor = {}
+
+    last_seen_index_by_sig = {}
+    for idx, c in enumerate(commits):
+        if c["true_label"]:
+            bug_rev = c["commit_id"]
+            fail_sigs = set(get_failing_signatures_for_revision(bug_rev))
+            regressor_fail_sigs[idx] = fail_sigs
+
+            last_clean_idx_for_j = -1
+            for sig in fail_sigs:
+                prev_idx = last_seen_index_by_sig.get(sig, -1)
+                if prev_idx > last_clean_idx_for_j:
+                    last_clean_idx_for_j = prev_idx
+            last_clean_for_regressor[idx] = last_clean_idx_for_j
+
+        # After computing last_clean_for_regressor for any regressor at idx,
+        # update "last seen" indices for all signatures tested at this commit.
+        for sig in tested_sig_sets[idx]:
+            last_seen_index_by_sig[sig] = idx
+
+    handled_regressor_idxs = set()
+
+    for idx, c in enumerate(commits):
+        submit_time = c["ts"]
+        sig_id_set = tested_sig_sets[idx]
+
+        if sig_id_set:
+            durations = get_signature_durations_for_ids(sig_id_set)
+            per_rev_finish_time = run_test_suite(executor, submit_time, durations)
+            total_tests_run += len(durations)
+        else:
+            per_rev_finish_time = submit_time
+
+        if not sig_id_set:
+            continue
+
+        # Check whether this revision is the first one (since each bug's
+        # regressor) to exercise any of that bug's failing signatures.
+        for j, fail_sigs in regressor_fail_sigs.items():
+            if j in handled_regressor_idxs:
+                continue
+            if j > idx:
+                # Bug has not landed yet at this point in the stream.
+                continue
+            if not fail_sigs:
+                handled_regressor_idxs.add(j)
+                continue
+
+            if not sig_id_set.intersection(fail_sigs):
+                continue
+
+            # We iterate idx in time order and mark j as handled immediately
+            # after triggering, so this is the first revision >= j whose
+            # subset exercises any failing signature for bug j.
+            last_clean_idx_for_j = last_clean_for_regressor.get(j, -1)
+            batch_start_idx = max(0, last_clean_idx_for_j + 1)
+            if batch_start_idx > idx:
+                # Should not happen, but guard against empty ranges.
+                batch_start_idx = idx
+
+            batch = commits[batch_start_idx : idx + 1]
+            if not batch:
+                handled_regressor_idxs.add(j)
+                continue
+
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                batch,
+                per_rev_finish_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+                False,  # is_batch_root=False so we only use failing signatures
+            )
+
+            handled_regressor_idxs.add(j)
+
+    logger.info(
+        "simulate_twsb_with_bisect: finished; total_tests_run=%d",
+        total_tests_run,
+    )
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
 def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
