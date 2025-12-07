@@ -1,3 +1,9 @@
+"""
+Fetch Treeherder performance signatures and sample job durations
+over a configurable time window, saving a CSV, statistics JSON,
+and a histogram plot of job durations.
+"""
+
 from math import ceil
 import math
 import os
@@ -18,8 +24,9 @@ CSV_PATH = os.path.join(DATASET_DIR, "job_durations.csv")
 PLOT_PATH = os.path.join(DATASET_DIR, "job_durations.png")
 NO_DATA_SIG_PATH = os.path.join(DATASET_DIR, "no_data_signatures.txt")
 
-# Timeframe (60 days)
-TIMEFRAME = 60 * 24 * 60 * 60
+# Timeframe (in days). Adjust this value as needed.
+TIMEFRAME_DAYS = 365
+TIMEFRAME = TIMEFRAME_DAYS * 24 * 60 * 60
 
 client = TreeherderClient()
 
