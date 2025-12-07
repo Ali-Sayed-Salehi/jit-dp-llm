@@ -4,7 +4,8 @@ over a configurable time window, saving a CSV, statistics JSON,
 and a histogram plot of job durations.
 
 This version reads pre-fetched jobs from perf_jobs_by_signature.jsonl
-produced by get_num_perf_tests.py, instead of making API calls.
+produced by get_num_perf_tests.py, but fetches per-job timing details
+from Treeherder when computing durations.
 """
 
 import math
@@ -13,6 +14,7 @@ import csv
 import matplotlib.pyplot as plt
 import statistics as stats
 import json
+from thclient import TreeherderClient
 
 # Determine repo root dynamically:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +28,8 @@ PLOT_PATH = os.path.join(DATASET_DIR, "job_durations.png")
 # Input: per-signature jobs cache produced by get_num_perf_tests.py
 SIGNATURE_JOBS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_by_signature.jsonl")
 
+REPOSITORY = "autoland"
+client = TreeherderClient()
 
 os.makedirs(DATASET_DIR, exist_ok=True)
 
@@ -76,20 +80,32 @@ def load_signature_jobs(jsonl_path: str):
 
 def job_duration_minutes(job: dict):
     """
-    Best-effort extraction of job duration in minutes from a cached job dict.
+    Fetch per-job details from Treeherder and compute duration in minutes.
 
-    The duration is computed strictly as:
+    Expects a summary job dict that contains a \"job_id\" field. The
+    duration is computed as:
         (end_timestamp - start_timestamp) / 60
-    If either timestamp is missing or invalid, returns None.
+    If anything is missing or invalid, returns None.
     """
     if not isinstance(job, dict):
         return None
 
-    if "start_timestamp" not in job or "end_timestamp" not in job:
+    job_id = job.get("job_id")
+    if job_id is None:
         return None
 
     try:
-        dur_seconds = float(job["end_timestamp"]) - float(job["start_timestamp"])
+        jobs = client.get_jobs(REPOSITORY, id=job_id)
+        if not jobs:
+            return None
+
+        job_info = jobs[0]
+        start_ts = job_info.get("start_timestamp")
+        end_ts = job_info.get("end_timestamp")
+        if start_ts is None or end_ts is None:
+            return None
+
+        dur_seconds = float(end_ts) - float(start_ts)
         return dur_seconds / 60.0
     except Exception:
         return None
@@ -151,8 +167,8 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
             if dur is not None:
                 durations.append(dur)
 
-        # If we couldn't compute at least 3 durations, skip this signature
-        if len(durations) < 3:
+        # If we couldn't compute at least 1 durations, skip this signature
+        if len(durations) < 1:
             continue
 
         # Mean of sampled durations
@@ -168,7 +184,7 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
 print(f"CSV written row-by-row to {CSV_PATH}")
 
 # ============================================================
-# 4) PLOT USING THE CSV FILE (NOT IN-MEMORY DURATIONS)
+# 4) PLOT USING THE CSV FILE
 # ============================================================
 
 plot_durations = []
