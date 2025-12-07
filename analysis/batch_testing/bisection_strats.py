@@ -226,6 +226,74 @@ def _load_perf_jobs_per_revision():
     )
 
 
+def validate_failing_signatures_coverage():
+    """
+    Ensure that every failing perf signature from
+    alert_summary_fail_perf_sigs.csv is actually present at least once
+    anywhere in perf_jobs_per_revision_details.jsonl (not necessarily
+    on the same revision).
+
+    Raises:
+        RuntimeError: if any failing signature is not covered by the
+        perf_jobs_per_revision_details.jsonl dataset.
+    """
+    _load_perf_metadata()
+    _load_perf_jobs_per_revision()
+
+    if not REVISION_FAIL_SIG_IDS:
+        # Nothing to validate; either there are no failing signatures
+        # or the CSV is missing (already logged in _load_perf_metadata).
+        logger.warning(
+            "No failing perf signatures loaded from %s; "
+            "skipping coverage validation.",
+            ALERT_FAIL_SIGS_CSV,
+        )
+        return
+
+    if not REVISION_TESTED_SIG_IDS:
+        raise RuntimeError(
+            "perf_jobs_per_revision_details.jsonl did not yield any "
+            "tested-signature data. Cannot validate that failing perf "
+            "signatures are covered. Please regenerate the dataset at: "
+            f"{PERF_JOBS_PER_REV_JSON}"
+        )
+
+    # Collect the set of all failing signature IDs from the alert CSV.
+    failing_sig_ids = set()
+    for fail_ids in REVISION_FAIL_SIG_IDS.values():
+        for sig in fail_ids:
+            try:
+                failing_sig_ids.add(int(sig))
+            except (TypeError, ValueError):
+                continue
+
+    # Collect the set of all signature IDs that appear anywhere in the
+    # perf_jobs_per_revision_details.jsonl dataset.
+    tested_sig_ids = set()
+    for sig_ids in REVISION_TESTED_SIG_IDS.values():
+        for sig in sig_ids:
+            try:
+                tested_sig_ids.add(int(sig))
+            except (TypeError, ValueError):
+                continue
+
+    missing = sorted(failing_sig_ids - tested_sig_ids)
+    if missing:
+        # Limit how many we show in the error message to keep it readable.
+        sample = ", ".join(str(sig) for sig in missing[:20])
+        extra = "" if len(missing) <= 20 else f" (and {len(missing) - 20} more...)"
+        raise RuntimeError(
+            "Found failing perf signatures that are not covered by "
+            "perf_jobs_per_revision_details.jsonl at all. "
+            "Each failing signature should appear at least once somewhere "
+            "in the perf jobs dataset. This means the simulation cannot "
+            "exercise all failing signatures.\n"
+            f"First missing signature_ids: {sample}{extra}\n"
+            f"Alert CSV: {ALERT_FAIL_SIGS_CSV}\n"
+            f"Perf jobs JSONL: {PERF_JOBS_PER_REV_JSON}"
+        )
+
+
 def get_batch_signature_durations():
     """
     Durations (minutes) for a full perf batch run:

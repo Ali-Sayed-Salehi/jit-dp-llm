@@ -28,6 +28,7 @@ from bisection_strats import (
     TestExecutor,
     run_test_suite,
     configure_bisection_defaults,
+    validate_failing_signatures_coverage,
 )
 
 logger = logging.getLogger(__name__)
@@ -1121,6 +1122,13 @@ def main():
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
         full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
     )
+
+    # Sanity check: ensure that all failing perf signatures from
+    # alert_summary_fail_perf_sigs.csv are actually present in
+    # perf_jobs_per_revision_details.jsonl. If not, the simulation
+    # would be unable to exercise all failing signatures and results
+    # would be misleading.
+    validate_failing_signatures_coverage()
 
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval

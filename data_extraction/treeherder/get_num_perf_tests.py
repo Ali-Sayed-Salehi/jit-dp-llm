@@ -15,6 +15,8 @@ This script:
 import os
 import csv
 import json
+import random
+import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta
 from statistics import mean, median, geometric_mean, quantiles
@@ -51,8 +53,8 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 # Parameters
 # ---------------------------------------------------------
 # Inclusive date range (UTC) for revisions to include in the output
-REVISION_START_DATE = datetime(2024, 10, 10)
-REVISION_END_DATE = datetime(2025, 10, 21, 23, 59, 59)
+REVISION_START_DATE = datetime(2025, 6, 19)
+REVISION_END_DATE = datetime(2025, 10, 25)
 
 # How far back to fetch jobs from Treeherder (in days), chosen so that
 # the interval reaches at least REVISION_START_DATE.
@@ -400,9 +402,19 @@ def plot_distribution(counts, out_path: str):
     print(f"Wrote distribution plot to {out_path}")
 
 
-def main():
+def main(debug: bool = False):
     # 1) Load signatures from job_durations.csv
     signatures = load_signatures_from_csv(JOB_DURATIONS_CSV)
+
+    if debug:
+        # In debug mode, only use a random subset of 20 signatures
+        num_to_sample = min(20, len(signatures))
+        sampled = set(random.sample(list(signatures), num_to_sample))
+        print(
+            f"[DEBUG] Using a random subset of {num_to_sample} signatures "
+            f"out of {len(signatures)} total."
+        )
+        signatures = sampled
 
     # 2) Load revisions from all_commits.jsonl within timeframe and not recent
     #    This returns {revision_hash -> submission_datetime_utc}
@@ -431,4 +443,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compute how many performance jobs run per revision on autoland. "
+            "In debug mode, only fetch results for 20 randomly selected "
+            "signatures from job_durations.csv."
+        )
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Only fetch results for 20 randomly selected signatures.",
+    )
+    args = parser.parse_args()
+
+    main(debug=args.debug)
