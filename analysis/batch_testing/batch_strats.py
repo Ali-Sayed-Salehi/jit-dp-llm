@@ -142,8 +142,12 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
 
             batch = commits[batch_start_idx : idx + 1]
             if not batch:
-                handled_regressor_idxs.add(j)
-                continue
+                raise RuntimeError(
+                    f"simulate_twsb_with_bisect: empty batch for regressor index {j} "
+                    f"(last_clean_idx_for_j={last_clean_idx_for_j}, "
+                    f"batch_start_idx={batch_start_idx}, idx={idx}, "
+                    f"num_commits={len(commits)})"
+                )
 
             total_tests_run, culprit_times, feedback_times = bisect_fn(
                 batch,
