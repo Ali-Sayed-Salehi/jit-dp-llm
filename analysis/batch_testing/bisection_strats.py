@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import random
+import heapq
 
 # ---------- Perf metadata loading ----------
 
@@ -495,17 +496,18 @@ class TestExecutor:
 
     def __init__(self, num_workers: int):
         self.num_workers = num_workers
-        # worker_free_times[i] = datetime when worker i becomes free
-        self.worker_free_times = [None] * num_workers
+        # Min-heap of (free_time, worker_index) for all workers.
+        # Initialized lazily on first schedule() call.
+        self._worker_heap = []
         # Cumulative CPU time in minutes across all scheduled tests
         self.total_cpu_minutes = 0.0
         logger.debug("Created TestExecutor with %d workers", num_workers)
 
     def _ensure_initialized(self, t0):
         # Initialize all workers as free at t0 the first time we schedule.
-        for i in range(self.num_workers):
-            if self.worker_free_times[i] is None:
-                self.worker_free_times[i] = t0
+        if not self._worker_heap:
+            self._worker_heap = [(t0, i) for i in range(self.num_workers)]
+            heapq.heapify(self._worker_heap)
 
     def schedule(self, requested_start_time, duration_minutes: float):
         """
@@ -517,8 +519,7 @@ class TestExecutor:
         self._ensure_initialized(requested_start_time)
 
         # Find worker that becomes free earliest
-        idx = min(range(self.num_workers), key=lambda i: self.worker_free_times[i])
-        earliest_free = self.worker_free_times[idx]
+        earliest_free, idx = heapq.heappop(self._worker_heap)
 
         actual_start = max(requested_start_time, earliest_free)
         try:
@@ -529,7 +530,8 @@ class TestExecutor:
             ) from exc
 
         finish_time = actual_start + timedelta(minutes=duration_float)
-        self.worker_free_times[idx] = finish_time
+        # Push worker back with updated free time
+        heapq.heappush(self._worker_heap, (finish_time, idx))
         # Accumulate CPU time regardless of parallelism
         self.total_cpu_minutes += duration_float
         logger.debug(
