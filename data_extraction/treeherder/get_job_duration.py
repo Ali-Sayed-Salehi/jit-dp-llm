@@ -197,11 +197,11 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
             logger.debug("Skipping signature_id=%s (already in CSV).", signature_id)
             continue
 
-        # Require at least 3 jobs in the cache; otherwise skip this signature
-        if not jobs_list or len(jobs_list) < 3:
+        # Require at least 1 jobs in the cache; otherwise skip this signature
+        if not jobs_list or len(jobs_list) < 1:
             skipped_too_few_jobs += 1
             logger.info(
-                "Skipping signature_id=%s: only %d jobs in cache (need >= 3).",
+                "Skipping signature_id=%s: only %d jobs in cache (need >= 1).",
                 signature_id,
                 0 if not jobs_list else len(jobs_list),
             )
