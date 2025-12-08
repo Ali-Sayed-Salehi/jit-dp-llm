@@ -29,6 +29,7 @@ from bisection_strats import (
     run_test_suite,
     configure_bisection_defaults,
     validate_failing_signatures_coverage,
+    configure_full_suite_signatures_union,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,8 @@ DEFAULT_TEST_DURATION_MIN = 21.0
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
 # Number of perf signatures to run for each "full suite" batch test step.
-# If this is None or larger than the available signatures, all signatures are used.
-FULL_SUITE_SIGNATURES_PER_RUN = None
+# If this is -1 or larger than the available signatures, all signatures are used.
+FULL_SUITE_SIGNATURES_PER_RUN = 200
 
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
@@ -185,7 +186,17 @@ def get_args():
         default=FULL_SUITE_SIGNATURES_PER_RUN,
         help=(
             "Number of perf signatures to run per 'full suite' batch test step "
-            "(<= 0 means use all signatures)."
+            "(-1 means use all signatures; positive values cap via random subset)."
+        ),
+    )
+    parser.add_argument(
+        "--use-all-tests-per-batch",
+        action="store_true",
+        default=True,
+        help=(
+            "If set, each initial batch test run executes all perf signatures "
+            "that appear at least once within the cutoff window, ignoring "
+            "--full-suite-sigs-per-run."
         ),
     )
     parser.add_argument(
@@ -359,12 +370,17 @@ def run_exhaustive_testing(commits):
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        # Full suite, but capped to a fixed random subset of signatures if requested.
-        if FULL_SUITE_SIGNATURES_PER_RUN and len(BATCH_SIGNATURE_DURATIONS_ET) > FULL_SUITE_SIGNATURES_PER_RUN:
-            durations = random.sample(
-                BATCH_SIGNATURE_DURATIONS_ET,
-                FULL_SUITE_SIGNATURES_PER_RUN,
+        # Full suite, but capped to a fixed random subset of signatures
+        # if a non-negative cap is configured. A negative value (e.g., -1)
+        # means "use all signatures".
+        limit = FULL_SUITE_SIGNATURES_PER_RUN
+        if limit is None:
+            raise RuntimeError(
+                "FULL_SUITE_SIGNATURES_PER_RUN must not be None in "
+                "run_exhaustive_testing; use -1 to indicate 'all signatures'."
             )
+        if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS_ET) > limit:
+            durations = random.sample(BATCH_SIGNATURE_DURATIONS_ET, limit)
         else:
             durations = BATCH_SIGNATURE_DURATIONS_ET
         finish_time = run_test_suite(executor, submit_time, durations)
@@ -1103,11 +1119,13 @@ def main():
     logger.info("Starting batch-testing simulation CLI")
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
-        "full_suite_sigs_per_run=%s, log_level=%s, random_seed=%d",
+        "full_suite_sigs_per_run=%s, use_all_tests_per_batch=%s, "
+        "log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
         args.num_test_workers,
         str(args.full_suite_sigs_per_run),
+        str(args.use_all_tests_per_batch),
         log_level_name,
         RANDOM_SEED,
     )
@@ -1115,11 +1133,25 @@ def main():
     # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
     global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN
     NUM_TEST_WORKERS = args.num_test_workers
-    # <= 0 means "use all signatures"
-    if args.full_suite_sigs_per_run and args.full_suite_sigs_per_run > 0:
-        FULL_SUITE_SIGNATURES_PER_RUN = args.full_suite_sigs_per_run
+    # If the user explicitly requests "all tests per batch", we ignore the
+    # numeric cap and use all signatures from the cutoff-window union.
+    if args.use_all_tests_per_batch:
+        FULL_SUITE_SIGNATURES_PER_RUN = -1
     else:
-        FULL_SUITE_SIGNATURES_PER_RUN = None
+        if args.full_suite_sigs_per_run is not None:
+            val = int(args.full_suite_sigs_per_run)
+            if val < 0:
+                FULL_SUITE_SIGNATURES_PER_RUN = -1
+            elif val == 0:
+                raise ValueError(
+                    "--full-suite-sigs-per-run must be a positive integer "
+                    "or -1 to indicate 'use all signatures'; got 0."
+                )
+            else:
+                FULL_SUITE_SIGNATURES_PER_RUN = val
+        else:
+            # Fall back to default (may itself be -1 or a positive cap).
+            FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
 
     # Propagate defaults/knobs to bisection_strats
     configure_bisection_defaults(
@@ -1172,6 +1204,17 @@ def main():
         "perf coverage validation.",
         len(failing_revisions),
     )
+
+    # If requested, restrict the "full suite" batch runs to the union of
+    # signatures that actually appear at least once within the cutoff
+    # windows used for EVAL and FINAL.
+    if args.use_all_tests_per_batch:
+        cutoff_revs = {
+            c["commit_id"] for c in eval_commits
+        }.union(
+            c["commit_id"] for c in final_commits
+        )
+        configure_full_suite_signatures_union(cutoff_revs)
 
     # Sanity check: ensure that all failing perf signatures for the
     # commits we will simulate (within the EVAL and FINAL windows) are

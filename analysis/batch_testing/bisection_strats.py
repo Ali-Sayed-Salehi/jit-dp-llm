@@ -22,7 +22,8 @@ PERF_JOBS_PER_REV_JSON = os.path.join(
 
 # Fallbacks and knobs (configured by the main simulation script).
 _default_test_duration_min = 21.0
-_full_suite_signatures_per_run = None
+# -1 means "use all available signatures" (no downsampling).
+_full_suite_signatures_per_run = -1
 
 # signature_id -> duration_minutes
 SIGNATURE_DURATIONS = {}
@@ -55,10 +56,17 @@ def configure_bisection_defaults(
         _default_test_duration_min = float(default_test_duration_min)
 
     if full_suite_signatures_per_run is not None:
-        if full_suite_signatures_per_run <= 0:
-            _full_suite_signatures_per_run = None
+        val = int(full_suite_signatures_per_run)
+        if val < 0:
+            # -1 => use all signatures (no cap)
+            _full_suite_signatures_per_run = -1
+        elif val == 0:
+            raise ValueError(
+                "full_suite_signatures_per_run must be a positive integer "
+                "or -1 to indicate 'use all signatures'; got 0."
+            )
         else:
-            _full_suite_signatures_per_run = int(full_suite_signatures_per_run)
+            _full_suite_signatures_per_run = val
 
     logger.info(
         "Configured bisection defaults: default_test_duration_min=%.2f, "
@@ -66,6 +74,49 @@ def configure_bisection_defaults(
         _default_test_duration_min,
         str(_full_suite_signatures_per_run),
     )
+
+
+def configure_full_suite_signatures_union(revisions):
+    """
+    Given an iterable of revision ids that fall within the simulation's
+    cutoff windows, compute the union of all perf signatures that were
+    actually tested on at least one of those revisions and update the
+    full-suite batch durations accordingly.
+
+    This is used when we want each initial batch test run to execute all
+    tests that appear at least once within the cutoff window, instead of
+    all signatures from job_durations.csv.
+    """
+    global BATCH_SIGNATURE_DURATIONS
+
+    _load_perf_metadata()
+    _load_perf_jobs_per_revision()
+
+    rev_set = set(revisions or [])
+    if not rev_set:
+        raise RuntimeError(
+            "configure_full_suite_signatures_union: empty revision set; "
+            "cannot construct a full-suite signature union."
+        )
+
+    sig_ids = set()
+    for rev in rev_set:
+        for sig in REVISION_TESTED_SIG_IDS.get(rev, []):
+            sig_id = int(sig)
+            sig_ids.add(sig_id)
+
+    if not sig_ids:
+        raise RuntimeError(
+            "configure_full_suite_signatures_union: no tested signatures "
+            "found for the provided revisions; cannot build full suite."
+        )
+
+    # Use recorded durations where available; fall back to the default
+    # duration for any signature missing from job_durations.csv.
+    BATCH_SIGNATURE_DURATIONS = [
+        SIGNATURE_DURATIONS.get(sig_id, _default_test_duration_min)
+        for sig_id in sig_ids
+    ]
 
 
 def _load_perf_metadata():
@@ -348,11 +399,10 @@ def get_batch_signature_durations():
         return [_default_test_duration_min]
 
     limit = _full_suite_signatures_per_run
-    if limit and len(BATCH_SIGNATURE_DURATIONS) > limit:
-        durations = random.sample(
-            BATCH_SIGNATURE_DURATIONS,
-            limit,
-        )
+    # Non-negative limit => cap via random subset when smaller than the
+    # available suite size. Negative (e.g., -1) means "use all".
+    if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS) > limit:
+        durations = random.sample(BATCH_SIGNATURE_DURATIONS, limit)
     else:
         durations = BATCH_SIGNATURE_DURATIONS
 
