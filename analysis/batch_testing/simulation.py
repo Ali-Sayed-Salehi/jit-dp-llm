@@ -60,7 +60,7 @@ NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via
 
 # Number of perf signatures to run for each "full suite" batch test step.
 # If this is None or larger than the available signatures, all signatures are used.
-FULL_SUITE_SIGNATURES_PER_RUN = 200
+FULL_SUITE_SIGNATURES_PER_RUN = None
 
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
