@@ -49,7 +49,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulatio
 --mopt-trials 1 \
 --num-test-workers 150 \
 --dry-run \
---dont_use_all_tests_per_batch \
+--dont-use-all-tests-per-batch \
 --full-suite-sigs-per-run 850 \
 # --log-level INFO
 # --final-only
