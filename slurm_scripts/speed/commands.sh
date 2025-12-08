@@ -41,14 +41,16 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
-# --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
-# --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
-# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/k_test/batch_eval_mopt.json \
-# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/k_test/batch_test_mopt.json \
-# --mopt-trials 2 \
-# --num-test-workers 100 \
-# --full-suite-sigs-per-run 850 \
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
+--input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
+--input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/k_test/batch_eval_mopt.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/k_test/batch_test_mopt.json \
+--mopt-trials 1 \
+--num-test-workers 150 \
+--dry-run \
+--dont_use_all_tests_per_batch \
+--full-suite-sigs-per-run 850 \
 # --log-level INFO
 # --final-only
 
@@ -71,6 +73,6 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py --debug
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py --debug
 
 echo "Script finished"

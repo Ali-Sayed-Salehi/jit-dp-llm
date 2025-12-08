@@ -193,13 +193,13 @@ def get_args():
         ),
     )
     parser.add_argument(
-        "--use-all-tests-per-batch",
+        "--dont-use-all-tests-per-batch",
         action="store_true",
-        default=True,
         help=(
-            "If set, each initial batch test run executes all perf signatures "
-            "that appear at least once within the cutoff window, ignoring "
-            "--full-suite-sigs-per-run."
+            "If set, each initial batch test run executes only a random subset "
+            "of perf signatures, with size equal to --full-suite-sigs-per-run. "
+            "By default (flag not set), all signatures that appear at least "
+            "once within the cutoff window are executed."
         ),
     )
     parser.add_argument(
@@ -1166,13 +1166,13 @@ def main():
     logger.info("Starting batch-testing simulation CLI")
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
-        "full_suite_sigs_per_run=%s, use_all_tests_per_batch=%s, "
+        "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
         args.num_test_workers,
         str(args.full_suite_sigs_per_run),
-        str(args.use_all_tests_per_batch),
+        str(args.dont_use_all_tests_per_batch),
         log_level_name,
         RANDOM_SEED,
     )
@@ -1180,11 +1180,11 @@ def main():
     # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
     global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
     NUM_TEST_WORKERS = args.num_test_workers
-    # If the user explicitly requests "all tests per batch", we ignore the
-    # numeric cap and use all signatures from the cutoff-window union.
-    if args.use_all_tests_per_batch:
-        FULL_SUITE_SIGNATURES_PER_RUN = -1
-    else:
+    # By default, each initial batch test run executes all signatures
+    # that appear at least once within the cutoff window. If the user
+    # passes --dont-use-all-tests-per-batch, we instead cap each run
+    # to a random subset whose size is --full-suite-sigs-per-run.
+    if args.dont_use_all_tests_per_batch:
         if args.full_suite_sigs_per_run is not None:
             val = int(args.full_suite_sigs_per_run)
             if val < 0:
@@ -1197,8 +1197,11 @@ def main():
             else:
                 FULL_SUITE_SIGNATURES_PER_RUN = val
         else:
-            # Fall back to default (may itself be -1 or a positive cap).
+            # Fall back to default cap (may itself be -1 or a positive cap).
             FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
+    else:
+        # Default: no cap; use all signatures from the cutoff-window union.
+        FULL_SUITE_SIGNATURES_PER_RUN = -1
 
     DRY_RUN = bool(getattr(args, "dry_run", False))
 
@@ -1254,16 +1257,16 @@ def main():
         len(failing_revisions),
     )
 
-    # If requested, restrict the "full suite" batch runs to the union of
-    # signatures that actually appear at least once within the cutoff
-    # windows used for EVAL and FINAL.
-    if args.use_all_tests_per_batch:
-        cutoff_revs = {
-            c["commit_id"] for c in eval_commits
-        }.union(
-            c["commit_id"] for c in final_commits
-        )
-        configure_full_suite_signatures_union(cutoff_revs)
+    # Restrict the "full suite" batch runs to the union of signatures
+    # that actually appear at least once within the cutoff windows used
+    # for EVAL and FINAL. Whether we run all of them or a random subset
+    # is controlled by FULL_SUITE_SIGNATURES_PER_RUN.
+    cutoff_revs = {
+        c["commit_id"] for c in eval_commits
+    }.union(
+        c["commit_id"] for c in final_commits
+    )
+    configure_full_suite_signatures_union(cutoff_revs)
 
     # Sanity check: ensure that all failing perf signatures for the
     # commits we will simulate (within the EVAL and FINAL windows) are
