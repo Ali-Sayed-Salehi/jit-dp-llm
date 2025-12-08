@@ -11,6 +11,7 @@ from Treeherder when computing durations.
 import math
 import os
 import csv
+import logging
 import matplotlib.pyplot as plt
 import statistics as stats
 import json
@@ -32,6 +33,13 @@ REPOSITORY = "autoland"
 client = TreeherderClient()
 
 os.makedirs(DATASET_DIR, exist_ok=True)
+
+# Basic logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def load_signature_jobs(jsonl_path: str):
@@ -71,9 +79,10 @@ def load_signature_jobs(jsonl_path: str):
 
             signature_jobs[sig_id_int] = jobs
 
-    print(
-        f"Loaded jobs for {len(signature_jobs)} signatures "
-        f"from {jsonl_path}."
+    logger.info(
+        "Loaded jobs for %d signatures from %s.",
+        len(signature_jobs),
+        jsonl_path,
     )
     return signature_jobs
 
@@ -88,26 +97,43 @@ def job_duration_minutes(job: dict):
     If anything is missing or invalid, returns None.
     """
     if not isinstance(job, dict):
+        logger.debug("job_duration_minutes: job is not a dict: %r", job)
         return None
 
     job_id = job.get("job_id")
     if job_id is None:
+        logger.debug("job_duration_minutes: missing job_id in job: %r", job)
         return None
 
     try:
         jobs = client.get_jobs(REPOSITORY, id=job_id)
         if not jobs:
+            logger.debug(
+                "job_duration_minutes: no jobs returned from Treeherder for job_id=%s",
+                job_id,
+            )
             return None
 
         job_info = jobs[0]
         start_ts = job_info.get("start_timestamp")
         end_ts = job_info.get("end_timestamp")
         if start_ts is None or end_ts is None:
+            logger.debug(
+                "job_duration_minutes: missing timestamps for job_id=%s (start=%r, end=%r)",
+                job_id,
+                start_ts,
+                end_ts,
+            )
             return None
 
         dur_seconds = float(end_ts) - float(start_ts)
         return dur_seconds / 60.0
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "job_duration_minutes: exception computing duration for job_id=%s: %s",
+            job_id,
+            e,
+        )
         return None
 
 # -------------------------
@@ -125,13 +151,15 @@ if csv_exists:
             except:
                 pass
 
-print(f"Loaded {len(processed_signatures)} processed signatures from previous runs.")
+logger.info(
+    "Loaded %d processed signatures from previous runs.", len(processed_signatures)
+)
 
 # -------------------------
 # Load all signature jobs from cache
 # -------------------------
 signature_jobs = load_signature_jobs(SIGNATURE_JOBS_JSONL)
-print(f"Total signatures in cache: {len(signature_jobs)}")
+logger.info("Total signatures in cache: %d", len(signature_jobs))
 
 # -------------------------
 # Write CSV row-by-row
@@ -145,13 +173,38 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
     if not csv_exists:
         writer.writerow(["signature_id", "duration_minutes"])
 
+    total_signatures = len(signature_jobs)
+    skipped_already_processed = 0
+    skipped_too_few_jobs = 0
+    skipped_no_durations = 0
+    written_rows = 0
+
+    logger.info(
+        "Beginning per-signature processing: %d total signatures in cache.",
+        total_signatures,
+    )
+
     for signature_id, jobs_list in signature_jobs.items():
+        logger.debug(
+            "Processing signature_id=%s with %d cached jobs",
+            signature_id,
+            len(jobs_list) if jobs_list is not None else 0,
+        )
+
         # Skip signatures already processed
         if signature_id in processed_signatures:
+            skipped_already_processed += 1
+            logger.debug("Skipping signature_id=%s (already in CSV).", signature_id)
             continue
 
         # Require at least 3 jobs in the cache; otherwise skip this signature
         if not jobs_list or len(jobs_list) < 3:
+            skipped_too_few_jobs += 1
+            logger.info(
+                "Skipping signature_id=%s: only %d jobs in cache (need >= 3).",
+                signature_id,
+                0 if not jobs_list else len(jobs_list),
+            )
             continue
 
         # Pick first, middle, last jobs
@@ -166,9 +219,20 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
             dur = job_duration_minutes(job)
             if dur is not None:
                 durations.append(dur)
+            else:
+                logger.debug(
+                    "duration None for job in signature_id=%s: job=%r",
+                    signature_id,
+                    job,
+                )
 
         # If we couldn't compute at least 1 durations, skip this signature
         if len(durations) < 1:
+            skipped_no_durations += 1
+            logger.info(
+                "Skipping signature_id=%s: could not compute duration for any of the sampled jobs.",
+                signature_id,
+            )
             continue
 
         # Mean of sampled durations
@@ -179,9 +243,18 @@ with open(CSV_PATH, csv_mode, newline="") as csvfile:
 
         # Append to CSV
         writer.writerow([signature_id, formatted_duration])
+        written_rows += 1
         csvfile.flush()
 
-print(f"CSV written row-by-row to {CSV_PATH}")
+logger.info(
+    "Finished processing signatures. Total=%d, written=%d, already_processed=%d, too_few_jobs=%d, no_durations=%d",
+    total_signatures,
+    written_rows,
+    skipped_already_processed,
+    skipped_too_few_jobs,
+    skipped_no_durations,
+)
+logger.info("CSV written row-by-row to %s", CSV_PATH)
 
 # ============================================================
 # 4) PLOT USING THE CSV FILE
@@ -288,16 +361,16 @@ if plot_durations:
     }
 
     # Print stats to console
-    print("\n=== Job Duration Statistics (minutes) ===")
-    print(json.dumps(stats_json, indent=4))
-    print("========================================\n")
+    logger.info("=== Job Duration Statistics (minutes) ===")
+    logger.info("%s", json.dumps(stats_json, indent=4))
+    logger.info("========================================")
 
     # Save stats to JSON file
     STATS_PATH = os.path.join(DATASET_DIR, "job_duration_stats.json")
     with open(STATS_PATH, "w") as f:
         json.dump(stats_json, f, indent=4)
 
-    print(f"Saved statistics JSON to {STATS_PATH}\n")
+    logger.info("Saved statistics JSON to %s", STATS_PATH)
 
     # ------- Plot section (unchanged) -------
     plt.hist(plot_durations, bins=50)
@@ -306,7 +379,7 @@ if plot_durations:
     plt.title("Distribution of performance test job durations")
     plt.tight_layout()
     plt.savefig(PLOT_PATH)
-    print(f"Saved plot to {PLOT_PATH}")
+    logger.info("Saved plot to %s", PLOT_PATH)
     plt.show()
 else:
-    print("No durations found in CSV; plot not generated.")
+    logger.warning("No durations found in CSV; plot not generated.")

@@ -283,7 +283,7 @@ def build_or_load_signature_jobs(signatures, jsonl_path: str):
 # -------------------------------------------------------------------
 def aggregate_revision_counts(signature_jobs, allowed_revisions):
     """
-    Accumulate revision -> total number of jobs across all signatures.
+    Accumulate revision -> total number of UNIQUE signatures with at least one job.
 
     Inputs:
       - signature_jobs: dict[int, list[dict]] mapping signature_id -> jobs list.
@@ -292,12 +292,13 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
         filter jobs to only those revisions in our commit window.
 
     Rules:
+      - A signature is counted at most once per revision, even if it has
+        multiple jobs.
       - Only count jobs where submit_time is within 5 minutes AFTER push_timestamp.
       - Only consider revisions present in allowed_revisions, which are:
           * whose commit timestamps fall within the configured revision
             date window [REVISION_START_DATE, REVISION_END_DATE].
     """
-    revision_jobs = defaultdict(int)
     revision_signatures = defaultdict(set)
 
     dt_format = "%Y-%m-%dT%H:%M:%S"
@@ -317,7 +318,6 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
             # If submit_time is missing (jobs older than 2025-08-08), accept the job without applying
             # the 5-minute condition.
             if not submit_time_str:
-                revision_jobs[rev] += 1
                 revision_signatures[rev].add(sig_id)
                 continue
 
@@ -338,17 +338,21 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
             if diff < timedelta(0) or diff > max_diff:
                 continue
 
-            revision_jobs[rev] += 1
             revision_signatures[rev].add(sig_id)
 
     # Ensure all allowed revisions are present, even if they had zero jobs
     for rev in allowed_revisions:
-        revision_jobs.setdefault(rev, 0)
         revision_signatures.setdefault(rev, set())
 
-    print(f"Collected job counts for {len(revision_jobs)} revisions.")
+    # Derive job counts from the number of unique signatures per revision
+    revision_jobs = {rev: len(sigs) for rev, sigs in revision_signatures.items()}
+
+    print(
+        f"Collected job counts for {len(revision_jobs)} revisions "
+        "(unique signatures per revision)."
+    )
     # convert sets to sorted lists for JSON-serializability
-    return dict(revision_jobs), {rev: sorted(sigs) for rev, sigs in revision_signatures.items()}
+    return revision_jobs, {rev: sorted(sigs) for rev, sigs in revision_signatures.items()}
 
 
 def write_revision_counts_csv(revision_counts, revision_timestamps, out_path: str):

@@ -228,16 +228,23 @@ def _load_perf_jobs_per_revision():
     )
 
 
-def validate_failing_signatures_coverage():
+def validate_failing_signatures_coverage(failing_revisions=None):
     """
-    Ensure that every failing perf signature from
-    alert_summary_fail_perf_sigs.csv is actually present at least once
-    anywhere in perf_jobs_per_revision_details.jsonl (not necessarily
-    on the same revision).
+    Ensure that failing perf signatures are covered by the
+    perf_jobs_per_revision_details.jsonl dataset, restricted to a
+    specific set of failing revisions.
+
+    Args:
+        failing_revisions: iterable of revision ids that are considered
+            buggy and must be present in alert_summary_fail_perf_sigs.csv.
 
     Raises:
-        RuntimeError: if any failing signature is not covered by the
-        perf_jobs_per_revision_details.jsonl dataset.
+        RuntimeError:
+            - if failing_revisions is None or empty,
+            - if any of the failing_revisions is missing from
+              alert_summary_fail_perf_sigs.csv,
+            - or if any relevant failing signature is not covered by
+              the perf_jobs_per_revision_details.jsonl dataset.
     """
     _load_perf_metadata()
     _load_perf_jobs_per_revision()
@@ -260,10 +267,42 @@ def validate_failing_signatures_coverage():
             f"{PERF_JOBS_PER_REV_JSON}"
         )
 
-    # Collect the set of all failing signature IDs from the alert CSV.
+    if failing_revisions is None:
+        raise RuntimeError(
+            "failing_revisions must be provided to "
+            "validate_failing_signatures_coverage; got None."
+        )
+
+    failing_revisions = set(failing_revisions)
+    if not failing_revisions:
+        raise RuntimeError(
+            "failing_revisions is empty; cannot validate perf "
+            "signature coverage without any failing revisions."
+        )
+
+    # Ensure every failing revision is present in the alert CSV.
+    alert_revisions = set(REVISION_FAIL_SIG_IDS.keys())
+    missing_revisions = sorted(failing_revisions - alert_revisions)
+    if missing_revisions:
+        sample = ", ".join(missing_revisions[:20])
+        extra = (
+            "" if len(missing_revisions) <= 20 else f" (and {len(missing_revisions) - 20} more...)"
+        )
+        raise RuntimeError(
+            "Some failing revisions have no failing perf signature "
+            "entries in alert_summary_fail_perf_sigs.csv. Every failing "
+            "revision must be present in that file.\n"
+            f"First missing revisions: {sample}{extra}\n"
+            f"Alert CSV: {ALERT_FAIL_SIGS_CSV}"
+        )
+
+    # At this point all failing_revisions are present in the alert CSV.
+    relevant_revisions = failing_revisions
+
+    # Collect the set of failing signature IDs for the selected revisions.
     failing_sig_ids = set()
-    for fail_ids in REVISION_FAIL_SIG_IDS.values():
-        for sig in fail_ids:
+    for rev in relevant_revisions:
+        for sig in REVISION_FAIL_SIG_IDS.get(rev, []):
             try:
                 failing_sig_ids.add(int(sig))
             except (TypeError, ValueError):
@@ -287,9 +326,10 @@ def validate_failing_signatures_coverage():
         raise RuntimeError(
             "Found failing perf signatures that are not covered by "
             "perf_jobs_per_revision_details.jsonl at all. "
-            "Each failing signature should appear at least once somewhere "
-            "in the perf jobs dataset. This means the simulation cannot "
-            "exercise all failing signatures.\n"
+            "Each relevant failing signature (for the revisions under "
+            "consideration) should appear at least once somewhere in the "
+            "perf jobs dataset. This means the simulation cannot "
+            "exercise all required failing signatures.\n"
             f"First missing signature_ids: {sample}{extra}\n"
             f"Alert CSV: {ALERT_FAIL_SIGS_CSV}\n"
             f"Perf jobs JSONL: {PERF_JOBS_PER_REV_JSON}"

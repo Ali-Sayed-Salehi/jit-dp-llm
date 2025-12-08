@@ -1126,19 +1126,59 @@ def main():
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
         full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
     )
-
-    # Sanity check: ensure that all failing perf signatures from
-    # alert_summary_fail_perf_sigs.csv are actually present in
-    # perf_jobs_per_revision_details.jsonl. If not, the simulation
-    # would be unable to exercise all failing signatures and results
-    # would be misleading.
-    validate_failing_signatures_coverage()
-
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval
     INPUT_JSON_FINAL = args.input_json_final
     OUTPUT_PATH_EVAL = args.output_eval
     OUTPUT_PATH_FINAL = args.output_final
+
+    # Determine the set of failing (buggy) revisions that fall within
+    # the cutoff windows used for EVAL and FINAL, and restrict the
+    # sanity-check coverage validation to those revisions only.
+    logger.info(
+        "Computing failing revisions within EVAL and FINAL cutoff windows "
+        "for perf signature coverage validation."
+    )
+
+    # EVAL window
+    eval_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
+    eval_oldest, eval_newest = get_cutoff_from_input(ALL_COMMITS_PATH, eval_pred_map)
+    eval_lower = eval_oldest or DEFAULT_CUTOFF
+    eval_upper = eval_newest
+    eval_commits = read_commits_from_all(
+        ALL_COMMITS_PATH, eval_pred_map, eval_lower, eval_upper
+    )
+    failing_revs_eval = {
+        c["commit_id"] for c in eval_commits if c.get("true_label")
+    }
+
+    # FINAL window
+    final_pred_map = load_predictions(INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD)
+    final_oldest, final_newest = get_cutoff_from_input(
+        ALL_COMMITS_PATH, final_pred_map
+    )
+    final_lower = final_oldest or DEFAULT_CUTOFF
+    final_upper = final_newest
+    final_commits = read_commits_from_all(
+        ALL_COMMITS_PATH, final_pred_map, final_lower, final_upper
+    )
+    failing_revs_final = {
+        c["commit_id"] for c in final_commits if c.get("true_label")
+    }
+
+    failing_revisions = failing_revs_eval.union(failing_revs_final)
+    logger.info(
+        "Identified %d failing revisions within EVAL/FINAL windows for "
+        "perf coverage validation.",
+        len(failing_revisions),
+    )
+
+    # Sanity check: ensure that all failing perf signatures for the
+    # commits we will simulate (within the EVAL and FINAL windows) are
+    # actually present in perf_jobs_per_revision_details.jsonl. If not,
+    # the simulation would be unable to exercise all relevant failing
+    # signatures and results would be misleading.
+    validate_failing_signatures_coverage(failing_revisions=failing_revisions)
 
     if args.final_only:
         # Reuse existing eval results
