@@ -681,7 +681,10 @@ def time_ordered_bisect(
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
-    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    # Batches are constructed in time order by the caller, so we can
+    # avoid re-sorting here and treat the incoming list as already
+    # sorted by timestamp.
+    batch_sorted = batch
     n = len(batch_sorted)
     tests_before = total_tests_run
     culprits_before = len(culprit_times)
@@ -797,7 +800,9 @@ def exhaustive_parallel(
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
-    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    # Caller provides commits in time order; reuse directly to avoid
+    # an extra sort per batch.
+    batch_sorted = batch
     n = len(batch_sorted)
     tests_before = total_tests_run
     culprits_before = len(culprit_times)
@@ -921,7 +926,8 @@ def risk_weighted_adaptive_bisect(
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
-    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    # Batches from higher-level strategies are already time-ordered.
+    batch_sorted = batch
     n = len(batch_sorted)
     tests_before = total_tests_run
     culprits_before = len(culprit_times)
@@ -1062,7 +1068,9 @@ def topk_risk_first_bisect(
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
-    batch_sorted = sorted(batch, key=lambda c: c["ts"])
+    # Assume batch is already sorted by timestamp, as produced by the
+    # batching strategies; avoid redundant sorting here.
+    batch_sorted = batch
     n = len(batch_sorted)
     tests_before = total_tests_run
     culprits_before = len(culprit_times)
