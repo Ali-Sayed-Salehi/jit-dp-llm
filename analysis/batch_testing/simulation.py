@@ -63,6 +63,9 @@ NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via
 # If this is -1 or larger than the available signatures, all signatures are used.
 FULL_SUITE_SIGNATURES_PER_RUN = 200
 
+# Global toggle for lightweight, debugging-oriented runs.
+DRY_RUN = False
+
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
     ("FSB",  simulate_fsb_with_bisect,      FSB_SIZE),
@@ -197,6 +200,14 @@ def get_args():
             "If set, each initial batch test run executes all perf signatures "
             "that appear at least once within the cutoff window, ignoring "
             "--full-suite-sigs-per-run."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Lightweight mode: skip exhaustive testing and run only the "
+            "baseline plus two random (batching, bisection) combinations."
         ),
     )
     parser.add_argument(
@@ -545,11 +556,17 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     base_commits_for_context = read_commits_from_all(
         ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
     )
-    et_results = (
-        run_exhaustive_testing(base_commits_for_context)
-        if base_commits_for_context
-        else {}
-    )
+    if DRY_RUN:
+        logger.info(
+            "Dry run mode: skipping exhaustive testing (ET) during evaluation."
+        )
+        et_results = {}
+    else:
+        et_results = (
+            run_exhaustive_testing(base_commits_for_context)
+            if base_commits_for_context
+            else {}
+        )
     baseline = {}
     if base_commits_for_context:
         logger.info(
@@ -607,8 +624,31 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         len(BATCHING_STRATEGIES),
         len(BISECTION_STRATEGIES),
     )
+
+    # In dry-run mode, restrict ourselves to a tiny subset of combinations
+    # to keep turnaround fast. Always keep the baseline (TWSB + PAR) and
+    # then select two random (batching, bisection) pairs from the grid.
+    all_combo_names = [
+        (b_name, bis_name)
+        for b_name, _, _ in BATCHING_STRATEGIES
+        for bis_name, _ in BISECTION_STRATEGIES
+    ]
+    if DRY_RUN:
+        if len(all_combo_names) <= 2:
+            selected_combos = set(all_combo_names)
+        else:
+            selected_combos = set(random.sample(all_combo_names, 2))
+        logger.info(
+            "Dry run mode: limiting Optuna studies to two random combos: %s",
+            ", ".join(f"{b} + {bis}" for b, bis in selected_combos),
+        )
+    else:
+        selected_combos = None
+
     for b_name, b_fn, _ in BATCHING_STRATEGIES:
         for bis_name, bis_fn in BISECTION_STRATEGIES:
+            if DRY_RUN and (b_name, bis_name) not in selected_combos:
+                continue
             combo_key = f"{b_name} + {bis_name}"
             logger.info(
                 "Creating Optuna study for combo %s with %d trials",
@@ -800,8 +840,9 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             out_eval[combo_key] = result_entry
 
     # Also evaluate fixed-parameter TWSB with all bisection strategies on the
-    # same base commit set used for the baseline.
-    if base_commits_for_context:
+    # same base commit set used for the baseline. Skip this in dry-run mode
+    # to keep the number of evaluated combinations small.
+    if base_commits_for_context and not DRY_RUN:
         for bis_name, bis_fn in BISECTION_STRATEGIES:
             combo_key = f"TWSB + {bis_name}"
             logger.info(
@@ -926,7 +967,13 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
-    et_results_final = run_exhaustive_testing(base_commits_final)
+    if DRY_RUN:
+        logger.info(
+            "Dry run mode: skipping exhaustive testing (ET) on FINAL window."
+        )
+        et_results_final = {}
+    else:
+        et_results_final = run_exhaustive_testing(base_commits_final)
     baseline_final = simulate_twsb_with_bisect(
         base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
     )
@@ -1131,7 +1178,7 @@ def main():
     )
 
     # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
-    global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN
+    global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
     NUM_TEST_WORKERS = args.num_test_workers
     # If the user explicitly requests "all tests per batch", we ignore the
     # numeric cap and use all signatures from the cutoff-window union.
@@ -1152,6 +1199,8 @@ def main():
         else:
             # Fall back to default (may itself be -1 or a positive cap).
             FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
+
+    DRY_RUN = bool(getattr(args, "dry_run", False))
 
     # Propagate defaults/knobs to bisection_strats
     configure_bisection_defaults(
