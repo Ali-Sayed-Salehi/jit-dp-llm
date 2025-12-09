@@ -1,27 +1,415 @@
-# bisection_strats.py
-
 from datetime import timedelta
+import os
+import csv
+import json
+import logging
+import random
 
-TEST_DURATION_MIN = 21
+# ---------- Perf metadata loading ----------
 
-TESTS_PER_BATCH_RUN = 850      # first test per batch
-TESTS_PER_BISECTION_RUN = 4    # follow-up tests
-TESTS_PER_RUN = TESTS_PER_BATCH_RUN
+SCRIPT_DIR = os.path.dirname(__file__)
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+
+JOB_DURATIONS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "job_durations.csv"
+)
+ALERT_FAIL_SIGS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "alert_summary_fail_perf_sigs.csv"
+)
+PERF_JOBS_PER_REV_JSON = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "perf_jobs_per_revision_details.jsonl"
+)
+
+# Fallbacks and knobs (configured by the main simulation script).
+_default_test_duration_min = 21.0
+_full_suite_signatures_per_run = None
+
+# signature_id -> duration_minutes
+SIGNATURE_DURATIONS = {}
+# revision (commit_id) -> list[int signature_id]
+REVISION_FAIL_SIG_IDS = {}
+# revision (commit_id) -> list[int signature_id] actually tested on that revision
+REVISION_TESTED_SIG_IDS = {}
+# list[float] of durations for the "full" batch test (all signatures)
+BATCH_SIGNATURE_DURATIONS = []
 
 TKRB_TOP_K = 1
+
+logger = logging.getLogger(__name__)
+
+
+def configure_bisection_defaults(
+    default_test_duration_min=None,
+    full_suite_signatures_per_run=None,
+):
+    """
+    Configure default test duration and the number of signatures used
+    for each 'full suite' batch test step.
+
+    These knobs are typically set by the main simulation script so that
+    all strategies share the same configuration.
+    """
+    global _default_test_duration_min, _full_suite_signatures_per_run
+
+    if default_test_duration_min is not None:
+        _default_test_duration_min = float(default_test_duration_min)
+
+    if full_suite_signatures_per_run is not None:
+        if full_suite_signatures_per_run <= 0:
+            _full_suite_signatures_per_run = None
+        else:
+            _full_suite_signatures_per_run = int(full_suite_signatures_per_run)
+
+    logger.info(
+        "Configured bisection defaults: default_test_duration_min=%.2f, "
+        "full_suite_signatures_per_run=%s",
+        _default_test_duration_min,
+        str(_full_suite_signatures_per_run),
+    )
+
+
+def _load_perf_metadata():
+    """
+    Load:
+      - job_durations.csv => SIGNATURE_DURATIONS, BATCH_SIGNATURE_DURATIONS
+      - alert_summary_fail_perf_sigs.csv => REVISION_FAIL_SIG_IDS
+    """
+    global SIGNATURE_DURATIONS, REVISION_FAIL_SIG_IDS, BATCH_SIGNATURE_DURATIONS
+
+    if SIGNATURE_DURATIONS and BATCH_SIGNATURE_DURATIONS and REVISION_FAIL_SIG_IDS:
+        # Already loaded
+        logger.debug("Perf metadata already loaded; skipping reload.")
+        return
+
+    # ----- job_durations.csv -----
+    sig_durations = {}
+    try:
+        logger.info("Loading job durations from %s", JOB_DURATIONS_CSV)
+        with open(JOB_DURATIONS_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sig = row.get("signature_id")
+                dur = row.get("duration_minutes")
+                if not sig or not dur:
+                    continue
+                try:
+                    sig_id = int(sig)
+                    duration = float(dur)
+                except ValueError:
+                    continue
+                sig_durations[sig_id] = duration
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"job_durations.csv not found at {JOB_DURATIONS_CSV}"
+        ) from exc
+
+    SIGNATURE_DURATIONS = sig_durations
+    if not SIGNATURE_DURATIONS:
+        raise RuntimeError(
+            f"No valid job duration rows loaded from {JOB_DURATIONS_CSV}"
+        )
+    BATCH_SIGNATURE_DURATIONS = list(SIGNATURE_DURATIONS.values())
+    logger.info(
+        "Loaded %d signature durations; BATCH_SIGNATURE_DURATIONS length=%d",
+        len(SIGNATURE_DURATIONS),
+        len(BATCH_SIGNATURE_DURATIONS),
+    )
+
+    # ----- alert_summary_fail_perf_sigs.csv -----
+    rev_fail = {}
+    try:
+        logger.info("Loading failing perf signatures from %s", ALERT_FAIL_SIGS_CSV)
+        with open(ALERT_FAIL_SIGS_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rev = row.get("revision")
+                raw = row.get("fail_perf_sig_ids") or ""
+                if not rev or not raw:
+                    continue
+
+                sig_ids = []
+                # Example: "[5094909, 5095143, 5095203]"
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        sig_ids = [int(x) for x in parsed]
+                except json.JSONDecodeError:
+                    raw_stripped = raw.strip().strip("[]")
+                    if raw_stripped:
+                        parts = [p.strip() for p in raw_stripped.split(",") if p.strip()]
+                        sig_ids = []
+                        for p in parts:
+                            try:
+                                sig_ids.append(int(p))
+                            except ValueError:
+                                continue
+
+                rev_fail[rev] = sig_ids
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"alert_summary_fail_perf_sigs.csv not found at {ALERT_FAIL_SIGS_CSV}"
+        ) from exc
+
+    REVISION_FAIL_SIG_IDS = rev_fail
+    if not REVISION_FAIL_SIG_IDS:
+        raise RuntimeError(
+            f"No failing perf signatures loaded from {ALERT_FAIL_SIGS_CSV}"
+        )
+    logger.info(
+        "Loaded failing signature mapping for %d revisions",
+        len(REVISION_FAIL_SIG_IDS),
+    )
+
+
+def _load_perf_jobs_per_revision():
+    """
+    Load:
+      - perf_jobs_per_revision_details.jsonl => REVISION_TESTED_SIG_IDS
+
+    The JSON file can be either:
+      * a JSON-lines file (one JSON object per line), or
+      * a single JSON list of objects.
+    Each object is expected to have:
+      - 'revision': str
+      - 'signature_ids': list[int]
+    """
+    global REVISION_TESTED_SIG_IDS
+
+    if REVISION_TESTED_SIG_IDS:
+        logger.debug(
+            "Revision->tested-signatures mapping already loaded; skipping reload."
+        )
+        return
+
+    mapping = {}
+    try:
+        logger.info(
+            "Loading tested perf signatures per revision from %s (JSONL)",
+            PERF_JOBS_PER_REV_JSON,
+        )
+        with open(PERF_JOBS_PER_REV_JSON, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSONL line in %s: %s",
+                        PERF_JOBS_PER_REV_JSON,
+                        line[:200],
+                    )
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                rev = obj.get("revision")
+                sig_ids = obj.get("signature_ids") or []
+                if not rev:
+                    continue
+                try:
+                    sig_ids_int = [int(s) for s in sig_ids]
+                except (TypeError, ValueError):
+                    sig_ids_int = []
+                mapping[rev] = sig_ids_int
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"perf_jobs_per_revision_details.jsonl not found at {PERF_JOBS_PER_REV_JSON}"
+        ) from exc
+
+    REVISION_TESTED_SIG_IDS = mapping
+    if not REVISION_TESTED_SIG_IDS:
+        raise RuntimeError(
+            f"No tested perf signatures loaded from {PERF_JOBS_PER_REV_JSON}"
+        )
+    logger.info(
+        "Loaded tested signatures for %d revisions",
+        len(REVISION_TESTED_SIG_IDS),
+    )
+
+
+def validate_failing_signatures_coverage():
+    """
+    Ensure that every failing perf signature from
+    alert_summary_fail_perf_sigs.csv is actually present at least once
+    anywhere in perf_jobs_per_revision_details.jsonl (not necessarily
+    on the same revision).
+
+    Raises:
+        RuntimeError: if any failing signature is not covered by the
+        perf_jobs_per_revision_details.jsonl dataset.
+    """
+    _load_perf_metadata()
+    _load_perf_jobs_per_revision()
+
+    if not REVISION_FAIL_SIG_IDS:
+        # Nothing to validate; either there are no failing signatures
+        # or the CSV is missing (already logged in _load_perf_metadata).
+        logger.warning(
+            "No failing perf signatures loaded from %s; "
+            "skipping coverage validation.",
+            ALERT_FAIL_SIGS_CSV,
+        )
+        return
+
+    if not REVISION_TESTED_SIG_IDS:
+        raise RuntimeError(
+            "perf_jobs_per_revision_details.jsonl did not yield any "
+            "tested-signature data. Cannot validate that failing perf "
+            "signatures are covered. Please regenerate the dataset at: "
+            f"{PERF_JOBS_PER_REV_JSON}"
+        )
+
+    # Collect the set of all failing signature IDs from the alert CSV.
+    failing_sig_ids = set()
+    for fail_ids in REVISION_FAIL_SIG_IDS.values():
+        for sig in fail_ids:
+            try:
+                failing_sig_ids.add(int(sig))
+            except (TypeError, ValueError):
+                continue
+
+    # Collect the set of all signature IDs that appear anywhere in the
+    # perf_jobs_per_revision_details.jsonl dataset.
+    tested_sig_ids = set()
+    for sig_ids in REVISION_TESTED_SIG_IDS.values():
+        for sig in sig_ids:
+            try:
+                tested_sig_ids.add(int(sig))
+            except (TypeError, ValueError):
+                continue
+
+    missing = sorted(failing_sig_ids - tested_sig_ids)
+    if missing:
+        # Limit how many we show in the error message to keep it readable.
+        sample = ", ".join(str(sig) for sig in missing[:20])
+        extra = "" if len(missing) <= 20 else f" (and {len(missing) - 20} more...)"
+        raise RuntimeError(
+            "Found failing perf signatures that are not covered by "
+            "perf_jobs_per_revision_details.jsonl at all. "
+            "Each failing signature should appear at least once somewhere "
+            "in the perf jobs dataset. This means the simulation cannot "
+            "exercise all failing signatures.\n"
+            f"First missing signature_ids: {sample}{extra}\n"
+            f"Alert CSV: {ALERT_FAIL_SIGS_CSV}\n"
+            f"Perf jobs JSONL: {PERF_JOBS_PER_REV_JSON}"
+        )
+
+
+def get_batch_signature_durations():
+    """
+    Durations (minutes) for a full perf batch run:
+    all signatures from job_durations.csv, optionally downsampled to
+    a fixed-size random subset controlled by _full_suite_signatures_per_run.
+    """
+    _load_perf_metadata()
+
+    if not BATCH_SIGNATURE_DURATIONS:
+        return [_default_test_duration_min]
+
+    limit = _full_suite_signatures_per_run
+    if limit and len(BATCH_SIGNATURE_DURATIONS) > limit:
+        durations = random.sample(
+            BATCH_SIGNATURE_DURATIONS,
+            limit,
+        )
+    else:
+        durations = BATCH_SIGNATURE_DURATIONS
+
+    return durations
+
+
+def get_failing_signature_durations_for_batch(batch_sorted):
+    """
+    Durations (minutes) for the failing signatures revealed by the initial
+    full batch run for this batch.
+
+    We take the union of failing perf signatures for all *regressor* commits
+    in this batch (true_label == True) using alert_summary_fail_perf_sigs.csv,
+    and map them to durations via job_durations.csv.
+
+    This matches the workflow:
+      - First full batch run fails on some signatures.
+      - All bisection steps then only run those failing signatures.
+    """
+    _load_perf_metadata()
+
+    sig_ids = set()
+
+    for c in batch_sorted:
+        if not c.get("true_label"):
+            continue
+        cid = c["commit_id"]
+        for sig in REVISION_FAIL_SIG_IDS.get(cid, []):
+            if sig in SIGNATURE_DURATIONS:
+                sig_ids.add(sig)
+
+    # if not sig_ids:
+    #     # No regressors or no metadata: in principle there would be no
+    #     # bisection, so this is rarely used. Fall back to full suite
+    #     # to avoid undercounting if it does get used.
+    #     return get_batch_signature_durations()
+
+    durations = [SIGNATURE_DURATIONS[s] for s in sig_ids]
+    logger.debug(
+        "Computed failing signature durations for batch of size %d: %d signatures",
+        len(batch_sorted),
+        len(durations),
+    )
+    return durations
+
+
+def get_tested_signatures_for_revision(revision):
+    """
+    Return the list of signature IDs that were actually tested for the given
+    revision according to perf_jobs_per_revision_details.jsonl.
+    """
+    _load_perf_jobs_per_revision()
+    return REVISION_TESTED_SIG_IDS.get(revision, [])
+
+
+def get_signature_durations_for_ids(signature_ids):
+    """
+    Map a collection of signature IDs to their durations (in minutes) using
+    job_durations.csv. For any unknown signature, we fall back to
+    _default_test_duration_min.
+    """
+    _load_perf_metadata()
+    durations = []
+    for sig in signature_ids:
+        try:
+            sig_id = int(sig)
+        except (TypeError, ValueError):
+            continue
+        dur = SIGNATURE_DURATIONS.get(sig_id, _default_test_duration_min)
+        durations.append(dur)
+    if not durations:
+        durations = [_default_test_duration_min]
+    return durations
+
+
+def get_failing_signatures_for_revision(revision):
+    """
+    Return the list of failing signature IDs for a given revision according to
+    alert_summary_fail_perf_sigs.csv.
+    """
+    _load_perf_metadata()
+    return REVISION_FAIL_SIG_IDS.get(revision, [])
 
 class TestExecutor:
     """
     Central test executor with a fixed number of workers.
-    Each test takes a fixed duration (TEST_DURATION_MIN).
-    When all workers are busy, new tests wait in a FIFO sense, implemented
-    by tracking each worker's 'free at' time and choosing the earliest.
+
+    Each scheduled test provides its own duration in minutes.
     """
-    def __init__(self, num_workers, test_duration_min):
+
+    def __init__(self, num_workers: int):
         self.num_workers = num_workers
-        self.test_duration = timedelta(minutes=test_duration_min)
         # worker_free_times[i] = datetime when worker i becomes free
         self.worker_free_times = [None] * num_workers
+        # Cumulative CPU time in minutes across all scheduled tests
+        self.total_cpu_minutes = 0.0
+        logger.debug("Created TestExecutor with %d workers", num_workers)
 
     def _ensure_initialized(self, t0):
         # Initialize all workers as free at t0 the first time we schedule.
@@ -29,9 +417,11 @@ class TestExecutor:
             if self.worker_free_times[i] is None:
                 self.worker_free_times[i] = t0
 
-    def schedule(self, requested_start_time):
+    def schedule(self, requested_start_time, duration_minutes: float):
         """
-        Submit a test that becomes 'ready' at requested_start_time.
+        Submit a single test that becomes 'ready' at requested_start_time,
+        with its own duration (in minutes).
+
         Returns the actual finish time given current queue & workers.
         """
         self._ensure_initialized(requested_start_time)
@@ -41,26 +431,60 @@ class TestExecutor:
         earliest_free = self.worker_free_times[idx]
 
         actual_start = max(requested_start_time, earliest_free)
-        finish_time = actual_start + self.test_duration
+        try:
+            duration_float = float(duration_minutes)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"Invalid duration_minutes value passed to TestExecutor.schedule: {duration_minutes!r}"
+            ) from exc
+
+        finish_time = actual_start + timedelta(minutes=duration_float)
         self.worker_free_times[idx] = finish_time
+        # Accumulate CPU time regardless of parallelism
+        self.total_cpu_minutes += duration_float
+        logger.debug(
+            "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
+            idx,
+            actual_start,
+            duration_minutes,
+            finish_time,
+        )
         return finish_time
 
 
-def run_test_suite(executor, requested_start_time, num_tests):
+def run_test_suite(executor: TestExecutor, requested_start_time, durations_minutes):
     """
-    Run `num_tests` individual tests in parallel as much as the executor allows.
-    All of them become ready at `requested_start_time`.
+    Run a suite of tests in parallel as much as the executor allows.
+
+    durations_minutes: iterable of per-test durations (in minutes).
+    All tests become ready at `requested_start_time`.
 
     Returns the time when the *last* of those tests finishes.
     """
-    finish_times = []
-    for _ in range(num_tests):
-        finish_times.append(executor.schedule(requested_start_time))
-    return max(finish_times)
+    durations = list(durations_minutes)
+    if not durations:
+        return requested_start_time
+    logger.debug(
+        "run_test_suite: scheduling %d tests from %s",
+        len(durations),
+        requested_start_time,
+    )
+
+    finish_times = [
+        executor.schedule(requested_start_time, dur) for dur in durations
+    ]
+    last_finish = max(finish_times)
+    logger.debug(
+        "run_test_suite: last test finished at %s (span=%.2f min)",
+        last_finish,
+        (last_finish - requested_start_time).total_seconds() / 60.0,
+    )
+    return last_finish
 
 
 def batch_has_regressor(batch):
     return any(c["true_label"] for c in batch)
+
 
 # ------------------ SHARED INTERVAL TEST HELPER ------------------ #
 
@@ -74,47 +498,46 @@ def _run_interval_and_update(
     total_tests_run,
     feedback_times,
     executor,
+    batch_fail_durations,
 ):
     """
     Shared helper for 'test_interval' used by multiple bisection strategies.
 
-    Parameters
-    ----------
-    batch_sorted : list[dict]
-        Commits in this batch, sorted by "ts".
-    status : list[str]
-        Per-commit status: "unknown", "clean", or "defect_found".
-    lo, hi : int
-        Inclusive index range within batch_sorted.
-    current_time : datetime
-        Logical current time at which this logical test run is scheduled.
-    first_test : bool
-        True if this is the first test in the batch (controls 850 vs 4 cost).
-    total_tests_run : int
-        Accumulated test count.
-    feedback_times : dict
-        commit_id -> feedback time in minutes.
-    executor : TestExecutor
-        Shared executor for scheduling physical tests.
+    Semantics:
 
-    Returns
-    -------
-    has_defect : bool
-    current_time : datetime
-    first_test : bool
-    total_tests_run : int
+      - For the first test in a batch (first_test == True), we model a *full*
+        perf batch run: all signatures from job_durations.csv.
+
+      - For subsequent interval tests (bisection steps), we model a targeted run
+        using the failing perf signatures for this batch.
+
+    Cost is counted as the number of signatures run in the suite.
     """
     if lo > hi:
         return False, current_time, first_test, total_tests_run
 
-    tests_this_run = TESTS_PER_BATCH_RUN if first_test else TESTS_PER_BISECTION_RUN
-    first_test = False
+    if first_test:
+        durations = get_batch_signature_durations()
+    else:
+        durations = batch_fail_durations
+
+    tests_this_run = len(durations)
+    first_test = False  # all subsequent calls in this batch are "bisection"
+
+    logger.debug(
+        "_run_interval_and_update: interval [%d, %d], first_test=%s, tests_this_run=%d, current_time=%s",
+        lo,
+        hi,
+        first_test,
+        tests_this_run,
+        current_time,
+    )
 
     # Cost accounting
     total_tests_run += tests_this_run
 
     # All physical tests for this logical run start at current_time
-    finish_time = run_test_suite(executor, current_time, tests_this_run)
+    finish_time = run_test_suite(executor, current_time, durations)
 
     has_defect = any(
         batch_sorted[i]["true_label"] and status[i] != "defect_found"
@@ -132,27 +555,51 @@ def _run_interval_and_update(
                     feedback_times[cid] = fb_min
 
     current_time = finish_time
+    logger.debug(
+        "_run_interval_and_update: finished interval [%d, %d], has_defect=%s, total_tests_run=%d",
+        lo,
+        hi,
+        has_defect,
+        total_tests_run,
+    )
     return has_defect, current_time, first_test, total_tests_run
 
 
-# ------------------ TOB (unchanged logic, uses helper) ------------------ #
+# ------------------ TOB ------------------ #
 
-def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+def time_ordered_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
     """
     Time-Ordered Bisection (TOB) with central executor.
 
-    Tests are logically sequential (each test's result is needed to pick the next one),
-    so we submit them one at a time to the executor.
+    Cost/time model:
+
+      - First call within a batch:
+          * Full batch run (all signatures).
+      - Subsequent calls (bisection steps):
+          * Only the failing signatures for this batch.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("time_ordered_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
     first_test = bool(is_batch_root)
+
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
 
     while True:
         unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
@@ -164,7 +611,16 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
 
         # Test the entire unknown region
         still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
-            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+            batch_fail_durations,
         )
         if not still_fails:
             break
@@ -175,7 +631,16 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
         while left < right:
             mid = (left + right) // 2
             left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
-                batch_sorted, status, left, mid, current_time, first_test, total_tests_run, feedback_times, executor
+                batch_sorted,
+                status,
+                left,
+                mid,
+                current_time,
+                first_test,
+                total_tests_run,
+                feedback_times,
+                executor,
+                batch_fail_durations,
             )
             if left_fails:
                 right = mid
@@ -191,47 +656,80 @@ def time_ordered_bisect(batch, start_time, total_tests_run, culprit_times, feedb
         if c["true_label"]:
             culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
+    logger.debug(
+        "time_ordered_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
+        len(culprit_times),
+        total_tests_run,
+    )
     return total_tests_run, culprit_times, feedback_times
 
 
-# ------------------ Exhaustive variants (unchanged) ------------------ #
+# ------------------ Exhaustive variants ------------------ #
 
-def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+def exhaustive_parallel(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
     """
-    Parallel 'no-bisection' strategy.
+    Parallel 'no-bisection' strategy with realistic durations.
+    
+      - For each batch:
+          * First test: ONE "full" batch run using ALL signatures
+            from job_durations.csv.
 
-    Semantic A:
-      - Baseline is the commit *before* the first commit in the batch.
-      - All commits in the batch are potential culprits.
+          * Subsequent per-commit runs (for all commits EXCEPT the last):
+              - Use the SAME failing-signature suite as bisection for
+                this batch, i.e., the union of failing perf signatures
+                across all regressor revisions in this batch, as derived
+                from alert_summary_fail_perf_sigs.csv.
 
-    Semantics here:
-      - If is_batch_root:
-          * Run ONE expensive batch run (850 tests) for the whole batch (conceptually on tip).
-          * Then run cheap per-commit suites (4 tests) for all commits EXCEPT the last.
-          * The last commit (D) gets its feedback time when the LAST intermediate
-            cheap run finishes (i.e., after C for batch [A,B,C,D]).
-      - If not is_batch_root:
-          * Just run cheap per-commit suites (4 tests) for all commits independently.
+          * The last commit's feedback time is when the last per-commit
+            suite finishes (no additional tests for the last one).
+
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("exhaustive_parallel: starting batch_size=%d", n)
 
-    # === Degenerate case: only one commit in the batch ===
-    # Then there's no "intermediate"; the only commit's feedback is at the
-    # finish of its own tests (850 if root, 4 otherwise).
+    # Precompute batch-level failing signatures (same set used everywhere in this batch)
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+
+    # Degenerate: single commit
     if n == 1:
-        if is_batch_root:
-            tests_this_run = TESTS_PER_BATCH_RUN
-        else:
-            tests_this_run = TESTS_PER_BISECTION_RUN
-        total_tests_run += tests_this_run
-        finish_time = run_test_suite(executor, start_time, tests_this_run)
-
         c = batch_sorted[0]
         cid = c["commit_id"]
+
+        if is_batch_root:
+            # Single-commit batch: just the full suite (conceptually same as batch test)
+            durations = get_batch_signature_durations()
+        else:
+            # Non-root usage: use batch-level failing signatures (still meaningful)
+            durations = batch_fail_durations
+
+        tests_this_run = len(durations)
+        total_tests_run += tests_this_run
+        finish_time = run_test_suite(executor, start_time, durations)
+
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
         feedback_times[cid] = fb_min
         if c["true_label"]:
@@ -239,72 +737,103 @@ def exhaustive_parallel(batch, start_time, total_tests_run, culprit_times, feedb
 
         return total_tests_run, culprit_times, feedback_times
 
-    # === Normal case: at least 2 commits ===
+    # Normal case: at least 2 commits
     if is_batch_root:
-        # 1) One "full" batch run: 850 tests.
-        total_tests_run += TESTS_PER_BATCH_RUN
-        finish_time_batch = run_test_suite(executor, start_time, TESTS_PER_BATCH_RUN)
-
-        # We'll run cheap per-commit tests for all intermediates (indices 0..n-2)
-        # starting after the batch run finishes.
+        # 1) One "full" batch run: all signatures.
+        durations_full = get_batch_signature_durations()
+        total_tests_run += len(durations_full)
+        finish_time_batch = run_test_suite(executor, start_time, durations_full)
         requested_time = finish_time_batch
     else:
-        # Non-root usage: no 850 run; just cheap tests from start_time.
+        # Non-root usage: no full batch run; per-commit suites start at start_time.
         requested_time = start_time
 
-    # 2) Cheap per-commit suites (4 tests) for all commits EXCEPT the last.
+    # 2) Per-commit suites using batch-level failing signatures
+    #    for all commits EXCEPT the last.
     intermediate_finish_times = []
     for idx in range(0, n - 1):
         c = batch_sorted[idx]
+        cid = c["commit_id"]
 
-        tests_this_run = TESTS_PER_BISECTION_RUN
+        durations = batch_fail_durations
+        tests_this_run = len(durations)
         total_tests_run += tests_this_run
 
-        finish_time = run_test_suite(executor, requested_time, tests_this_run)
+        finish_time = run_test_suite(executor, requested_time, durations)
         intermediate_finish_times.append(finish_time)
 
-        cid = c["commit_id"]
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
         feedback_times[cid] = fb_min
 
         if c["true_label"]:
             culprit_times.append(fb_min)
 
-    # 3) Feedback for the last commit (D):
-    #    Its status is resolved once the LAST intermediate's cheap run finishes.
-    #    (If there were no intermediates, n==1 case above already handled it.)
+    # 3) Feedback for the last commit comes when the last per-commit suite finishes.
     last_commit = batch_sorted[-1]
     last_cid = last_commit["commit_id"]
 
     if intermediate_finish_times:
         last_intermediate_finish = max(intermediate_finish_times)
     else:
-        # Should not happen for n>=2, but guard anyway: fall back to batch finish.
-        last_intermediate_finish = finish_time_batch if is_batch_root else requested_time
+        # Shouldn't happen for n >= 2, but guard anyway
+        last_intermediate_finish = requested_time
 
-    fb_min_last = (last_intermediate_finish - last_commit["ts"]).total_seconds() / 60.0
+    fb_min_last = (
+        last_intermediate_finish - last_commit["ts"]
+    ).total_seconds() / 60.0
     feedback_times[last_cid] = fb_min_last
     if last_commit["true_label"]:
         culprit_times.append(fb_min_last)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
+    logger.debug(
+        "exhaustive_parallel: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
+        len(culprit_times),
+        total_tests_run,
+    )
     return total_tests_run, culprit_times, feedback_times
 
 
+# ------------------ RWAB ------------------ #
 
-# ------------------ RWAB using the same helper ------------------ #
-
-def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_times, feedback_times, executor, is_batch_root=True):
+def risk_weighted_adaptive_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
     """
     Risk-Weighted Adaptive Bisection (RWAB).
 
     Like time_ordered_bisect, but splits failing intervals so that the sum of
     predicted risk on the left and right halves is approximately balanced.
+
+    Cost/time model:
+
+      - First batch test uses the full suite.
+      - Subsequent bisection tests use only the failing signatures for
+        this batch.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("risk_weighted_adaptive_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
@@ -313,7 +842,11 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
     # Prefix sums of risk
     risk_prefix = [0.0] * (n + 1)
     for i, c in enumerate(batch_sorted):
-        r = float(c.get("risk", 0.0) or 0.0)
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                f"Missing or None 'risk' value in batch for risk_weighted_adaptive_bisect at index {i}: {c!r}"
+            )
+        r = float(c["risk"])
         risk_prefix[i + 1] = risk_prefix[i] + r
 
     def risk_sum(lo, hi):
@@ -339,6 +872,8 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
 
         return best_idx
 
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+
     while True:
         unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
         if not unknown_indices:
@@ -349,7 +884,16 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
 
         # Test the whole unknown region
         still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
-            batch_sorted, status, lo, hi, current_time, first_test, total_tests_run, feedback_times, executor
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+            batch_fail_durations,
         )
         if not still_fails:
             break
@@ -360,7 +904,16 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
         while left < right:
             split = choose_risk_balanced_split(left, right)
             left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
-                batch_sorted, status, left, split, current_time, first_test, total_tests_run, feedback_times, executor
+                batch_sorted,
+                status,
+                left,
+                split,
+                current_time,
+                first_test,
+                total_tests_run,
+                feedback_times,
+                executor,
+                batch_fail_durations,
             )
             if left_fails:
                 right = split
@@ -376,6 +929,21 @@ def risk_weighted_adaptive_bisect(batch, start_time, total_tests_run, culprit_ti
         if c["true_label"]:
             culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
+    logger.debug(
+        "risk_weighted_adaptive_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
+        len(culprit_times),
+        total_tests_run,
+    )
     return total_tests_run, culprit_times, feedback_times
 
 
@@ -393,28 +961,20 @@ def topk_risk_first_bisect(
     """
     Top-K Risk-First Bisection (TKRB-K).
 
-    On batch failure, first isolates and tests the top-K riskiest commits:
+    Cost/time model:
 
-      For each of the K riskiest commits (by predicted risk p):
-
-        1. Test subbatch [0 .. i]  (up to and including the risky commit)
-        2. If [0 .. i] fails, test [0 .. i-1] (if i > 0).
-           - If [0 .. i] fails and [0 .. i-1] is clean, i is a culprit.
-           - If both [0 .. i] and [0 .. i-1] fail, run a TOB-style bisection
-             restricted to [0 .. i-1].
-
-    If no culprit is found this way (or there are remaining unknown regressors),
-    we fall back to a TOB-style search over the remaining unknown region.
-
-    We keep results of any subbatches we already tested, and if TOB needs to
-    test exactly the same interval again, we reuse that outcome instead of
-    re-running tests.
+      - First batch test uses the full suite.
+      - All subsequent tests (probes and fallback bisection) use only the
+        failing signatures for this batch.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
 
     batch_sorted = sorted(batch, key=lambda c: c["ts"])
     n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("topk_risk_first_bisect: starting batch_size=%d", n)
 
     status = ["unknown"] * n
     current_time = start_time
@@ -422,6 +982,8 @@ def topk_risk_first_bisect(
 
     # Cache: (lo, hi) -> has_defect boolean, so we don't re-run identical intervals
     interval_cache = {}
+
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
 
     def run_interval(lo, hi):
         """
@@ -438,6 +1000,12 @@ def topk_risk_first_bisect(
 
         key = (lo, hi)
         if key in interval_cache:
+            logger.debug(
+                "topk_risk_first_bisect: using cached interval result for [%d, %d] -> %s",
+                lo,
+                hi,
+                interval_cache[key],
+            )
             return interval_cache[key]
 
         has_defect, current_time, first_test, total_tests_run = _run_interval_and_update(
@@ -450,16 +1018,21 @@ def topk_risk_first_bisect(
             total_tests_run,
             feedback_times,
             executor,
+            batch_fail_durations,
         )
         interval_cache[key] = has_defect
+        logger.debug(
+            "topk_risk_first_bisect: interval [%d, %d] executed, has_defect=%s",
+            lo,
+            hi,
+            has_defect,
+        )
         return has_defect
 
     def tob_bisect_on_range(lo_bound, hi_bound):
         """
         Run a TOB-style bisection restricted to [lo_bound .. hi_bound],
         using run_interval (with cache) for physical runs.
-
-        This can discover one or more culprits inside that subrange.
         """
         nonlocal current_time, first_test, total_tests_run
 
@@ -476,11 +1049,8 @@ def topk_risk_first_bisect(
 
             still_fails = run_interval(lo, hi)
             if not still_fails:
-                # This unknown region is actually clean; _run_interval_and_update
-                # already updated status + feedback for its commits.
                 break
 
-            # Standard midpoint-based binary search
             left = lo
             right = hi
             while left < right:
@@ -503,15 +1073,18 @@ def topk_risk_first_bisect(
     # ---- Step 1: Initial whole-batch test (like TOB) ----
     whole_fails = run_interval(0, n - 1)
     if not whole_fails:
-        # Entire batch clean; _run_interval_and_update has already filled feedback/status.
+        # Entire batch clean
         return total_tests_run, culprit_times, feedback_times
 
     # ---- Step 2: Top-K risk-first probing ----
-    risks = [
-        (i, float(batch_sorted[i].get("risk", 0.0) or 0.0))
-        for i in range(n)
-    ]
-    # Sort by risk descending
+    risks = []
+    for i in range(n):
+        c = batch_sorted[i]
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                f"Missing or None 'risk' value in batch for topk_risk_first_bisect at index {i}: {c!r}"
+            )
+        risks.append((i, float(c["risk"])))
     risks.sort(key=lambda t: t[1], reverse=True)
     top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
 
@@ -519,25 +1092,22 @@ def topk_risk_first_bisect(
         if status[idx] != "unknown":
             continue
 
-        # Test subbatch [0 .. idx] (including risky commit)
         curr_fails = run_interval(0, idx)
 
-        # Only test [0 .. idx-1] if [0 .. idx] fails.
         prev_fails = False
         if curr_fails and idx > 0:
             prev_fails = run_interval(0, idx - 1)
 
-        # Case 1: [0..idx] fails, [0..idx-1] clean => idx is a culprit.
         if curr_fails and not prev_fails:
             c = batch_sorted[idx]
-            status[idx] = "defect_found"
+            if status[idx] != "defect_found":
+                status[idx] = "defect_found"
 
-            fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-            feedback_times[c["commit_id"]] = fb_min
-            if c["true_label"]:
-                culprit_times.append(fb_min)
+                fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+                feedback_times[c["commit_id"]] = fb_min
+                if c["true_label"]:
+                    culprit_times.append(fb_min)
 
-        # Case 2: BOTH [0..idx] and [0..idx-1] fail => do TOB on [0..idx-1].
         elif curr_fails and prev_fails and idx > 0:
             tob_bisect_on_range(0, idx - 1)
 
@@ -550,15 +1120,10 @@ def topk_risk_first_bisect(
         lo = unknown_indices[0]
         hi = unknown_indices[-1]
 
-        # Test the entire unknown region
         still_fails = run_interval(lo, hi)
         if not still_fails:
-            # No remaining regressors in unknown region; any clean-interval status
-            # and feedback was already applied when that interval was first tested.
             break
 
-        # Standard midpoint-based binary search on the unknown region,
-        # but using our cached run_interval.
         left = lo
         right = hi
         while left < right:
@@ -578,4 +1143,20 @@ def topk_risk_first_bisect(
             if c["true_label"]:
                 culprit_times.append(fb_min)
 
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
+    logger.debug(
+        "topk_risk_first_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "cache_entries=%d, total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
+        len(culprit_times),
+        len(interval_cache),
+        total_tests_run,
+    )
     return total_tests_run, culprit_times, feedback_times

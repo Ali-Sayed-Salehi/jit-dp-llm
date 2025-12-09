@@ -47,7 +47,9 @@ echo "Running script ..."
 # --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_test/batch_eval_mopt.json \
 # --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/k_test/batch_test_mopt.json \
 # --mopt-trials 2 \
-# --num-test-workers 100
+# --num-test-workers 100 \
+# --full-suite-sigs-per-run 850 \
+# --log-level INFO
 # --final-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
@@ -65,10 +67,10 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py --debug
 
 echo "Script finished"

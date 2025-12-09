@@ -7,6 +7,8 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 import argparse
+import csv
+import logging
 
 from batch_strats import (
     simulate_twb_with_bisect,
@@ -15,6 +17,7 @@ from batch_strats import (
     simulate_rapb_t_a_with_bisect,
     simulate_rrbb_with_bisect,
     simulate_ratb_with_bisect,
+    simulate_twsb_with_bisect,
 )
 
 from bisection_strats import (
@@ -22,17 +25,21 @@ from bisection_strats import (
     exhaustive_parallel,
     risk_weighted_adaptive_bisect,
     topk_risk_first_bisect,
-    TEST_DURATION_MIN,
-    TESTS_PER_RUN,
     TestExecutor,
     run_test_suite,
+    configure_bisection_defaults,
+    validate_failing_signatures_coverage,
 )
 
+logger = logging.getLogger(__name__)
 
 # ====== CONFIG ======
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
+JOB_DURATIONS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "job_durations.csv"
+)
 
 BATCH_HOURS = 4
 FSB_SIZE = 20
@@ -47,7 +54,13 @@ DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
+DEFAULT_TEST_DURATION_MIN = 21.0
+
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
+
+# Number of perf signatures to run for each "full suite" batch test step.
+# If this is None or larger than the available signatures, all signatures are used.
+FULL_SUITE_SIGNATURES_PER_RUN = 200
 
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
@@ -65,9 +78,47 @@ BISECTION_STRATEGIES = [
     ("TKRB", topk_risk_first_bisect),
 ]
 
+# Seed will be finalized in main(), but we also provide a
+# deterministic default at import time.
 random.seed(RANDOM_SEED)
 
 # =================================
+
+def _load_batch_signature_durations(path):
+    """
+    Load durations (in minutes) for a 'full batch run':
+    all signatures from job_durations.csv.
+    Only the durations are needed here (we don't care about ids for ET).
+    """
+    durations = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                dur = row.get("duration_minutes")
+                if not dur:
+                    continue
+                try:
+                    durations.append(float(dur))
+                except ValueError:
+                    continue
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Batch signature durations CSV not found at: {path}"
+        ) from exc
+
+    if not durations:
+        raise RuntimeError(
+            f"No valid duration_minutes entries found in CSV at: {path}"
+        )
+
+    return durations
+
+
+# Used by run_exhaustive_testing
+BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(JOB_DURATIONS_CSV)
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="Batch-testing simulation (Optuna-only mopt).")
 
@@ -128,12 +179,28 @@ def get_args():
         default=NUM_TEST_WORKERS,
         help="Number of parallel test workers (central test machine capacity K).",
     )
+    parser.add_argument(
+        "--full-suite-sigs-per-run",
+        type=int,
+        default=FULL_SUITE_SIGNATURES_PER_RUN,
+        help=(
+            "Number of perf signatures to run per 'full suite' batch test step "
+            "(<= 0 means use all signatures)."
+        ),
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level for the simulation.",
+    )
     return parser.parse_args()
 
 
 def load_predictions(path, pred_threshold):
+    logger.debug("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
     if not os.path.exists(path):
-        return {}
+        raise FileNotFoundError(f"Prediction file does not exist: {path}")
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -167,7 +234,9 @@ def parse_hg_date(date_field):
         return dt_local
     if isinstance(date_field, str):
         return datetime.fromisoformat(date_field)
-    return datetime.now(timezone.utc)
+    raise TypeError(
+        f"Unsupported hg date_field type {type(date_field)!r}; expected list[ts, offset] or ISO string."
+    )
 
 
 def get_cutoff_from_input(all_commits_path, pred_map):
@@ -175,8 +244,14 @@ def get_cutoff_from_input(all_commits_path, pred_map):
     oldest = None
     newest = None
     if not pred_map:
-        return None, None
+        raise ValueError("Prediction map is empty in get_cutoff_from_input")
+    logger.debug(
+        "Scanning %s to determine cutoff window for %d predicted commits",
+        all_commits_path,
+        len(pred_map),
+    )
     with open(all_commits_path, "r", encoding="utf-8") as f:
+        scanned = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -193,12 +268,29 @@ def get_cutoff_from_input(all_commits_path, pred_map):
                 oldest = ts
             if newest is None or ts > newest:
                 newest = ts
+            scanned += 1
+            if scanned % 50000 == 0:
+                logger.debug("Processed %d lines while computing cutoff window...", scanned)
+    logger.debug(
+        "Computed cutoff window: oldest=%s newest=%s (scanned %d lines)",
+        oldest,
+        newest,
+        scanned,
+    )
     return oldest, newest
 
 
 def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
+    logger.debug(
+        "Reading commits from %s with lower_cutoff=%s upper_cutoff=%s (pred_map size=%d)",
+        all_commits_path,
+        lower_cutoff,
+        upper_cutoff,
+        len(pred_map),
+    )
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
+        processed = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -236,39 +328,48 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
                 }
             )
 
+            processed += 1
+            if processed % 50000 == 0:
+                logger.debug("Processed %d commits so far while building commit list...", processed)
+
     commits.sort(key=lambda x: x["ts"])
+    logger.debug("Finished building commit list: %d commits within window", len(commits))
     return commits
 
 
 def run_exhaustive_testing(commits):
-    """
-    Exhaustive Testing (ET) with a central executor:
-    - Every commit gets its own full perf run.
-    - Tests are submitted at the commit timestamp.
-    - A central machine with NUM_TEST_WORKERS workers runs them, each taking TEST_DURATION_MIN.
-    - Queue wait time is reflected in feedback metrics.
-    """
+    logger.info("Starting exhaustive testing over %d commits", len(commits))
     if not commits:
+        logger.info("No commits provided to run_exhaustive_testing; returning zeros.")
         return {
             "total_tests_run": 0,
             "mean_feedback_time_hr": 0.0,
             "mean_time_to_culprit_hr": 0.0,
             "max_time_to_culprit_hr": 0.0,
+            "total_cpu_time_hr": 0.0,
         }
 
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
 
-    # Central executor for this ET run
-    executor = TestExecutor(NUM_TEST_WORKERS, TEST_DURATION_MIN)
+    executor = TestExecutor(NUM_TEST_WORKERS)
+    logger.debug("Created TestExecutor with %d workers for exhaustive testing", NUM_TEST_WORKERS)
 
-    for c in commits:
-        submit_time = c["ts"]  # test becomes available when the commit lands
-        finish_time = run_test_suite(executor, submit_time, TESTS_PER_RUN)
+    for idx, c in enumerate(commits, start=1):
+        submit_time = c["ts"]
 
-        # Count the test cost just like before
-        total_tests_run += TESTS_PER_RUN
+        # Full suite, but capped to a fixed random subset of signatures if requested.
+        if FULL_SUITE_SIGNATURES_PER_RUN and len(BATCH_SIGNATURE_DURATIONS_ET) > FULL_SUITE_SIGNATURES_PER_RUN:
+            durations = random.sample(
+                BATCH_SIGNATURE_DURATIONS_ET,
+                FULL_SUITE_SIGNATURES_PER_RUN,
+            )
+        else:
+            durations = BATCH_SIGNATURE_DURATIONS_ET
+        finish_time = run_test_suite(executor, submit_time, durations)
+
+        total_tests_run += len(durations)
 
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
         feedback_times[c["commit_id"]] = fb_min
@@ -276,26 +377,30 @@ def run_exhaustive_testing(commits):
             culprit_times.append(fb_min)
 
     if feedback_times:
-        mean_fb_hr = round(
-            (sum(feedback_times.values()) / len(feedback_times)) / 60.0,
-            2,
-        )
+        mean_fb_min = sum(feedback_times.values()) / len(feedback_times)
     else:
-        mean_fb_hr = 0.0
+        mean_fb_min = 0.0
 
     if culprit_times:
-        mean_ttc_hr = round((sum(culprit_times) / len(culprit_times)) / 60.0, 2)
-        max_ttc_hr = round(max(culprit_times) / 60.0, 2)
+        mean_ttc_min = sum(culprit_times) / len(culprit_times)
+        max_ttc_min = max(culprit_times)
     else:
-        mean_ttc_hr = 0.0
-        max_ttc_hr = 0.0
+        mean_ttc_min = 0.0
+        max_ttc_min = 0.0
 
-    return {
+    total_cpu_time_min = getattr(executor, "total_cpu_minutes", 0.0)
+
+    res = {
         "total_tests_run": total_tests_run,
-        "mean_feedback_time_hr": mean_fb_hr,
-        "mean_time_to_culprit_hr": mean_ttc_hr,
-        "max_time_to_culprit_hr": max_ttc_hr,
+        "mean_feedback_time_min": round(mean_fb_min, 2),
+        "mean_time_to_culprit_min": round(mean_ttc_min, 2),
+        "max_time_to_culprit_min": round(max_ttc_min, 2),
+        "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
+
+    # Reuse common conversion helper for consistency
+    res = convert_result_minutes_to_hours(res)
+    return res
 
 
 def convert_result_minutes_to_hours(res):
@@ -312,10 +417,19 @@ def convert_result_minutes_to_hours(res):
             res["max_time_to_culprit_min"] / 60.0, 2
         )
         del res["max_time_to_culprit_min"]
+    if "total_cpu_time_min" in res:
+        res["total_cpu_time_hr"] = round(
+            res["total_cpu_time_min"] / 60.0, 2
+        )
+        del res["total_cpu_time_min"]
     return res
 
 
 def lookup_batching(name):
+    # Special-case TWSB so it can appear in eval/final combos without being
+    # part of the Optuna-tuned BATCHING_STRATEGIES grid.
+    if name == "TWSB":
+        return simulate_twsb_with_bisect, None
     for n, fn, default_param in BATCHING_STRATEGIES:
         if n == name:
             return fn, default_param
@@ -335,6 +449,7 @@ BEST_OVERALL_FIELDS = [
     "mean_feedback_time_saved_vs_baseline_pct",
     "mean_time_to_culprit_saved_vs_baseline_pct",
     "max_time_to_culprit_saved_vs_baseline_pct",
+    "cpu_time_saved_vs_baseline_pct",
 ]
 
 
@@ -350,6 +465,7 @@ def _overall_improvement_score(entry):
     mean_fb = entry.get("mean_feedback_time_saved_vs_baseline_pct", 0.0)
     mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
     max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    # CPU time is tracked separately but not included in this aggregate score.
     return tests_saved + (mean_fb + mean_ttc + max_ttc) / 3.0
 
 
@@ -396,6 +512,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             "Optuna is required for this script. Install with `pip install optuna`."
         ) from e
 
+    logger.info(
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d",
+        INPUT_JSON_EVAL,
+        n_trials,
+    )
+
     # Use a fixed default threshold just to determine the time window
     tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
     dynamic_oldest, dynamic_newest = get_cutoff_from_input(
@@ -414,14 +536,30 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     )
     baseline = {}
     if base_commits_for_context:
-        baseline = simulate_twb_with_bisect(
+        logger.info(
+            "Running baseline TWSB + PAR simulation for context on %d commits",
+            len(base_commits_for_context),
+        )
+        baseline = simulate_twsb_with_bisect(
             base_commits_for_context,
-            time_ordered_bisect,
-            BATCH_HOURS,
+            exhaustive_parallel,
+            None,
             NUM_TEST_WORKERS,
         )
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
+    baseline_cpu = baseline.get("total_cpu_time_hr", None)
+
+    baseline_fb = baseline.get("mean_feedback_time_hr", None)
+    baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
+    baseline_tests = baseline.get("total_tests_run", None)
+
+    def time_saved_pct(base, val):
+        return (
+            round((base - val) / base * 100.0, 2)
+            if base and base > 0
+            else 0.0
+        )
 
     def pick_best(pareto, baseline_max_ttc_local):
         if not pareto:
@@ -443,16 +581,33 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline,
+        "Baseline (TWSB + PAR)": baseline,
         "num_test_workers": NUM_TEST_WORKERS,
     }
 
     # Per combo study with continuous/int ranges
+    logger.info(
+        "Beginning Optuna studies over %d batching strategies x %d bisection strategies",
+        len(BATCHING_STRATEGIES),
+        len(BISECTION_STRATEGIES),
+    )
     for b_name, b_fn, _ in BATCHING_STRATEGIES:
         for bis_name, bis_fn in BISECTION_STRATEGIES:
             combo_key = f"{b_name} + {bis_name}"
+            logger.info(
+                "Creating Optuna study for combo %s with %d trials",
+                combo_key,
+                n_trials,
+            )
 
             def objective(trial):
+                if trial.number % 10 == 0:
+                    logger.info(
+                        "Optuna trial %d/%d for combo %s",
+                        trial.number,
+                        n_trials,
+                        combo_key,
+                    )
                 # Shared continuous pred threshold
                 pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
 
@@ -482,6 +637,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
                 )
                 if not commits:
+                    logger.warning(
+                        "No commits returned for combo %s at trial %d (pred_thr=%.4f)",
+                        combo_key,
+                        trial.number,
+                        pred_thr,
+                    )
                     return (float("inf"), float("inf"))
 
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
@@ -493,6 +654,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
             study = optuna.create_study(directions=["minimize", "minimize"])
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+            logger.info(
+                "Completed Optuna study for combo %s; best trial count=%d",
+                combo_key,
+                len(study.best_trials),
+            )
 
             # Build Pareto & choose a single best for unified eval_output
             pareto = []
@@ -564,6 +730,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                         "max_time_to_culprit_hr": res.get(
                             "max_time_to_culprit_hr"
                         ),
+                        "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                         "violates_baseline": (
                             baseline_max_ttc is not None
                             and res.get("max_time_to_culprit_hr", 0)
@@ -574,25 +741,19 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
             selected = pick_best(pareto, baseline_max_ttc)
             if selected is None:
+                logger.warning(
+                    "No Pareto-optimal configuration selected for combo %s; skipping",
+                    combo_key,
+                )
                 continue
 
             # compute deltas vs baseline for the selected
-            baseline_fb = baseline.get("mean_feedback_time_hr", None)
-            baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
-            baseline_tests = baseline.get("total_tests_run", None)
-
-            def time_saved_pct(base, val):
-                return (
-                    round((base - val) / base * 100.0, 2)
-                    if base and base > 0
-                    else 0.0
-                )
-
             result_entry = {
                 "total_tests_run": selected["total_tests_run"],
                 "mean_feedback_time_hr": selected["mean_feedback_time_hr"],
                 "mean_time_to_culprit_hr": selected["mean_time_to_culprit_hr"],
                 "max_time_to_culprit_hr": selected["max_time_to_culprit_hr"],
+                "total_cpu_time_hr": selected.get("total_cpu_time_hr"),
                 "violates_baseline": selected["violates_baseline"],
                 "best_params": selected["best_params"],
                 "pred_threshold_used": selected["pred_threshold_used"],
@@ -622,6 +783,67 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
             }
             out_eval[combo_key] = result_entry
 
+    # Also evaluate fixed-parameter TWSB with all bisection strategies on the
+    # same base commit set used for the baseline.
+    if base_commits_for_context:
+        for bis_name, bis_fn in BISECTION_STRATEGIES:
+            combo_key = f"TWSB + {bis_name}"
+            logger.info(
+                "Running fixed TWSB combo %s on %d commits",
+                combo_key,
+                len(base_commits_for_context),
+            )
+            res = simulate_twsb_with_bisect(
+                base_commits_for_context,
+                bis_fn,
+                None,
+                NUM_TEST_WORKERS,
+            )
+            res = convert_result_minutes_to_hours(res)
+
+            violates = (
+                baseline_max_ttc is not None
+                and res.get("max_time_to_culprit_hr", 0)
+                > baseline_max_ttc
+            )
+
+            result_entry = {
+                "total_tests_run": res.get("total_tests_run"),
+                "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
+                "mean_time_to_culprit_hr": res.get("mean_time_to_culprit_hr"),
+                "max_time_to_culprit_hr": res.get("max_time_to_culprit_hr"),
+                "total_cpu_time_hr": res.get("total_cpu_time_hr"),
+                "violates_baseline": violates,
+                "best_params": {},  # no tunable params for TWSB
+                "pred_threshold_used": PRED_THRESHOLD,
+                "tests_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_tests,
+                    res.get("total_tests_run", baseline_tests),
+                )
+                if baseline_tests is not None
+                else 0.0,
+                "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_fb,
+                    res.get("mean_feedback_time_hr", baseline_fb),
+                )
+                if baseline_fb is not None
+                else 0.0,
+                "mean_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_mean_ttc,
+                    res.get("mean_time_to_culprit_hr", baseline_mean_ttc),
+                )
+                if baseline_mean_ttc is not None
+                else 0.0,
+                "max_time_to_culprit_saved_vs_baseline_pct": time_saved_pct(
+                    baseline_max_ttc,
+                    res.get("max_time_to_culprit_hr", baseline_max_ttc),
+                )
+                if baseline_max_ttc is not None
+                else 0.0,
+                "_mopt_pareto_sample_size": 1,
+            }
+            out_eval[combo_key] = result_entry
+
     # summary (unified)
     combo_items = [
         (k, v)
@@ -629,7 +851,7 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         if k
         not in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "num_test_workers",
         )
     ]
@@ -666,6 +888,11 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
 # ------------------- FINAL REPLAY (unified) -------------------
 def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
+    logger.info(
+        "Starting FINAL replay with INPUT_JSON_FINAL=%s, OUTPUT_PATH_FINAL=%s",
+        INPUT_JSON_FINAL,
+        OUTPUT_PATH_FINAL,
+    )
     # Build FINAL window from FINAL predictions (use fixed PRED_THRESHOLD for window discovery)
     tmp_pred_map_final = load_predictions(
         INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD
@@ -684,8 +911,8 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
     et_results_final = run_exhaustive_testing(base_commits_final)
-    baseline_final = simulate_twb_with_bisect(
-        base_commits_final, time_ordered_bisect, BATCH_HOURS, NUM_TEST_WORKERS
+    baseline_final = simulate_twsb_with_bisect(
+        base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
     )
     baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -703,7 +930,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWB + TOB, BATCH_HOURS=4)": baseline_final,
+        "Baseline (TWSB + PAR)": baseline_final,
         "final_window": {
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
@@ -717,7 +944,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for combo_name, val in eval_out.items():
         if combo_name in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
@@ -735,29 +962,34 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         if b_fn is None or bis_fn is None:
             continue
 
-        best_params = val.get("best_params")
-        if not isinstance(best_params, dict):
-            # Skip malformed entries
-            continue
-
         pred_thr = val.get("pred_threshold_used", PRED_THRESHOLD)
 
         # Unpack params for this strategy
+        best_params = val.get("best_params")
         if b_name == "RAPB":
+            if not isinstance(best_params, dict):
+                continue
             param = (
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
         elif b_name == "RATB":
+            if not isinstance(best_params, dict):
+                continue
             param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
             )
+        elif b_name == "TWSB":
+            # No tunable params for TWSB
+            param = None
         else:
             # single-valued dict e.g., {"BATCH_HOURS": x} 
             # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
             # or {"RRBB_BUDGET": b}
             try:
+                if not isinstance(best_params, dict):
+                    continue
                 param = list(best_params.values())[0]
             except Exception:
                 continue
@@ -807,7 +1039,7 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     for k, v in final_results.items():
         if k in (
             "Exhaustive Testing (ET)",
-            "Baseline (TWB + TOB, BATCH_HOURS=4)",
+            "Baseline (TWSB + PAR)",
             "final_window",
             "best_by_total_tests",
             "best_by_max_ttc",
@@ -850,16 +1082,57 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
     with open(OUTPUT_PATH_FINAL, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=2)
-    print("✅ Saved FINAL replay to", OUTPUT_PATH_FINAL)
+    logger.info("Saved FINAL replay to %s", OUTPUT_PATH_FINAL)
     return final_results
 
 
 def main():
     args = get_args()
 
-    # Apply CLI override to global NUM_TEST_WORKERS
-    global NUM_TEST_WORKERS
+    log_level_name = getattr(args, "log_level", "INFO")
+    log_level = getattr(logging, log_level_name.upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+    # Apply random seed override as early as possible for reproducibility
+    global RANDOM_SEED
+    RANDOM_SEED = int(RANDOM_SEED)
+    random.seed(RANDOM_SEED)
+
+    logger.info("Starting batch-testing simulation CLI")
+    logger.info(
+        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
+        "full_suite_sigs_per_run=%s, log_level=%s, random_seed=%d",
+        args.mopt_trials,
+        args.final_only,
+        args.num_test_workers,
+        str(args.full_suite_sigs_per_run),
+        log_level_name,
+        RANDOM_SEED,
+    )
+
+    # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
+    global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN
     NUM_TEST_WORKERS = args.num_test_workers
+    # <= 0 means "use all signatures"
+    if args.full_suite_sigs_per_run and args.full_suite_sigs_per_run > 0:
+        FULL_SUITE_SIGNATURES_PER_RUN = args.full_suite_sigs_per_run
+    else:
+        FULL_SUITE_SIGNATURES_PER_RUN = None
+
+    # Propagate defaults/knobs to bisection_strats
+    configure_bisection_defaults(
+        default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
+        full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
+    )
+
+    # Sanity check: ensure that all failing perf signatures from
+    # alert_summary_fail_perf_sigs.csv are actually present in
+    # perf_jobs_per_revision_details.jsonl. If not, the simulation
+    # would be unable to exercise all failing signatures and results
+    # would be misleading.
+    validate_failing_signatures_coverage()
 
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval
@@ -878,7 +1151,10 @@ def main():
 
         # Shape expected by run_final_test_unified
         eval_payload = {"eval_output": reused_eval_output}
-        print(f"🔁 Reusing eval results from {OUTPUT_PATH_EVAL}; running FINAL only...")
+        logger.info(
+            "Reusing eval results from %s; running FINAL only...",
+            OUTPUT_PATH_EVAL,
+        )
         run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
         return
 
@@ -891,7 +1167,7 @@ def main():
     os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
     with open(OUTPUT_PATH_EVAL, "w", encoding="utf-8") as f:
         json.dump(eval_payload["eval_output"], f, indent=2)
-    print("✅ Saved EVAL results to", OUTPUT_PATH_EVAL)
+    logger.info("Saved EVAL results to %s", OUTPUT_PATH_EVAL)
 
     # Unified FINAL replay
     run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)

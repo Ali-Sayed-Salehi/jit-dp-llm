@@ -30,7 +30,7 @@ LLMs/**/*
 /llama/configs/train_config_local.yaml
 /analysis/results/
 **/autoland/
-
+**/batch_testing/results/
 
 # cache
 .cache
