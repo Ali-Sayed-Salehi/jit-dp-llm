@@ -8,6 +8,9 @@ This script:
   restricted to a configurable timeframe and excluding very recent submissions.
 - For each relevant revision, counts jobs whose submit_time is within
   five minutes after the push timestamp.
+- Uses an intermediate JSONL cache that stores all jobs for each signature
+  (one JSON object per line: {"signature_id", "jobs"}), so that subsequent runs
+  can resume and/or reuse cached data instead of making fresh API calls.
 - Writes a CSV with revision, submission timestamp, and total job count,
   plus summary statistics and a distribution plot.
 """
@@ -43,6 +46,11 @@ REVISION_DETAILS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_per_revision_detai
 # Input JSONL: all commits on the repository (Mercurial autoland)
 ALL_COMMITS_JSONL = os.path.join(DATASET_DIR, "all_commits.jsonl")
 
+# NEW: intermediate cache: per-signature jobs
+# One line per signature:
+#   {"signature_id": <int>, "jobs": [<job dicts from Treeherder>]}
+SIGNATURE_JOBS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_by_signature.jsonl")
+
 # NEW: paths for statistics JSON and distribution plot
 STATS_JSON = os.path.join(DATASET_DIR, "perf_jobs_stats.json")
 DIST_PLOT_PNG = os.path.join(DATASET_DIR, "perf_jobs_per_revision_dist.png")
@@ -63,6 +71,7 @@ TIMEFRAME_DAYS = max(1, (datetime.now(UTC) - REVISION_START_DATE).days + 2)
 REPOSITORY = "autoland"
 
 client = TreeherderClient()
+
 
 def load_revisions_from_all_commits(jsonl_path: str):
     """
@@ -168,9 +177,115 @@ def fetch_jobs_for_signature(signature_id: int):
     return data_list[0].get("data", []) or []
 
 
-def aggregate_revision_counts(signatures, allowed_revisions):
+# -------------------------------------------------------------------
+# NEW: Intermediate cache utilities for per-signature job data
+# -------------------------------------------------------------------
+def load_signature_jobs_cache(jsonl_path: str):
+    """
+    Load per-signature jobs from a JSONL cache file.
+
+    Each line is expected to be:
+      {"signature_id": <int>, "jobs": [<job dicts>]}
+    Returns:
+      dict[int, list[dict]] mapping signature_id -> jobs list.
+    """
+    cache = {}
+    if not os.path.exists(jsonl_path):
+        print(f"No existing signature jobs cache at {jsonl_path}.")
+        return cache
+
+    with open(jsonl_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            sig_id = record.get("signature_id")
+            jobs = record.get("jobs")
+            if sig_id is None or jobs is None:
+                continue
+            try:
+                sig_id_int = int(sig_id)
+            except Exception:
+                continue
+
+            cache[sig_id_int] = jobs
+
+    print(f"Loaded cached jobs for {len(cache)} signatures from {jsonl_path}.")
+    return cache
+
+
+def append_signature_jobs(jsonl_path: str, signature_id: int, jobs):
+    """
+    Append a single row for a signature to the JSONL cache.
+
+    This writes one line at a time so that if the script is interrupted,
+    previously written signatures remain usable and we can resume.
+    """
+    record = {
+        "signature_id": signature_id,
+        "jobs": jobs,
+    }
+    # Write one signature per line for robustness
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def build_or_load_signature_jobs(signatures, jsonl_path: str):
+    """
+    Ensure we have job data for all signatures, using a JSONL cache.
+
+    - Load any existing signatures from jsonl_path.
+    - For signatures not in the cache, fetch from Treeherder and append
+      one JSON line per newly fetched signature.
+    - Return a dict[int, list[dict]]: signature_id -> jobs.
+    """
+    cache = load_signature_jobs_cache(jsonl_path)
+
+    signatures = set(signatures)
+    missing = signatures - set(cache.keys())
+    total = len(signatures)
+
+    if missing:
+        print(
+            f"{len(missing)} signatures missing from cache; "
+            "fetching and appending to JSONL."
+        )
+    else:
+        print("All signatures already present in cache; no API calls needed.")
+
+    # Iterate in a stable order for nicer logs
+    for idx, sig_id in enumerate(sorted(signatures), start=1):
+        if sig_id in cache:
+            print(f"[{idx}/{total}] Using cached jobs for signature {sig_id}.")
+            continue
+
+        print(f"[{idx}/{total}] Fetching jobs for signature {sig_id}...")
+        jobs = fetch_jobs_for_signature(sig_id)
+
+        # Store in cache dict and persist as a single JSONL line.
+        cache[sig_id] = jobs
+        append_signature_jobs(jsonl_path, sig_id, jobs)
+
+    return cache
+
+
+# -------------------------------------------------------------------
+# Aggregation using cached per-signature job data
+# -------------------------------------------------------------------
+def aggregate_revision_counts(signature_jobs, allowed_revisions):
     """
     Accumulate revision -> total number of jobs across all signatures.
+
+    Inputs:
+      - signature_jobs: dict[int, list[dict]] mapping signature_id -> jobs list.
+        (Jobs are taken from the per-signature cache JSONL, not from live API.)
+      - allowed_revisions: dict[revision_hash -> commit_datetime_utc] used to
+        filter jobs to only those revisions in our commit window.
 
     Rules:
       - Only count jobs where submit_time is within 5 minutes AFTER push_timestamp.
@@ -178,19 +293,15 @@ def aggregate_revision_counts(signatures, allowed_revisions):
           * whose commit timestamps fall within the configured revision
             date window [REVISION_START_DATE, REVISION_END_DATE].
     """
-    # For counting jobs that pass the 5-minute filter
     revision_jobs = defaultdict(int)
-    # For tracking which signatures ran for each revision
     revision_signatures = defaultdict(set)
 
     dt_format = "%Y-%m-%dT%H:%M:%S"
     max_diff = timedelta(minutes=10)
 
-    total = len(signatures)
-    for idx, sig_id in enumerate(signatures, start=1):
-        print(f"[{idx}/{total}] Fetching jobs for signature {sig_id}...")
-        jobs = fetch_jobs_for_signature(sig_id)
-
+    total = len(signature_jobs)
+    for idx, (sig_id, jobs) in enumerate(signature_jobs.items(), start=1):
+        print(f"[{idx}/{total}] Aggregating jobs for signature {sig_id}...")
         for job in jobs:
             rev = job.get("revision")
             if not rev or rev not in allowed_revisions:
@@ -223,7 +334,6 @@ def aggregate_revision_counts(signatures, allowed_revisions):
             if diff < timedelta(0) or diff > max_diff:
                 continue
 
-            # Count the job and record its signature for this revision
             revision_jobs[rev] += 1
             revision_signatures[rev].add(sig_id)
 
@@ -233,6 +343,7 @@ def aggregate_revision_counts(signatures, allowed_revisions):
         revision_signatures.setdefault(rev, set())
 
     print(f"Collected job counts for {len(revision_jobs)} revisions.")
+    # convert sets to sorted lists for JSON-serializability
     return dict(revision_jobs), {rev: sorted(sigs) for rev, sigs in revision_signatures.items()}
 
 
@@ -424,19 +535,24 @@ def main(debug: bool = False):
         )
         signatures = sampled
 
-    # 2) Load revisions from all_commits.jsonl within timeframe and not recent
+    # 2) Load revisions from all_commits.jsonl within timeframe
     #    This returns {revision_hash -> submission_datetime_utc}
     revision_timestamps = load_revisions_from_all_commits(ALL_COMMITS_JSONL)
 
-    # 3) Fetch all jobs and aggregate revision counts (with filters)
+    # 3) Build or extend the per-signature jobs JSONL cache, then use it
+    #    for all subsequent computation instead of hitting the API again.
+    signature_jobs = build_or_load_signature_jobs(signatures, SIGNATURE_JOBS_JSONL)
+
+    # 4) Aggregate revision counts using cached signature jobs
     revision_counts, revision_signatures = aggregate_revision_counts(
-        signatures, revision_timestamps
+        signature_jobs,
+        revision_timestamps,
     )
 
-    # 4) Save summary CSV (sorted by submission time, with timestamp column only)
+    # 5) Save summary CSV (sorted by submission time, with timestamp column only)
     write_revision_counts_csv(revision_counts, revision_timestamps, REVISION_COUNTS_CSV)
 
-    # 5) Save detailed JSONL with signature_ids included
+    # 6) Save detailed JSONL with signature_ids included
     write_revision_details_jsonl(
         revision_counts,
         revision_signatures,
@@ -444,7 +560,7 @@ def main(debug: bool = False):
         REVISION_DETAILS_JSONL,
     )
 
-    # 6) Reload counts from CSV and compute stats + plot
+    # 7) Reload counts from CSV and compute stats + plot
     counts = load_counts_from_csv(REVISION_COUNTS_CSV)
     write_stats_json(counts, STATS_JSON)
     plot_distribution(counts, DIST_PLOT_PNG)
@@ -454,6 +570,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
             "Compute how many performance jobs run per revision on autoland. "
+            "Uses a per-signature JSONL cache so interrupted runs can resume. "
             "In debug mode, only fetch results for 20 randomly selected "
             "signatures from job_durations.csv."
         )
