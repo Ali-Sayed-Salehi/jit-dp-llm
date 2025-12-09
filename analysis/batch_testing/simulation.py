@@ -365,6 +365,121 @@ def load_predictions(path, pred_threshold):
     return preds
 
 
+def load_predictions_raw(path):
+    """
+    Load model predictions and compute per-commit p_pos without applying any
+    prediction thresholding.
+
+    Returns:
+      dict[commit_id] -> {"true_label": int, "p_pos": float}
+    """
+    logger.debug("Loading raw predictions from %s", path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Prediction file does not exist: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    preds = {}
+    for s in data.get("samples", []):
+        cid = s["commit_id"]
+        true_label = int(s["true_label"])
+        original_pred = int(s["prediction"])
+        original_conf = float(s["confidence"])
+
+        if original_pred == 1:
+            p_pos = original_conf
+        else:
+            p_pos = 1.0 - original_conf
+
+        preds[cid] = {"true_label": true_label, "p_pos": p_pos}
+    return preds
+
+
+def apply_pred_threshold_to_raw(preds_raw, pred_threshold):
+    """
+    Convert a raw prediction map (commit_id -> {true_label, p_pos}) into the
+    thresholded shape expected by existing code (adds pred_label).
+    """
+    out = {}
+    thr = float(pred_threshold)
+    for cid, info in preds_raw.items():
+        p_pos = float(info["p_pos"])
+        out[cid] = {
+            "true_label": int(info["true_label"]),
+            "pred_label": 1 if p_pos >= thr else 0,
+            "p_pos": p_pos,
+        }
+    return out
+
+
+def build_commits_from_all_with_raw_preds(
+    all_commits_path, preds_raw, lower_cutoff, upper_cutoff=None, pred_threshold=PRED_THRESHOLD
+):
+    """
+    Like read_commits_from_all, but uses `preds_raw` and applies `pred_threshold`
+    without requiring a per-trial re-read of the prediction JSON.
+
+    Returns:
+      (commits_sorted, predicted_indices)
+    where predicted_indices are indices in commits_sorted for commits that
+    appear in preds_raw (i.e. have a non-zero risk).
+    """
+    logger.debug(
+        "Building commits from %s with lower_cutoff=%s upper_cutoff=%s (preds_raw size=%d)",
+        all_commits_path,
+        lower_cutoff,
+        upper_cutoff,
+        len(preds_raw),
+    )
+    thr = float(pred_threshold)
+    commits = []
+    with open(all_commits_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            node = obj.get("node")
+            date_field = obj.get("date")
+            if not node or date_field is None:
+                continue
+
+            ts = parse_hg_date(date_field)
+            if ts <= lower_cutoff:
+                continue
+            if upper_cutoff is not None and ts > upper_cutoff:
+                continue
+
+            info = preds_raw.get(node)
+            if info is not None:
+                true_label = bool(int(info["true_label"]))
+                p_pos = float(info["p_pos"])
+                pred_label = 1 if p_pos >= thr else 0
+            else:
+                true_label = False
+                p_pos = 0.0
+                pred_label = 0
+
+            commits.append(
+                {
+                    "commit_id": node,
+                    "true_label": true_label,
+                    "prediction": pred_label,
+                    "risk": p_pos,
+                    "ts": ts,
+                }
+            )
+
+    commits.sort(key=lambda x: x["ts"])
+    predicted_indices = [i for i, c in enumerate(commits) if c.get("risk", 0.0) > 0.0]
+    logger.debug(
+        "Finished building commit list: %d commits within window (%d predicted)",
+        len(commits),
+        len(predicted_indices),
+    )
+    return commits, predicted_indices
+
+
 def parse_hg_date(date_field):
     """
     Parse the `date` field from the mozilla perf `all_commits.jsonl` dataset.
@@ -689,6 +804,11 @@ def run_evaluation_mopt(
     selected_bisection=None,
     run_exhaustive_testing_et=True,
     dry_run=False,
+    preds_raw=None,
+    base_commits_for_context=None,
+    predicted_indices=None,
+    lower_cutoff=None,
+    upper_cutoff=None,
 ):
     """
     Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
@@ -729,17 +849,39 @@ def run_evaluation_mopt(
         and (selected_bisection_set is None or "PAR" in selected_bisection_set)
     )
 
-    # Use a fixed default threshold just to determine the time window
-    tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
-    dynamic_oldest, dynamic_newest = get_cutoff_from_input(
-        ALL_COMMITS_PATH, tmp_pred_map
-    )
-    lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
-    upper_cutoff = dynamic_newest
+    def set_thresholded_predictions_in_place(commits, indices, thr):
+        thr_f = float(thr)
+        for idx in indices:
+            c = commits[idx]
+            c["prediction"] = 1 if float(c["risk"]) >= thr_f else 0
 
-    base_commits_for_context = read_commits_from_all(
-        ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
-    )
+    # Allow main() to pass precomputed/cached inputs to avoid re-reading
+    # INPUT_JSON_EVAL and scanning all_commits.jsonl again.
+    if preds_raw is None:
+        preds_raw = load_predictions_raw(INPUT_JSON_EVAL)
+    if (
+        base_commits_for_context is None
+        or predicted_indices is None
+        or lower_cutoff is None
+    ):
+        dynamic_oldest, dynamic_newest = get_cutoff_from_input(
+            ALL_COMMITS_PATH, preds_raw
+        )
+        lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
+        upper_cutoff = dynamic_newest
+        base_commits_for_context, predicted_indices = build_commits_from_all_with_raw_preds(
+            ALL_COMMITS_PATH,
+            preds_raw,
+            lower_cutoff,
+            upper_cutoff,
+            pred_threshold=PRED_THRESHOLD,
+        )
+    else:
+        # Ensure the commit list is consistent with the default threshold when
+        # provided externally.
+        set_thresholded_predictions_in_place(
+            base_commits_for_context, predicted_indices, PRED_THRESHOLD
+        )
     if run_exhaustive_testing_et and base_commits_for_context:
         et_results = run_exhaustive_testing(base_commits_for_context)
     else:
@@ -894,11 +1036,7 @@ def run_evaluation_mopt(
                     return (float("inf"), float("inf"))
 
 
-                pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
-                commits = read_commits_from_all(
-                    ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
-                )
-                if not commits:
+                if not base_commits_for_context:
                     logger.warning(
                         "No commits returned for combo %s at trial %d (pred_thr=%.4f)",
                         combo_key,
@@ -907,7 +1045,13 @@ def run_evaluation_mopt(
                     )
                     return (float("inf"), float("inf"))
 
-                res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
+                # Update thresholded prediction labels in-place for the subset
+                # of commits present in the prediction file (risk > 0.0).
+                set_thresholded_predictions_in_place(
+                    base_commits_for_context, predicted_indices, pred_thr
+                )
+
+                res = b_fn(base_commits_for_context, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
                 return (
                     res.get("total_tests_run", float("inf")),
@@ -962,13 +1106,14 @@ def run_evaluation_mopt(
                     )
                     continue
 
-                pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
-                commits = read_commits_from_all(
-                    ALL_COMMITS_PATH, pred_map, lower_cutoff, upper_cutoff
-                )
-                if not commits:
+                if not base_commits_for_context:
                     continue
-                res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
+
+                set_thresholded_predictions_in_place(
+                    base_commits_for_context, predicted_indices, pred_thr
+                )
+
+                res = b_fn(base_commits_for_context, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
 
                 if normalized_batch_name == "TWB":
@@ -1067,6 +1212,10 @@ def run_evaluation_mopt(
         and not dry_run
         and (selected_batching is None or "TWSB" in selected_batching)
     ):
+        # Ensure the fixed TWSB evaluation uses the documented fixed threshold.
+        set_thresholded_predictions_in_place(
+            base_commits_for_context, predicted_indices, PRED_THRESHOLD
+        )
         for bis_name, bis_fn in BISECTION_STRATEGIES:
             if selected_bisection is not None and bis_name not in selected_bisection:
                 continue
@@ -1177,6 +1326,11 @@ def run_final_test_unified(
     selected_batching=None,
     selected_bisection=None,
     run_exhaustive_testing_et=True,
+    preds_raw_final=None,
+    base_commits_final=None,
+    predicted_indices_final=None,
+    final_lower=None,
+    final_upper=None,
 ):
     """
     Replay selected configurations on the FINAL prediction set.
@@ -1196,20 +1350,39 @@ def run_final_test_unified(
         INPUT_JSON_FINAL,
         OUTPUT_PATH_FINAL,
     )
-    # Build FINAL window from FINAL predictions (use fixed PRED_THRESHOLD for window discovery)
-    tmp_pred_map_final = load_predictions(
-        INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD
-    )
-    final_oldest, final_newest = get_cutoff_from_input(
-        ALL_COMMITS_PATH, tmp_pred_map_final
-    )
-    final_lower = final_oldest or DEFAULT_CUTOFF
-    final_upper = final_newest
+    def set_thresholded_predictions_in_place(commits, indices, thr):
+        thr_f = float(thr)
+        for idx in indices:
+            c = commits[idx]
+            c["prediction"] = 1 if float(c["risk"]) >= thr_f else 0
 
-    # ET + Baseline on FINAL window
-    base_commits_final = read_commits_from_all(
-        ALL_COMMITS_PATH, tmp_pred_map_final, final_lower, final_upper
-    )
+    # Allow main() to pass precomputed/cached inputs to avoid re-reading
+    # INPUT_JSON_FINAL and scanning all_commits.jsonl again.
+    if preds_raw_final is None:
+        preds_raw_final = load_predictions_raw(INPUT_JSON_FINAL)
+    if (
+        base_commits_final is None
+        or predicted_indices_final is None
+        or final_lower is None
+    ):
+        final_oldest, final_newest = get_cutoff_from_input(
+            ALL_COMMITS_PATH, preds_raw_final
+        )
+        final_lower = final_oldest or DEFAULT_CUTOFF
+        final_upper = final_newest
+
+        # ET + Baseline on FINAL window
+        base_commits_final, predicted_indices_final = build_commits_from_all_with_raw_preds(
+            ALL_COMMITS_PATH,
+            preds_raw_final,
+            final_lower,
+            final_upper,
+            pred_threshold=PRED_THRESHOLD,
+        )
+    else:
+        set_thresholded_predictions_in_place(
+            base_commits_final, predicted_indices_final, PRED_THRESHOLD
+        )
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
@@ -1323,15 +1496,13 @@ def run_final_test_unified(
             except Exception:
                 continue
 
-        # Build FINAL commits using FINAL predictions and the chosen threshold
-        pred_map_final = load_predictions(INPUT_JSON_FINAL, pred_threshold=pred_thr)
-        commits_final = read_commits_from_all(
-            ALL_COMMITS_PATH, pred_map_final, final_lower, final_upper
+        # Update thresholded prediction labels in-place for the subset of commits
+        # present in the prediction file (risk > 0.0), then run the simulation.
+        set_thresholded_predictions_in_place(
+            base_commits_final, predicted_indices_final, pred_thr
         )
-        if not commits_final:
-            continue
 
-        res_final = b_fn(commits_final, bis_fn, param, NUM_TEST_WORKERS)
+        res_final = b_fn(base_commits_final, bis_fn, param, NUM_TEST_WORKERS)
         res_final = convert_result_minutes_to_hours(res_final)
 
         violates = (
@@ -1522,26 +1693,34 @@ def main():
     )
 
     # EVAL window
-    eval_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
-    eval_oldest, eval_newest = get_cutoff_from_input(ALL_COMMITS_PATH, eval_pred_map)
+    eval_preds_raw = load_predictions_raw(INPUT_JSON_EVAL)
+    eval_oldest, eval_newest = get_cutoff_from_input(ALL_COMMITS_PATH, eval_preds_raw)
     eval_lower = eval_oldest or DEFAULT_CUTOFF
     eval_upper = eval_newest
-    eval_commits = read_commits_from_all(
-        ALL_COMMITS_PATH, eval_pred_map, eval_lower, eval_upper
+    eval_commits, eval_predicted_indices = build_commits_from_all_with_raw_preds(
+        ALL_COMMITS_PATH,
+        eval_preds_raw,
+        eval_lower,
+        eval_upper,
+        pred_threshold=PRED_THRESHOLD,
     )
     failing_revs_eval = {
         c["commit_id"] for c in eval_commits if c.get("true_label")
     }
 
     # FINAL window
-    final_pred_map = load_predictions(INPUT_JSON_FINAL, pred_threshold=PRED_THRESHOLD)
+    final_preds_raw = load_predictions_raw(INPUT_JSON_FINAL)
     final_oldest, final_newest = get_cutoff_from_input(
-        ALL_COMMITS_PATH, final_pred_map
+        ALL_COMMITS_PATH, final_preds_raw
     )
     final_lower = final_oldest or DEFAULT_CUTOFF
     final_upper = final_newest
-    final_commits = read_commits_from_all(
-        ALL_COMMITS_PATH, final_pred_map, final_lower, final_upper
+    final_commits, final_predicted_indices = build_commits_from_all_with_raw_preds(
+        ALL_COMMITS_PATH,
+        final_preds_raw,
+        final_lower,
+        final_upper,
+        pred_threshold=PRED_THRESHOLD,
     )
     failing_revs_final = {
         c["commit_id"] for c in final_commits if c.get("true_label")
@@ -1594,6 +1773,11 @@ def main():
             selected_batching=selected_batching,
             selected_bisection=selected_bisection,
             run_exhaustive_testing_et=run_et,
+            preds_raw_final=final_preds_raw,
+            base_commits_final=final_commits,
+            predicted_indices_final=final_predicted_indices,
+            final_lower=final_lower,
+            final_upper=final_upper,
         )
         return
 
@@ -1605,6 +1789,11 @@ def main():
         selected_bisection=selected_bisection,
         run_exhaustive_testing_et=run_et,
         dry_run=DRY_RUN,
+        preds_raw=eval_preds_raw,
+        base_commits_for_context=eval_commits,
+        predicted_indices=eval_predicted_indices,
+        lower_cutoff=eval_lower,
+        upper_cutoff=eval_upper,
     )
 
     if eval_payload is None:
@@ -1623,6 +1812,11 @@ def main():
         selected_batching=selected_batching,
         selected_bisection=selected_bisection,
         run_exhaustive_testing_et=run_et,
+        preds_raw_final=final_preds_raw,
+        base_commits_final=final_commits,
+        predicted_indices_final=final_predicted_indices,
+        final_lower=final_lower,
+        final_upper=final_upper,
     )
 
 
