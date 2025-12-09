@@ -772,24 +772,37 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 if bis_name == "TKRB":
                     bisection_mod.TKRB_TOP_K = trial.suggest_int("TKRB_TOP_K", 1, 10)
 
-                # Strategy-specific continuous/int params
-                if b_name == "TWB":
+                def normalize_batch_name(name: str) -> str:
+                    return name[:-2] if name.endswith("-s") else name
+
+                # Strategy-specific continuous/int params.
+                #
+                # Note: "-s" batching variants share the same parameter space
+                # as their non-"-s" counterparts; they differ only in how the
+                # initial batch test suite is constructed.
+                normalized_batch_name = normalize_batch_name(b_name)
+                if normalized_batch_name == "TWB":
                     param = trial.suggest_float("BATCH_HOURS", 0.25, 24.0)
-                elif b_name == "FSB":
+                elif normalized_batch_name == "FSB":
                     param = trial.suggest_int("FSB_SIZE", 4, 200)
-                elif b_name == "RASB":
+                elif normalized_batch_name == "RASB":
                     param = trial.suggest_float("RASB_THRESHOLD", 0.10, 0.95)
-                elif b_name == "RAPB":
+                elif normalized_batch_name == "RAPB":
                     T = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
                     a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
                     param = (T, a)
-                elif b_name == "RRBB":
+                elif normalized_batch_name == "RRBB":
                     param = trial.suggest_float("RRBB_BUDGET", 0.25, 6.0)
-                elif b_name == "RATB":
+                elif normalized_batch_name == "RATB":
                     thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
                     param = (thr, tw)
                 else:
+                    logger.warning(
+                        "Unknown batching strategy name %s (normalized=%s); returning inf",
+                        b_name,
+                        normalized_batch_name,
+                    )
                     return (float("inf"), float("inf"))
 
 
@@ -830,26 +843,35 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 if bis_name == "TKRB":
                     bisection_mod.TKRB_TOP_K = int(params.get("TKRB_TOP_K", 1))
 
-                # unpack for re-eval
-                if b_name == "TWB":
+                # unpack for re-eval (same mapping as objective; "-s" variants use
+                # the same underlying parameter(s)).
+                normalized_batch_name = (
+                    b_name[:-2] if b_name.endswith("-s") else b_name
+                )
+                if normalized_batch_name == "TWB":
                     param = params["BATCH_HOURS"]
-                elif b_name == "FSB":
+                elif normalized_batch_name == "FSB":
                     param = int(params["FSB_SIZE"])
-                elif b_name == "RASB":
+                elif normalized_batch_name == "RASB":
                     param = params["RASB_THRESHOLD"]
-                elif b_name == "RAPB":
+                elif normalized_batch_name == "RAPB":
                     param = (
                         params["RAPB_THRESHOLD"],
                         params["RAPB_AGING_PER_HOUR"],
                     )
-                elif b_name == "RRBB":
+                elif normalized_batch_name == "RRBB":
                     param = params["RRBB_BUDGET"]
-                elif b_name == "RATB":
+                elif normalized_batch_name == "RATB":
                     param = (
                         params["RATB_THRESHOLD"],
                         params["RATB_TIME_WINDOW_HOURS"],
                     )
                 else:
+                    logger.warning(
+                        "Unknown batching strategy name %s (normalized=%s); skipping pareto entry",
+                        b_name,
+                        normalized_batch_name,
+                    )
                     continue
 
                 pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=pred_thr)
@@ -861,20 +883,20 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 res = b_fn(commits, bis_fn, param, NUM_TEST_WORKERS)
                 res = convert_result_minutes_to_hours(res)
 
-                if b_name == "TWB":
+                if normalized_batch_name == "TWB":
                     best_param_dict = {"BATCH_HOURS": param}
-                elif b_name == "FSB":
+                elif normalized_batch_name == "FSB":
                     best_param_dict = {"FSB_SIZE": param}
-                elif b_name == "RASB":
+                elif normalized_batch_name == "RASB":
                     best_param_dict = {"RASB_THRESHOLD": param}
-                elif b_name == "RAPB":
+                elif normalized_batch_name == "RAPB":
                     best_param_dict = {
                         "RAPB_THRESHOLD": param[0],
                         "RAPB_AGING_PER_HOUR": param[1],
                     }
-                elif b_name == "RRBB":
+                elif normalized_batch_name == "RRBB":
                     best_param_dict = {"RRBB_BUDGET": param}
-                elif b_name == "RATB":
+                elif normalized_batch_name == "RATB":
                     best_param_dict = {
                         "RATB_THRESHOLD": param[0],
                         "RATB_TIME_WINDOW_HOURS": param[1],
@@ -1152,21 +1174,22 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
         # Unpack params for this strategy
         best_params = val.get("best_params")
-        if b_name == "RAPB":
+        normalized_batch_name = b_name[:-2] if b_name.endswith("-s") else b_name
+        if normalized_batch_name == "RAPB":
             if not isinstance(best_params, dict):
                 continue
             param = (
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
-        elif b_name == "RATB":
+        elif normalized_batch_name == "RATB":
             if not isinstance(best_params, dict):
                 continue
             param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
             )
-        elif b_name == "TWSB":
+        elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB
             param = None
         else:
