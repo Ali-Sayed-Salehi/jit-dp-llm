@@ -251,9 +251,6 @@ def _load_perf_jobs_per_revision():
     global REVISION_TESTED_SIG_IDS
 
     if REVISION_TESTED_SIG_IDS:
-        logger.debug(
-            "Revision->tested-signatures mapping already loaded; skipping reload."
-        )
         return
 
     mapping = {}
@@ -561,13 +558,13 @@ class TestExecutor:
         heapq.heappush(self._worker_heap, (finish_time, idx))
         # Accumulate CPU time regardless of parallelism
         self.total_cpu_minutes += duration_float
-        logger.debug(
-            "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
-            idx,
-            actual_start,
-            duration_minutes,
-            finish_time,
-        )
+        # logger.debug(
+        #     "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
+        #     idx,
+        #     actual_start,
+        #     duration_minutes,
+        #     finish_time,
+        # )
         return finish_time
 
 
