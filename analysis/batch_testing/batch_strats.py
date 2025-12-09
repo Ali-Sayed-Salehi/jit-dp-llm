@@ -516,7 +516,7 @@ def simulate_fsb_s_with_bisect(commits, bisect_fn, batch_size, num_workers):
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
 
-def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
+def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
     """
     Risk-Adaptive Stream Batching (RASB).
 
@@ -533,7 +533,7 @@ def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
     is invoked on the flushed commits.
     """
     logger.info(
-        "simulate_rasb_t_with_bisect: %d commits, threshold=%.4f, bisect_fn=%s",
+        "simulate_rasb_with_bisect: %d commits, threshold=%.4f, bisect_fn=%s",
         len(commits),
         threshold,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
@@ -578,12 +578,12 @@ def simulate_rasb_t_with_bisect(commits, bisect_fn, threshold, num_workers):
         )
 
     logger.info(
-        "simulate_rasb_t_with_bisect: finished; total_tests_run=%d", total_tests_run
+        "simulate_rasb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
     return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
-def simulate_rasb_t_s_with_bisect(commits, bisect_fn, threshold, num_workers):
+def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
     """
     RASB with subset suite detection (RASB-s).
 
@@ -613,7 +613,7 @@ def simulate_rasb_t_s_with_bisect(commits, bisect_fn, threshold, num_workers):
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
 
-def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
+def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
     """
     Risk-Aware Priority Batching (RAPB).
 
@@ -630,7 +630,7 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
     threshold_T, aging_rate = params
 
     logger.info(
-        "simulate_rapb_t_a_with_bisect: %d commits, threshold_T=%.4f, aging_rate=%.4f, bisect_fn=%s",
+        "simulate_rapb_with_bisect: %d commits, threshold_T=%.4f, aging_rate=%.4f, bisect_fn=%s",
         len(commits),
         threshold_T,
         aging_rate,
@@ -687,13 +687,13 @@ def simulate_rapb_t_a_with_bisect(commits, bisect_fn, params, num_workers):
         )
 
     logger.info(
-        "simulate_rapb_t_a_with_bisect: finished; total_tests_run=%d",
+        "simulate_rapb_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
     return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
-def simulate_rapb_t_a_s_with_bisect(commits, bisect_fn, params, num_workers):
+def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
     """
     RAPB with subset suite detection (RAPB-s).
 
