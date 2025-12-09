@@ -77,4 +77,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulatio
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_wait_times.py --dry-run
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_ttc_stats.py
+
+
 echo "Script finished"

@@ -20,6 +20,7 @@ import datetime as dt
 import json
 import os
 import statistics as stats
+import sys
 from typing import Any, Dict, List, Optional
 
 
@@ -103,12 +104,17 @@ def _basic_stats(values: List[float]) -> Dict[str, Any]:
 
 
 def compute_stats(csv_path: str) -> Dict[str, Any]:
+    try:
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2**31 - 1)
+
     total_rows = 0
     missing_or_invalid_rows = 0
     negative_deltas = 0
     deltas: List[float] = []
 
-    with open(csv_path, "r", newline="") as f:
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             total_rows += 1
