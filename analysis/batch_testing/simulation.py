@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 
-# simulation.py
+"""
+Batch-testing simulation driver.
+
+This script evaluates combinations of:
+  - Batching strategies (when to trigger a batch test), and
+  - Bisection strategies (how to locate culprit commits within a failing batch),
+under a shared time/cost model of limited test capacity.
+
+Key references:
+  - `analysis/batch_testing/README.md` for a detailed explanation of each
+    strategy and the shared execution model.
+  - `analysis/batch_testing/batch_strats.py` for batching implementations.
+  - `analysis/batch_testing/bisection_strats.py` for bisection implementations,
+    metadata loading, and the central test executor.
+
+The Optuna mode (`run_evaluation_mopt`) tunes batching parameters and the
+prediction threshold. For TKRB it also tunes `bisection_strats.TKRB_TOP_K`.
+"""
 
 import os
 import json
@@ -10,13 +27,21 @@ import argparse
 import csv
 import logging
 
+import bisection_strats as bisection_mod
+
 from batch_strats import (
     simulate_twb_with_bisect,
+    simulate_twb_s_with_bisect,
     simulate_fsb_with_bisect,
+    simulate_fsb_s_with_bisect,
     simulate_rasb_t_with_bisect,
+    simulate_rasb_t_s_with_bisect,
     simulate_rapb_t_a_with_bisect,
+    simulate_rapb_t_a_s_with_bisect,
     simulate_rrbb_with_bisect,
+    simulate_rrbb_s_with_bisect,
     simulate_ratb_with_bisect,
+    simulate_ratb_s_with_bisect,
     simulate_twsb_with_bisect,
 )
 
@@ -25,6 +50,8 @@ from bisection_strats import (
     exhaustive_parallel,
     risk_weighted_adaptive_bisect,
     topk_risk_first_bisect,
+    sequential_walk_backward_bisect,
+    sequential_walk_forward_bisect,
     TestExecutor,
     run_test_suite,
     configure_bisection_defaults,
@@ -68,11 +95,17 @@ DRY_RUN = False
 
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
+    ("TWB-s",  simulate_twb_s_with_bisect,      BATCH_HOURS),
     ("FSB",  simulate_fsb_with_bisect,      FSB_SIZE),
+    ("FSB-s",  simulate_fsb_s_with_bisect,      FSB_SIZE),
     ("RASB", simulate_rasb_t_with_bisect,   RASB_THRESHOLD),
+    ("RASB-s", simulate_rasb_t_s_with_bisect,   RASB_THRESHOLD),
     ("RAPB", simulate_rapb_t_a_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
+    ("RAPB-s", simulate_rapb_t_a_s_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
     ("RRBB", simulate_rrbb_with_bisect,     RRBB_BUDGET),
+    ("RRBB-s", simulate_rrbb_s_with_bisect,     RRBB_BUDGET),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
+    ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
 ]
 
 BISECTION_STRATEGIES = [
@@ -80,6 +113,8 @@ BISECTION_STRATEGIES = [
     ("PAR",  exhaustive_parallel),
     ("RWAB", risk_weighted_adaptive_bisect),
     ("TKRB", topk_risk_first_bisect),
+    ("SWB",  sequential_walk_backward_bisect),
+    ("SWF",  sequential_walk_forward_bisect),
 ]
 
 # Seed will be finalized in main(), but we also provide a
@@ -124,6 +159,13 @@ BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(JOB_DURATIONS_CSV
 
 
 def get_args():
+    """
+    Parse CLI arguments for evaluation/final runs.
+
+    This script is designed to run "evaluation" (Optuna tuning) on one set of
+    predictions and then optionally replay the chosen configurations on a
+    "final test" prediction set.
+    """
     parser = argparse.ArgumentParser(description="Batch-testing simulation (Optuna-only mopt).")
 
     parser.add_argument(
@@ -220,6 +262,16 @@ def get_args():
 
 
 def load_predictions(path, pred_threshold):
+    """
+    Load model predictions and convert them into per-commit risk values.
+
+    Input JSON is expected to contain samples with:
+      - `commit_id`, `true_label`, `prediction`, `confidence`.
+
+    The simulator uses:
+      - `risk`: probability of being positive (p_pos)
+      - `pred_label`: derived by thresholding p_pos at `pred_threshold`
+    """
     logger.debug("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Prediction file does not exist: {path}")
@@ -249,6 +301,13 @@ def load_predictions(path, pred_threshold):
 
 
 def parse_hg_date(date_field):
+    """
+    Parse the `date` field from the mozilla perf `all_commits.jsonl` dataset.
+
+    Supports:
+      - `[unix_ts, offset_seconds]` pairs (Mercurial-style), and
+      - ISO-8601 datetime strings.
+    """
     if isinstance(date_field, list) and len(date_field) == 2:
         unix_ts, offset_sec = date_field
         dt_utc = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
@@ -303,6 +362,13 @@ def get_cutoff_from_input(all_commits_path, pred_map):
 
 
 def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
+    """
+    Build the simulation commit stream from `all_commits.jsonl`.
+
+    Returns a list of commit dicts sorted by timestamp. Commits within the
+    cutoff window but missing from `pred_map` are treated as non-regressors
+    with zero risk.
+    """
     logger.debug(
         "Reading commits from %s with lower_cutoff=%s upper_cutoff=%s (pred_map size=%d)",
         all_commits_path,
@@ -360,6 +426,12 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
 
 
 def run_exhaustive_testing(commits):
+    """
+    Exhaustive Testing baseline (ET).
+
+    Models running a (possibly capped) full suite for every commit in time
+    order. This provides a reference point for total cost and feedback times.
+    """
     logger.info("Starting exhaustive testing over %d commits", len(commits))
     if not commits:
         logger.info("No commits provided to run_exhaustive_testing; returning zeros.")
@@ -431,6 +503,12 @@ def run_exhaustive_testing(commits):
 
 
 def convert_result_minutes_to_hours(res):
+    """
+    Convert common result fields from minutes to hours, in-place.
+
+    This keeps JSON outputs easier to interpret when aggregating across long
+    time windows.
+    """
     if "mean_feedback_time_min" in res:
         res["mean_feedback_time_hr"] = round(res["mean_feedback_time_min"] / 60.0, 2)
         del res["mean_feedback_time_min"]
@@ -453,6 +531,11 @@ def convert_result_minutes_to_hours(res):
 
 
 def lookup_batching(name):
+    """
+    Map a batching strategy name to its `(fn, default_param)` pair.
+
+    Used by the "final replay" stage to re-run the selected configurations.
+    """
     # Special-case TWSB so it can appear in eval/final combos without being
     # part of the Optuna-tuned BATCHING_STRATEGIES grid.
     if name == "TWSB":
@@ -464,6 +547,9 @@ def lookup_batching(name):
 
 
 def lookup_bisection(name):
+    """
+    Map a bisection strategy name to its function.
+    """
     for n, fn in BISECTION_STRATEGIES:
         if n == name:
             return fn
@@ -532,6 +618,21 @@ def choose_best_overall_from_items(items):
 
 # ------------------- MOPT (Optuna, continuous search) -------------------
 def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
+    """
+    Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
+
+    For each (batching, bisection) pair in the configured grids, this function:
+      - Tunes a prediction threshold (`pred_threshold`) used to derive the
+        binary predicted label from model confidence.
+      - Tunes the batching strategy parameter(s) for that batching policy.
+      - For the `TKRB` bisection strategy, also tunes `TKRB_TOP_K` by mutating
+        `bisection_strats.TKRB_TOP_K` prior to each trial run.
+
+    Outputs a unified JSON payload containing:
+      - ET (exhaustive) baseline, TWSB+PAR baseline,
+      - one selected Pareto-optimal configuration per combo, and
+      - summary “best-by-metric” fields for quick comparison.
+    """
     try:
         import optuna
     except ImportError as e:
@@ -667,6 +768,10 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 # Shared continuous pred threshold
                 pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
 
+                # Bisection-specific tunables (only for TKRB).
+                if bis_name == "TKRB":
+                    bisection_mod.TKRB_TOP_K = trial.suggest_int("TKRB_TOP_K", 1, 10)
+
                 # Strategy-specific continuous/int params
                 if b_name == "TWB":
                     param = trial.suggest_float("BATCH_HOURS", 0.25, 24.0)
@@ -722,6 +827,9 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                 params = t.params
                 pred_thr = params.get("pred_threshold", PRED_THRESHOLD)
 
+                if bis_name == "TKRB":
+                    bisection_mod.TKRB_TOP_K = int(params.get("TKRB_TOP_K", 1))
+
                 # unpack for re-eval
                 if b_name == "TWB":
                     param = params["BATCH_HOURS"]
@@ -773,6 +881,8 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
                     }
                 else:
                     continue
+                if bis_name == "TKRB":
+                    best_param_dict["TKRB_TOP_K"] = int(bisection_mod.TKRB_TOP_K)
 
                 pareto.append(
                     {
@@ -945,6 +1055,19 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
 # ------------------- FINAL REPLAY (unified) -------------------
 def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
+    """
+    Replay selected configurations on the FINAL prediction set.
+
+    This takes the chosen configurations from the EVAL stage (`eval_payload`),
+    then re-runs the same (batching, bisection) combos on `INPUT_JSON_FINAL`.
+
+    For each combo it:
+      - Reconstructs the tuned parameters (including `pred_threshold` and any
+        tuned batching params; for TKRB, `TKRB_TOP_K`).
+      - Runs the simulation.
+      - Computes deltas vs the baseline from the EVAL payload.
+      - Writes a unified JSON result file to `OUTPUT_PATH_FINAL`.
+    """
     logger.info(
         "Starting FINAL replay with INPUT_JSON_FINAL=%s, OUTPUT_PATH_FINAL=%s",
         INPUT_JSON_FINAL,
@@ -1150,6 +1273,12 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
 
 def main():
+    """
+    CLI entrypoint.
+
+    Runs EVAL Optuna tuning by default, then optionally runs FINAL replay
+    using the selected EVAL configurations.
+    """
     args = get_args()
 
     log_level_name = getattr(args, "log_level", "INFO")

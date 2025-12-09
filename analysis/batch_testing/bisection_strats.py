@@ -1,3 +1,14 @@
+"""
+Bisection strategies and shared execution/time model for the batch-testing simulator.
+
+This module provides:
+  - Perf metadata loading utilities (signature IDs, durations, failing signatures).
+  - A central test-capacity simulator (`TestExecutor` + `run_test_suite`).
+  - Bisection strategies that operate on batches (TOB, PAR, RWAB, TKRB, SWB, SWF).
+
+See `analysis/batch_testing/README.md` for a detailed conceptual overview.
+"""
+
 from datetime import timedelta
 import os
 import csv
@@ -45,11 +56,20 @@ def configure_bisection_defaults(
     full_suite_signatures_per_run=None,
 ):
     """
-    Configure default test duration and the number of signatures used
-    for each 'full suite' batch test step.
+    Configure global defaults used by the simulator's time/cost model.
 
-    These knobs are typically set by the main simulation script so that
-    all strategies share the same configuration.
+    Parameters
+    ----------
+    default_test_duration_min:
+        Fallback duration (minutes) used when a signature ID has no recorded
+        duration in `job_durations.csv`.
+    full_suite_signatures_per_run:
+        Caps the number of signatures used for a "full suite" run:
+          - `-1` => use all available signatures
+          - `N>0` => randomly sample N signatures (models partial suite runs)
+
+    These knobs are typically set by `simulation.py` so all strategies share
+    the same configuration.
     """
     global _default_test_duration_min, _full_suite_signatures_per_run
 
@@ -87,6 +107,9 @@ def configure_full_suite_signatures_union(revisions):
     This is used when we want each initial batch test run to execute all
     tests that appear at least once within the cutoff window, instead of
     all signatures from job_durations.csv.
+
+    This function mutates the module-level `BATCH_SIGNATURE_DURATIONS`, which
+    is consumed by `get_batch_signature_durations()`.
     """
     global BATCH_SIGNATURE_DURATIONS
 
@@ -390,9 +413,13 @@ def validate_failing_signatures_coverage(failing_revisions=None):
 
 def get_batch_signature_durations():
     """
-    Durations (minutes) for a full perf batch run:
-    all signatures from job_durations.csv, optionally downsampled to
-    a fixed-size random subset controlled by _full_suite_signatures_per_run.
+    Durations (minutes) for a "full suite" perf run.
+
+    By default this is all signatures from `job_durations.csv`, but it can be
+    capped to a fixed-size random subset via `_full_suite_signatures_per_run`.
+
+    This suite is used for the *first* run of a batch when bisection strategies
+    are invoked with `is_batch_root=True`.
     """
     _load_perf_metadata()
 
@@ -1064,6 +1091,13 @@ def topk_risk_first_bisect(
       - First batch test uses the full suite.
       - All subsequent tests (probes and fallback bisection) use only the
         failing signatures for this batch.
+
+    Step 2 (Top-K probing):
+      - `TKRB_TOP_K` controls how many of the highest-risk commits are probed.
+      - For `TKRB_TOP_K == 1`, probing is sequential.
+      - For `TKRB_TOP_K > 1`, all top-K probes are submitted in parallel but
+        processed with a barrier (PAR-style): follow-up work happens only after
+        all probes finish.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
@@ -1188,28 +1222,96 @@ def topk_risk_first_bisect(
     risks.sort(key=lambda t: t[1], reverse=True)
     top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
 
-    for idx in top_indices:
-        if status[idx] != "unknown":
-            continue
+    def mark_culprit(idx, at_time):
+        c = batch_sorted[idx]
+        if status[idx] == "defect_found":
+            return
+        status[idx] = "defect_found"
+        fb_min = (at_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
 
-        curr_fails = run_interval(0, idx)
+    def interval_has_defect(lo, hi):
+        return any(
+            batch_sorted[i]["true_label"] and status[i] != "defect_found"
+            for i in range(lo, hi + 1)
+        )
 
-        prev_fails = False
-        if curr_fails and idx > 0:
-            prev_fails = run_interval(0, idx - 1)
+    def apply_clean_interval(lo, hi, finish_time):
+        for i in range(lo, hi + 1):
+            if status[i] != "unknown":
+                continue
+            status[i] = "clean"
+            cid = batch_sorted[i]["commit_id"]
+            if cid not in feedback_times:
+                fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
+                feedback_times[cid] = fb_min
 
-        if curr_fails and not prev_fails:
-            c = batch_sorted[idx]
-            if status[idx] != "defect_found":
-                status[idx] = "defect_found"
+    if int(TKRB_TOP_K) <= 1 or len(top_indices) <= 1:
+        for idx in top_indices:
+            if status[idx] != "unknown":
+                continue
 
-                fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-                feedback_times[c["commit_id"]] = fb_min
-                if c["true_label"]:
-                    culprit_times.append(fb_min)
+            curr_fails = run_interval(0, idx)
 
-        elif curr_fails and prev_fails and idx > 0:
-            tob_bisect_on_range(0, idx - 1)
+            prev_fails = False
+            if curr_fails and idx > 0:
+                prev_fails = run_interval(0, idx - 1)
+
+            if curr_fails and not prev_fails:
+                mark_culprit(idx, current_time)
+            elif curr_fails and prev_fails and idx > 0:
+                tob_bisect_on_range(0, idx - 1)
+    else:
+        # Parallel top-K probes with a barrier (PAR-style): submit all probe runs
+        # at the same requested start time, wait until all of them complete,
+        # then process the results.
+        probe_start = current_time
+        latest_finish = probe_start
+        probe_has_defect_by_idx = {}
+
+        for idx in top_indices:
+            if status[idx] != "unknown":
+                continue
+
+            lo, hi = 0, idx
+            key = (lo, hi)
+
+            if key in interval_cache:
+                probe_has_defect_by_idx[idx] = interval_cache[key]
+                continue
+
+            durations = batch_fail_durations
+            total_tests_run += len(durations)
+            finish_time = run_test_suite(executor, probe_start, durations)
+            latest_finish = max(latest_finish, finish_time)
+
+            has_defect = interval_has_defect(lo, hi)
+            interval_cache[key] = has_defect
+            probe_has_defect_by_idx[idx] = has_defect
+
+        # Barrier: do not react to individual probe results until all probes finish.
+        current_time = max(current_time, latest_finish)
+
+        # Process probe outcomes after the barrier.
+        for idx in top_indices:
+            if status[idx] != "unknown":
+                continue
+
+            curr_fails = bool(probe_has_defect_by_idx.get(idx, False))
+            if not curr_fails:
+                apply_clean_interval(0, idx, current_time)
+                continue
+
+            prev_fails = False
+            if idx > 0:
+                prev_fails = run_interval(0, idx - 1)
+
+            if curr_fails and not prev_fails:
+                mark_culprit(idx, current_time)
+            elif curr_fails and prev_fails and idx > 0:
+                tob_bisect_on_range(0, idx - 1)
 
     # ---- Step 3: Fall back to TOB-style search over remaining unknowns ----
     while True:
@@ -1257,6 +1359,205 @@ def topk_risk_first_bisect(
         culprits_batch,
         len(culprit_times),
         len(interval_cache),
+        total_tests_run,
+    )
+    return total_tests_run, culprit_times, feedback_times
+
+
+def sequential_walk_backward_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
+    """
+    Sequential Walk-Backward Bisection (SWB).
+
+    When a batch is known to contain at least one defect, SWB finds culprits by
+    walking backwards from the end of the currently-unknown region and testing
+    each prior boundary sequentially.
+
+    Concretely, for an unknown interval [lo, hi] that fails:
+      - Treat 'hi' as a known-buggy boundary (the interval [lo, hi] contains a regressor).
+      - Test [lo, hi-1], then [lo, hi-2], ... sequentially (waiting for each result).
+      - If [lo, k] is clean and [lo, k+1] is buggy, the culprit is k+1.
+
+    Cost/time model matches other strategies:
+      - First run in a batch (is_batch_root=True) uses the configured full suite.
+      - Subsequent runs use the failing-signature suite for this batch.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = batch
+    n = len(batch_sorted)
+    logger.debug("sequential_walk_backward_bisect: starting batch_size=%d", n)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the entire unknown region first.
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+            batch_fail_durations,
+        )
+        if not still_fails:
+            break
+
+        # Walk backwards from hi, testing [lo, k] for k=hi-1..lo.
+        if lo == hi:
+            culprit_idx = lo
+        else:
+            culprit_idx = lo
+            for k in range(hi - 1, lo - 1, -1):
+                fails_k, current_time, first_test, total_tests_run = _run_interval_and_update(
+                    batch_sorted,
+                    status,
+                    lo,
+                    k,
+                    current_time,
+                    first_test,
+                    total_tests_run,
+                    feedback_times,
+                    executor,
+                    batch_fail_durations,
+                )
+                if not fails_k:
+                    culprit_idx = k + 1
+                    break
+                if k == lo:
+                    culprit_idx = lo
+
+        c = batch_sorted[culprit_idx]
+        status[culprit_idx] = "defect_found"
+
+        fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    logger.debug(
+        "sequential_walk_backward_bisect: finished batch_size=%d total_tests_run=%d",
+        n,
+        total_tests_run,
+    )
+    return total_tests_run, culprit_times, feedback_times
+
+
+def sequential_walk_forward_bisect(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
+    """
+    Sequential Walk-Forward Bisection (SWF).
+
+    When a batch is known to contain at least one defect, SWF finds culprits by
+    walking forwards in time from the beginning of the currently-unknown
+    region, testing increasingly larger prefixes sequentially.
+
+    For an unknown interval [lo, hi] that fails:
+      - Test [lo, lo], then [lo, lo+1], ... sequentially (waiting for each result).
+      - The first index k for which [lo, k] fails is the culprit (since [lo, k-1]
+        would have been clean).
+
+    Cost/time model matches other strategies:
+      - First run in a batch (is_batch_root=True) uses the configured full suite.
+      - Subsequent runs use the failing-signature suite for this batch.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    batch_sorted = batch
+    n = len(batch_sorted)
+    logger.debug("sequential_walk_forward_bisect: starting batch_size=%d", n)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the entire unknown region first.
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+            batch_fail_durations,
+        )
+        if not still_fails:
+            break
+
+        # Walk forwards from lo, testing [lo, k] for k=lo..hi.
+        culprit_idx = hi
+        for k in range(lo, hi + 1):
+            fails_k, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted,
+                status,
+                lo,
+                k,
+                current_time,
+                first_test,
+                total_tests_run,
+                feedback_times,
+                executor,
+                batch_fail_durations,
+            )
+            if fails_k:
+                culprit_idx = k
+                break
+
+        c = batch_sorted[culprit_idx]
+        status[culprit_idx] = "defect_found"
+
+        fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    logger.debug(
+        "sequential_walk_forward_bisect: finished batch_size=%d total_tests_run=%d",
+        n,
         total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times

@@ -72,14 +72,14 @@ def _basic_stats(values: List[float]) -> Dict[str, Any]:
     if not values:
         return {
             "count": 0,
-            "min_seconds": None,
-            "max_seconds": None,
-            "mean_seconds": None,
-            "median_seconds": None,
-            "stdev_seconds": None,
-            "p90_seconds": None,
-            "p95_seconds": None,
-            "p99_seconds": None,
+            "min_hours": None,
+            "max_hours": None,
+            "mean_hours": None,
+            "median_hours": None,
+            "stdev_hours": None,
+            "p90_hours": None,
+            "p95_hours": None,
+            "p99_hours": None,
         }
 
     values_sorted = sorted(values)
@@ -89,17 +89,20 @@ def _basic_stats(values: List[float]) -> Dict[str, Any]:
 
     return {
         "count": len(values_sorted),
-        "min_seconds": float(values_sorted[0]),
-        "max_seconds": float(values_sorted[-1]),
-        "mean_seconds": mean_seconds,
-        "median_seconds": median_seconds,
-        "stdev_seconds": stdev_seconds,
-        "p90_seconds": _percentile(values_sorted, 0.90),
-        "p95_seconds": _percentile(values_sorted, 0.95),
-        "p99_seconds": _percentile(values_sorted, 0.99),
         "mean_hours": mean_seconds / 3600.0,
         "median_hours": median_seconds / 3600.0,
+        "min_hours": float(values_sorted[0]) / 3600.0,
         "max_hours": float(values_sorted[-1]) / 3600.0,
+        "stdev_hours": stdev_seconds / 3600.0,
+        "p90_hours": (
+            None if (p := _percentile(values_sorted, 0.90)) is None else p / 3600.0
+        ),
+        "p95_hours": (
+            None if (p := _percentile(values_sorted, 0.95)) is None else p / 3600.0
+        ),
+        "p99_hours": (
+            None if (p := _percentile(values_sorted, 0.99)) is None else p / 3600.0
+        ),
     }
 
 
@@ -167,9 +170,8 @@ def main() -> None:
 
     payload: Dict[str, Any] = {
         "input_csv": input_csv,
-        "generated_at_utc": dt.datetime.now(tz=dt.timezone.utc).isoformat(),
         "definition": {
-            "ttc_seconds": "created(UTC) - push_timestamp(UTC epoch seconds)"
+            "ttc_hours": "(created(UTC) - push_timestamp(UTC epoch seconds)) / 3600"
         },
         "stats": compute_stats(input_csv),
     }
