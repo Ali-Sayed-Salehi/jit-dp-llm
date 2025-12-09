@@ -248,9 +248,31 @@ def get_args():
         "--dry-run",
         action="store_true",
         help=(
-            "Lightweight mode: skip exhaustive testing and run only the "
-            "baseline plus two random (batching, bisection) combinations."
+            "Lightweight mode: run the baseline plus at most two random "
+            "(batching, bisection) combinations when no explicit strategy "
+            "filters are provided."
         ),
+    )
+    parser.add_argument(
+        "--batching",
+        default="all",
+        help=(
+            "Comma-separated batching strategy names to simulate (default: all). "
+            "Examples: 'TWB,RATB-s' or 'all' or 'none'."
+        ),
+    )
+    parser.add_argument(
+        "--bisection",
+        default="all",
+        help=(
+            "Comma-separated bisection strategy names to simulate (default: all). "
+            "Examples: 'TOB,PAR' or 'all' or 'none'."
+        ),
+    )
+    parser.add_argument(
+        "--skip-exhaustive-testing",
+        action="store_true",
+        help="If set, skip the Exhaustive Testing (ET) baseline (always run TWSB+PAR baseline).",
     )
     parser.add_argument(
         "--log-level",
@@ -259,6 +281,49 @@ def get_args():
         help="Logging level for the simulation.",
     )
     return parser.parse_args()
+
+
+def _parse_csv_strategy_list(raw: str):
+    if raw is None:
+        return []
+    raw = str(raw).strip()
+    if not raw:
+        return []
+    parts = []
+    for token in raw.split(","):
+        tok = token.strip()
+        if tok:
+            parts.append(tok)
+    return parts
+
+
+def _resolve_strategy_filter(raw: str, all_names, kind: str):
+    """
+    Turn a user-provided CSV strategy list into a set of selected strategy names.
+
+    raw:
+      - "all" (default) => all_names
+      - "none" => empty set
+      - otherwise => exact match against all_names
+    """
+    tokens = _parse_csv_strategy_list(raw)
+    if not tokens:
+        return set(all_names)
+
+    lowered = [t.lower() for t in tokens]
+    if len(lowered) == 1 and lowered[0] == "all":
+        return set(all_names)
+    if len(lowered) == 1 and lowered[0] == "none":
+        return set()
+
+    unknown = sorted(set(tokens) - set(all_names))
+    if unknown:
+        known = ", ".join(all_names)
+        bad = ", ".join(unknown)
+        raise ValueError(
+            f"Unknown {kind} strategy name(s): {bad}. Known {kind} strategies: {known}"
+        )
+    return set(tokens)
 
 
 def load_predictions(path, pred_threshold):
@@ -617,7 +682,14 @@ def choose_best_overall_from_items(items):
 
 
 # ------------------- MOPT (Optuna, continuous search) -------------------
-def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
+def run_evaluation_mopt(
+    INPUT_JSON_EVAL,
+    n_trials,
+    selected_batching=None,
+    selected_bisection=None,
+    run_exhaustive_testing_et=True,
+    dry_run=False,
+):
     """
     Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
 
@@ -646,6 +718,17 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         n_trials,
     )
 
+    selected_batching_set = (
+        set(selected_batching) if selected_batching is not None else None
+    )
+    selected_bisection_set = (
+        set(selected_bisection) if selected_bisection is not None else None
+    )
+    baseline_selected = (
+        (selected_batching_set is None or "TWSB" in selected_batching_set)
+        and (selected_bisection_set is None or "PAR" in selected_bisection_set)
+    )
+
     # Use a fixed default threshold just to determine the time window
     tmp_pred_map = load_predictions(INPUT_JSON_EVAL, pred_threshold=PRED_THRESHOLD)
     dynamic_oldest, dynamic_newest = get_cutoff_from_input(
@@ -657,19 +740,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     base_commits_for_context = read_commits_from_all(
         ALL_COMMITS_PATH, tmp_pred_map, lower_cutoff, upper_cutoff
     )
-    if DRY_RUN:
-        logger.info(
-            "Dry run mode: skipping exhaustive testing (ET) during evaluation."
-        )
-        et_results = {}
+    if run_exhaustive_testing_et and base_commits_for_context:
+        et_results = run_exhaustive_testing(base_commits_for_context)
     else:
-        et_results = (
-            run_exhaustive_testing(base_commits_for_context)
-            if base_commits_for_context
-            else {}
-        )
+        et_results = {}
     baseline = {}
-    if base_commits_for_context:
+    if base_commits_for_context and baseline_selected:
         logger.info(
             "Running baseline TWSB + PAR simulation for context on %d commits",
             len(base_commits_for_context),
@@ -715,9 +791,10 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "Baseline (TWSB + PAR)": baseline,
         "num_test_workers": NUM_TEST_WORKERS,
     }
+    if baseline_selected:
+        out_eval["Baseline (TWSB + PAR)"] = baseline
 
     # Per combo study with continuous/int ranges
     logger.info(
@@ -726,15 +803,22 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         len(BISECTION_STRATEGIES),
     )
 
+    if selected_batching is not None:
+        selected_batching = set(selected_batching)
+    if selected_bisection is not None:
+        selected_bisection = set(selected_bisection)
+
     # In dry-run mode, restrict ourselves to a tiny subset of combinations
-    # to keep turnaround fast. Always keep the baseline (TWSB + PAR) and
-    # then select two random (batching, bisection) pairs from the grid.
+    # to keep turnaround fast, but only when the user did not provide explicit
+    # batching/bisection filters.
     all_combo_names = [
         (b_name, bis_name)
         for b_name, _, _ in BATCHING_STRATEGIES
         for bis_name, _ in BISECTION_STRATEGIES
+        if (selected_batching is None or b_name in selected_batching)
+        and (selected_bisection is None or bis_name in selected_bisection)
     ]
-    if DRY_RUN:
+    if dry_run and (selected_batching is None) and (selected_bisection is None):
         if len(all_combo_names) <= 2:
             selected_combos = set(all_combo_names)
         else:
@@ -747,8 +831,12 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
         selected_combos = None
 
     for b_name, b_fn, _ in BATCHING_STRATEGIES:
+        if selected_batching is not None and b_name not in selected_batching:
+            continue
         for bis_name, bis_fn in BISECTION_STRATEGIES:
-            if DRY_RUN and (b_name, bis_name) not in selected_combos:
+            if selected_bisection is not None and bis_name not in selected_bisection:
+                continue
+            if dry_run and selected_combos is not None and (b_name, bis_name) not in selected_combos:
                 continue
             combo_key = f"{b_name} + {bis_name}"
             logger.info(
@@ -974,8 +1062,14 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
     # Also evaluate fixed-parameter TWSB with all bisection strategies on the
     # same base commit set used for the baseline. Skip this in dry-run mode
     # to keep the number of evaluated combinations small.
-    if base_commits_for_context and not DRY_RUN:
+    if (
+        base_commits_for_context
+        and not dry_run
+        and (selected_batching is None or "TWSB" in selected_batching)
+    ):
         for bis_name, bis_fn in BISECTION_STRATEGIES:
+            if selected_bisection is not None and bis_name not in selected_bisection:
+                continue
             combo_key = f"TWSB + {bis_name}"
             logger.info(
                 "Running fixed TWSB combo %s on %d commits",
@@ -1076,7 +1170,14 @@ def run_evaluation_mopt(INPUT_JSON_EVAL, n_trials):
 
 
 # ------------------- FINAL REPLAY (unified) -------------------
-def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
+def run_final_test_unified(
+    eval_payload,
+    INPUT_JSON_FINAL,
+    OUTPUT_PATH_FINAL,
+    selected_batching=None,
+    selected_bisection=None,
+    run_exhaustive_testing_et=True,
+):
     """
     Replay selected configurations on the FINAL prediction set.
 
@@ -1112,22 +1213,32 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
 
-    if DRY_RUN:
-        logger.info(
-            "Dry run mode: skipping exhaustive testing (ET) on FINAL window."
-        )
-        et_results_final = {}
-    else:
-        et_results_final = run_exhaustive_testing(base_commits_final)
-    baseline_final = simulate_twsb_with_bisect(
-        base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
+    selected_batching_set = (
+        set(selected_batching) if selected_batching is not None else None
     )
-    baseline_final = convert_result_minutes_to_hours(baseline_final)
+    selected_bisection_set = (
+        set(selected_bisection) if selected_bisection is not None else None
+    )
+    baseline_selected = (
+        (selected_batching_set is None or "TWSB" in selected_batching_set)
+        and (selected_bisection_set is None or "PAR" in selected_bisection_set)
+    )
 
-    baseline_fb = baseline_final["mean_feedback_time_hr"]
-    baseline_mean_ttc = baseline_final["mean_time_to_culprit_hr"]
-    baseline_max_ttc = baseline_final["max_time_to_culprit_hr"]
-    baseline_tests = baseline_final["total_tests_run"]
+    if run_exhaustive_testing_et:
+        et_results_final = run_exhaustive_testing(base_commits_final)
+    else:
+        et_results_final = {}
+    baseline_final = {}
+    if baseline_selected:
+        baseline_final = simulate_twsb_with_bisect(
+            base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
+        )
+        baseline_final = convert_result_minutes_to_hours(baseline_final)
+
+    baseline_fb = baseline_final.get("mean_feedback_time_hr")
+    baseline_mean_ttc = baseline_final.get("mean_time_to_culprit_hr")
+    baseline_max_ttc = baseline_final.get("max_time_to_culprit_hr")
+    baseline_tests = baseline_final.get("total_tests_run")
 
     def time_saved_pct(base, val):
         return (
@@ -1138,15 +1249,20 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "Baseline (TWSB + PAR)": baseline_final,
         "final_window": {
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
         },
         "num_test_workers": NUM_TEST_WORKERS,
     }
+    if baseline_selected:
+        final_results["Baseline (TWSB + PAR)"] = baseline_final
 
     eval_out = eval_payload["eval_output"]
+    if selected_batching is not None:
+        selected_batching = set(selected_batching)
+    if selected_bisection is not None:
+        selected_bisection = set(selected_bisection)
 
     # Replay every combo found in eval_out (except ET/Baseline/summary keys)
     for combo_name, val in eval_out.items():
@@ -1165,6 +1281,10 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         if " + " not in combo_name:
             continue
         b_name, bis_name = combo_name.split(" + ", 1)
+        if selected_batching is not None and b_name not in selected_batching:
+            continue
+        if selected_bisection is not None and bis_name not in selected_bisection:
+            continue
         b_fn, _ = lookup_batching(b_name)
         bis_fn = lookup_bisection(bis_name)
         if b_fn is None or bis_fn is None:
@@ -1215,7 +1335,8 @@ def run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL):
         res_final = convert_result_minutes_to_hours(res_final)
 
         violates = (
-            res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
+            baseline_max_ttc is not None
+            and res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
         )
         saved_pct = time_saved_pct(
             baseline_tests, res_final.get("total_tests_run", baseline_tests)
@@ -1319,12 +1440,17 @@ def main():
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
         "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
+        "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
         args.num_test_workers,
         str(args.full_suite_sigs_per_run),
         str(args.dont_use_all_tests_per_batch),
+        str(getattr(args, "batching", "all")),
+        str(getattr(args, "bisection", "all")),
+        str(bool(getattr(args, "skip_exhaustive_testing", False))),
+        str(bool(getattr(args, "dry_run", False))),
         log_level_name,
         RANDOM_SEED,
     )
@@ -1367,6 +1493,25 @@ def main():
     INPUT_JSON_FINAL = args.input_json_final
     OUTPUT_PATH_EVAL = args.output_eval
     OUTPUT_PATH_FINAL = args.output_final
+
+    # Resolve strategy filters (default is "all", meaning no filtering).
+    batching_names = [n for n, _, _ in BATCHING_STRATEGIES] + ["TWSB"]
+    bisection_names = [n for n, _ in BISECTION_STRATEGIES]
+    selected_batching_set = _resolve_strategy_filter(
+        getattr(args, "batching", "all"), batching_names, kind="batching"
+    )
+    selected_bisection_set = _resolve_strategy_filter(
+        getattr(args, "bisection", "all"), bisection_names, kind="bisection"
+    )
+    selected_batching = (
+        None if selected_batching_set == set(batching_names) else selected_batching_set
+    )
+    selected_bisection = (
+        None
+        if selected_bisection_set == set(bisection_names)
+        else selected_bisection_set
+    )
+    run_et = not bool(getattr(args, "skip_exhaustive_testing", False))
 
     # Determine the set of failing (buggy) revisions that fall within
     # the cutoff windows used for EVAL and FINAL, and restrict the
@@ -1442,11 +1587,25 @@ def main():
             "Reusing eval results from %s; running FINAL only...",
             OUTPUT_PATH_EVAL,
         )
-        run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
+        run_final_test_unified(
+            eval_payload,
+            INPUT_JSON_FINAL,
+            OUTPUT_PATH_FINAL,
+            selected_batching=selected_batching,
+            selected_bisection=selected_bisection,
+            run_exhaustive_testing_et=run_et,
+        )
         return
 
     # Normal flow: run Optuna evaluation (mopt), save eval output, then FINAL replay
-    eval_payload = run_evaluation_mopt(INPUT_JSON_EVAL, n_trials=args.mopt_trials)
+    eval_payload = run_evaluation_mopt(
+        INPUT_JSON_EVAL,
+        n_trials=args.mopt_trials,
+        selected_batching=selected_batching,
+        selected_bisection=selected_bisection,
+        run_exhaustive_testing_et=run_et,
+        dry_run=DRY_RUN,
+    )
 
     if eval_payload is None:
         raise RuntimeError("Evaluation was unsuccessful. No eval payload present")
@@ -1457,7 +1616,14 @@ def main():
     logger.info("Saved EVAL results to %s", OUTPUT_PATH_EVAL)
 
     # Unified FINAL replay
-    run_final_test_unified(eval_payload, INPUT_JSON_FINAL, OUTPUT_PATH_FINAL)
+    run_final_test_unified(
+        eval_payload,
+        INPUT_JSON_FINAL,
+        OUTPUT_PATH_FINAL,
+        selected_batching=selected_batching,
+        selected_bisection=selected_bisection,
+        run_exhaustive_testing_et=run_et,
+    )
 
 
 if __name__ == "__main__":

@@ -44,10 +44,13 @@ echo "Running script ..."
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
 --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_eval.json \
 --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/3.7k_50t/batch_eval_mopt.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/3.7k_50t/batch_test_mopt.json \
---mopt-trials 50 \
---num-test-workers 3700 \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_eval_mopt.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_test_mopt.json \
+--mopt-trials 1 \
+--num-test-workers 4000 \
+--skip-exhaustive-testing \
+--batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RAPB,RAPB-s,RRBB,RRBB-s,RATB,RATB-s \
+--bisection TOB,PAR,RWAB,TKRB,SWB,SWF \
 # --dry-run \
 # --dont-use-all-tests-per-batch \
 # --full-suite-sigs-per-run 850 \

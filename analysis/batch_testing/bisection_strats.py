@@ -580,19 +580,22 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
 
     Returns the time when the *last* of those tests finishes.
     """
-    durations = list(durations_minutes)
-    if not durations:
+    if not durations_minutes:
         return requested_start_time
+
+    last_finish = requested_start_time
+    count = 0
+    for dur in durations_minutes:
+        count += 1
+        finish_time = executor.schedule(requested_start_time, dur)
+        if finish_time > last_finish:
+            last_finish = finish_time
+
     logger.debug(
-        "run_test_suite: scheduling %d tests from %s",
-        len(durations),
+        "run_test_suite: scheduled %d tests from %s",
+        count,
         requested_start_time,
     )
-
-    finish_times = [
-        executor.schedule(requested_start_time, dur) for dur in durations
-    ]
-    last_finish = max(finish_times)
     logger.debug(
         "run_test_suite: last test finished at %s (span=%.2f min)",
         last_finish,
@@ -1118,6 +1121,11 @@ def topk_risk_first_bisect(
     interval_cache = {}
 
     batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+    logger.debug(
+        "topk_risk_first_bisect: TKRB_TOP_K=%d, failing_signatures=%d",
+        int(TKRB_TOP_K),
+        len(batch_fail_durations),
+    )
 
     def run_interval(lo, hi):
         """
