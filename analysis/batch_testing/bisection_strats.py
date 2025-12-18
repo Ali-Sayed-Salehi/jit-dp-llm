@@ -1114,14 +1114,6 @@ def topk_risk_first_bisect(
     current_time = start_time
     first_test = bool(is_batch_root)
 
-    # Cache interval test results to avoid re-running identical intervals within the
-    # same "knowledge state". Important: whether an interval "has a defect" depends
-    # on `status` (we treat already-found defects as no longer present), so caching
-    # must be invalidated when `status` changes to avoid stale True/False values
-    # causing non-termination.
-    status_version = 0
-    interval_cache = {}  # (status_version, first_test, lo, hi) -> has_defect boolean
-
     batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
     logger.debug(
         "topk_risk_first_bisect: TKRB_TOP_K=%d, failing_signatures=%d",
@@ -1133,24 +1125,17 @@ def topk_risk_first_bisect(
         """
         Wrapper around _run_interval_and_update that:
           - Skips empty intervals.
-          - Checks cache first.
-          - Otherwise runs the interval test, updates time/cost/status/feedback,
-            and stores the has_defect result in the cache.
+          - Runs the interval test and updates time/cost/status/feedback.
+
+        Note: Unlike TKRB's previous versions, we intentionally do not cache
+        interval results. Other bisection algorithms in this file also do not
+        cache interval outcomes, and caching is subtle because interval outcomes
+        depend on the evolving `status` state.
         """
-        nonlocal current_time, first_test, total_tests_run, status_version
+        nonlocal current_time, first_test, total_tests_run
 
         if lo > hi:
             return False
-
-        key = (status_version, bool(first_test), lo, hi)
-        if key in interval_cache:
-            logger.debug(
-                "topk_risk_first_bisect: using cached interval result for [%d, %d] -> %s",
-                lo,
-                hi,
-                interval_cache[key],
-            )
-            return interval_cache[key]
 
         has_defect, current_time, first_test, total_tests_run = _run_interval_and_update(
             batch_sorted,
@@ -1164,14 +1149,6 @@ def topk_risk_first_bisect(
             executor,
             batch_fail_durations,
         )
-        if not has_defect:
-            # Clean interval marks commits as clean => status changed.
-            # Invalidate cached has_defect values that depended on older status.
-            status_version += 1
-            interval_cache.clear()
-            # Cache the clean result for the new status version.
-            key = (status_version, bool(first_test), lo, hi)
-        interval_cache[key] = has_defect
         logger.debug(
             "topk_risk_first_bisect: interval [%d, %d] executed, has_defect=%s",
             lo,
@@ -1183,7 +1160,7 @@ def topk_risk_first_bisect(
     def tob_bisect_on_range(lo_bound, hi_bound):
         """
         Run a TOB-style bisection restricted to [lo_bound .. hi_bound],
-        using run_interval (with cache) for physical runs.
+        using run_interval for physical runs.
         """
         nonlocal current_time, first_test, total_tests_run
 
@@ -1240,13 +1217,10 @@ def topk_risk_first_bisect(
     top_indices = [i for (i, _) in risks[:TKRB_TOP_K]]
 
     def mark_culprit(idx, at_time):
-        nonlocal status_version
         c = batch_sorted[idx]
         if status[idx] == "defect_found":
             return
         status[idx] = "defect_found"
-        status_version += 1
-        interval_cache.clear()
         fb_min = (at_time - c["ts"]).total_seconds() / 60.0
         feedback_times[c["commit_id"]] = fb_min
         if c["true_label"]:
@@ -1259,20 +1233,14 @@ def topk_risk_first_bisect(
         )
 
     def apply_clean_interval(lo, hi, finish_time):
-        nonlocal status_version
-        changed = False
         for i in range(lo, hi + 1):
             if status[i] != "unknown":
                 continue
             status[i] = "clean"
-            changed = True
             cid = batch_sorted[i]["commit_id"]
             if cid not in feedback_times:
                 fb_min = (finish_time - batch_sorted[i]["ts"]).total_seconds() / 60.0
                 feedback_times[cid] = fb_min
-        if changed:
-            status_version += 1
-            interval_cache.clear()
 
     if int(TKRB_TOP_K) <= 1 or len(top_indices) <= 1:
         for idx in top_indices:
@@ -1302,11 +1270,6 @@ def topk_risk_first_bisect(
                 continue
 
             lo, hi = 0, idx
-            key = (status_version, bool(first_test), lo, hi)
-
-            if key in interval_cache:
-                probe_has_defect_by_idx[idx] = interval_cache[key]
-                continue
 
             durations = batch_fail_durations
             total_tests_run += len(durations)
@@ -1314,7 +1277,6 @@ def topk_risk_first_bisect(
             latest_finish = max(latest_finish, finish_time)
 
             has_defect = interval_has_defect(lo, hi)
-            interval_cache[key] = has_defect
             probe_has_defect_by_idx[idx] = has_defect
 
         # Barrier: do not react to individual probe results until all probes finish.
@@ -1378,13 +1340,12 @@ def topk_risk_first_bisect(
     logger.debug(
         "topk_risk_first_bisect: batch_size=%d, tests_batch_root=%d, "
         "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
-        "cache_entries=%d, total_tests_run=%d",
+        "total_tests_run=%d",
         n,
         tests_batch_root,
         tests_bisection,
         culprits_batch,
         len(culprit_times),
-        len(interval_cache),
         total_tests_run,
     )
     return total_tests_run, culprit_times, feedback_times
