@@ -824,6 +824,7 @@ def _speculative_tob_find_one_in_bounds(
     feedback_times,
     executor: TestExecutor,
     batch_fail_durations,
+    interval_finish_cache=None,
 ):
     """
     Find at most one culprit within [lo_bound..hi_bound] using TOB logic, but
@@ -847,23 +848,60 @@ def _speculative_tob_find_one_in_bounds(
     suites = []
     suite_events = []
 
+    def cached_finish(lo_i, hi_i):
+        if interval_finish_cache is None:
+            return None
+        return interval_finish_cache.get((int(lo_i), int(hi_i)))
+
     if first_test:
         durations_region = get_batch_signature_durations()
+        total_tests_run += len(durations_region)
+        region_suite = _suite_submit(
+            executor, start_time, durations_region, "region", lo, hi
+        )
+        first_test = False
     else:
-        durations_region = batch_fail_durations
+        fin = cached_finish(lo, hi)
+        if fin is not None:
+            region_suite = {
+                "kind": "region",
+                "lo": int(lo),
+                "hi": int(hi),
+                "finish": fin,
+                "task_ids": [],
+                "done": False,
+                "canceled": False,
+                "cached": True,
+            }
+        else:
+            durations_region = batch_fail_durations
+            total_tests_run += len(durations_region)
+            region_suite = _suite_submit(
+                executor, start_time, durations_region, "region", lo, hi
+            )
 
-    total_tests_run += len(durations_region)
-    region_suite = _suite_submit(
-        executor, start_time, durations_region, "region", lo, hi
-    )
-    first_test = False
     suites.append(region_suite)
     heapq.heappush(suite_events, (region_suite["finish"], len(suites) - 1))
 
     chain = _tob_worst_case_chain(lo, hi)
     for l, m in chain:
-        total_tests_run += len(batch_fail_durations)
-        suite = _suite_submit(executor, start_time, batch_fail_durations, "bin", l, m)
+        fin = cached_finish(l, m)
+        if fin is not None:
+            suite = {
+                "kind": "bin",
+                "lo": int(l),
+                "hi": int(m),
+                "finish": fin,
+                "task_ids": [],
+                "done": False,
+                "canceled": False,
+                "cached": True,
+            }
+        else:
+            total_tests_run += len(batch_fail_durations)
+            suite = _suite_submit(
+                executor, start_time, batch_fail_durations, "bin", l, m
+            )
         suites.append(suite)
         heapq.heappush(suite_events, (suite["finish"], len(suites) - 1))
 
@@ -890,9 +928,10 @@ def _speculative_tob_find_one_in_bounds(
         if suite["kind"] == "region":
             region_result = has_defect
             if not has_defect:
-                canceled = _cancel_suites_best_effort(executor, suites, finish_time)
+                effective_now = max(start_time, finish_time)
+                canceled = _cancel_suites_best_effort(executor, suites, effective_now)
                 total_tests_run -= canceled
-                return False, finish_time, first_test, total_tests_run, None
+                return False, effective_now, first_test, total_tests_run, None
 
             if left == right:
                 idx = left
@@ -900,9 +939,10 @@ def _speculative_tob_find_one_in_bounds(
                 status[idx] = "defect_found"
                 fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
                 feedback_times[c["commit_id"]] = fb_min
-                canceled = _cancel_suites_best_effort(executor, suites, finish_time)
+                effective_now = max(start_time, finish_time)
+                canceled = _cancel_suites_best_effort(executor, suites, effective_now)
                 total_tests_run -= canceled
-                return True, finish_time, first_test, total_tests_run, idx
+                return True, effective_now, first_test, total_tests_run, idx
             continue
 
         if region_result is not True or left >= right:
@@ -914,7 +954,8 @@ def _speculative_tob_find_one_in_bounds(
 
         if has_defect:
             right = mid
-            canceled = _cancel_suites_best_effort(executor, suites, finish_time)
+            effective_now = max(start_time, finish_time)
+            canceled = _cancel_suites_best_effort(executor, suites, effective_now)
             total_tests_run -= canceled
 
             if left == right:
@@ -923,14 +964,27 @@ def _speculative_tob_find_one_in_bounds(
                 status[idx] = "defect_found"
                 fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
                 feedback_times[c["commit_id"]] = fb_min
-                return True, finish_time, first_test, total_tests_run, idx
+                return True, effective_now, first_test, total_tests_run, idx
 
             chain = _tob_worst_case_chain(left, right)
             for l, m in chain:
-                total_tests_run += len(batch_fail_durations)
-                new_suite = _suite_submit(
-                    executor, finish_time, batch_fail_durations, "bin", l, m
-                )
+                fin = cached_finish(l, m)
+                if fin is not None:
+                    new_suite = {
+                        "kind": "bin",
+                        "lo": int(l),
+                        "hi": int(m),
+                        "finish": fin,
+                        "task_ids": [],
+                        "done": False,
+                        "canceled": False,
+                        "cached": True,
+                    }
+                else:
+                    total_tests_run += len(batch_fail_durations)
+                    new_suite = _suite_submit(
+                        executor, finish_time, batch_fail_durations, "bin", l, m
+                    )
                 suites.append(new_suite)
                 heapq.heappush(
                     suite_events, (new_suite["finish"], len(suites) - 1)
@@ -945,9 +999,10 @@ def _speculative_tob_find_one_in_bounds(
             status[idx] = "defect_found"
             fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
             feedback_times[c["commit_id"]] = fb_min
-            canceled = _cancel_suites_best_effort(executor, suites, finish_time)
+            effective_now = max(start_time, finish_time)
+            canceled = _cancel_suites_best_effort(executor, suites, effective_now)
             total_tests_run -= canceled
-            return True, finish_time, first_test, total_tests_run, idx
+            return True, effective_now, first_test, total_tests_run, idx
 
     # Should not happen; treat as no-culprit.
     if region_suite.get("finish"):
@@ -1703,6 +1758,7 @@ def topk_risk_first_bisect(
     suite_events = []
     probe_records = {}  # (kind, idx) -> (has_defect, finish_time)
     processed_probe_idxs = set()
+    interval_finish_cache = {}  # (lo, hi) -> finish_time for completed targeted intervals
 
     submit_time = start_time
 
@@ -1821,6 +1877,7 @@ def topk_risk_first_bisect(
                         feedback_times,
                         executor,
                         batch_fail_durations,
+                        interval_finish_cache=interval_finish_cache,
                     )
                 )
                 if not found:
@@ -1865,8 +1922,10 @@ def topk_risk_first_bisect(
 
         if suite["kind"] == "probe_curr":
             probe_records[("curr", interval_hi)] = (has_defect, finish_time)
+            interval_finish_cache[(0, interval_hi)] = finish_time
         elif suite["kind"] == "probe_prev":
             probe_records[("prev", interval_hi + 1)] = (has_defect, finish_time)
+            interval_finish_cache[(0, interval_hi)] = finish_time
 
         if whole_result is not True:
             continue
@@ -1893,6 +1952,7 @@ def topk_risk_first_bisect(
                     feedback_times,
                     executor,
                     batch_fail_durations,
+                    interval_finish_cache=interval_finish_cache,
                 )
             )
             if not found:
