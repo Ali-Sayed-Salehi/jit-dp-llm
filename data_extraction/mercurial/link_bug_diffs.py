@@ -386,7 +386,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             oldest_idx = newest_idx - (len(seq) - 1)
             earliest_idx = bug_to_earliest_idx.get(bug_id)
             if earliest_idx is not None and earliest_idx < oldest_idx:
-                print(f"Skipping bug {bug_id}: multiple contiguous commit blocks", file=sys.stderr)
+                if bug.get("regressions", []):
+                    print(f"Skipping regressor bug {bug_id}: multiple contiguous commit blocks", file=sys.stderr)
                 continue
             newest_node, oldest_node = seq[0], seq[-1]
             block_nodes = list(reversed(seq))  # oldest -> newest
