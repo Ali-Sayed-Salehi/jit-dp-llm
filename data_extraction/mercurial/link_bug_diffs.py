@@ -410,7 +410,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "revision": newest_node,
                 "last_commit_date": hgdate_to_iso(node_to_date.get(newest_node)),
                 "bug_creation_time": normalize_bugzilla_time(bug.get("creation_time")),
-                "regression": bool(regressions),
+                "regression": bool(regressed_by),
                 "regressor": bool(regressions),
             }
 
