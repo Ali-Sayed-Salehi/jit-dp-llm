@@ -2,7 +2,8 @@
 """
 Fetches bugs from Bugzilla (bugzilla.mozilla.org) via the REST API and writes them to a JSONL file
 (`datasets/mozilla_jit/all_bugs.jsonl`) with a fixed set of fields. Supports pagination and a
-`--dry-run` mode to fetch only a single page.
+`--dry-run` mode to fetch only a single page. The API query is configured to only fetch bugs with
+resolution in {FIXED, WONTFIX} and exclude bugs with classification "Graveyard".
 """
 
 import argparse
@@ -33,6 +34,9 @@ FIELDS = [
     "component",
     "creation_time",
 ]
+
+ALLOWED_RESOLUTIONS = ["FIXED", "WONTFIX"]
+EXCLUDED_CLASSIFICATION = "Graveyard"
 
 
 def _get_json(url: str, params: dict) -> dict:
@@ -81,6 +85,12 @@ def main() -> int:
                 "f1": "creation_ts",
                 "o1": "greaterthan",
                 "v1": args.since,
+                "f2": "resolution",
+                "o2": "anyexact",
+                "v2": ",".join(ALLOWED_RESOLUTIONS),
+                "f3": "classification",
+                "o3": "notequals",
+                "v3": EXCLUDED_CLASSIFICATION,
                 "limit": args.limit,
                 "offset": offset,
             }
