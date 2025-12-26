@@ -22,21 +22,21 @@ source /speed-scratch/a_s87063/repos/jit-dp-llm/venv/bin/activate.csh
 
 echo "Running script ..."
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/eval_thresholds.py \
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/jit_dp/eval_thresholds.py \
 # --json /speed-scratch/a_s87063/repos/jit-dp-llm/llama/inference/eval_2025-10-31_22-57-47/final_test_results_seq_cls.json \
-# --out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/eval_thr_results_perf_mbert.json \
+# --out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/jit_dp/eval_thr_results_perf_mbert.json \
 # --threshold 0.7 \
 # --recall-target 0.84 \
 # -p 0.10 0.20 \
 
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/token_length_violin.py \
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/jit_dp/token_length_violin.py \
 # --dataset /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf/perf_llm_struc.jsonl \
 # --model /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/meta-llama/Llama-3.1-8B \
-# --configs /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/seq_len_confis.jsonl \
+# --configs /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/jit_dp/seq_len_confis.jsonl \
 # --field prompt \
 # --logy \
-# --output /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/violin_plot
+# --output /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/results/jit_dp/violin_plot
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py

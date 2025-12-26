@@ -91,6 +91,13 @@ Controls
 - `--limit N`: stop after writing N output records (overrides `--dry-run`)
 - `--cutoff-date`: skip bugs created before this ISO date/datetime (e.g. `2023-01-01` or
   `2023-01-01T00:00:00+00:00`)
+
+---------
+Notes
+---------
+- Since some buigs might be skipped due to various reasons, 
+  the regression and regressed_by fields in the output might have dangling references. 
+  For historical simulations, make sure to not rely on regression and regressor boolean fields and double check those values. 
 """
 
 from __future__ import annotations
