@@ -82,7 +82,9 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_ttc_stats.py
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_all_bugs.py --start-offset 83250
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_all_bugs.py --start-offset 83250
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --dry-run --cutoff-date 2015-01-01
 
 
 echo "Script finished"

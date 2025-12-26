@@ -89,6 +89,8 @@ Controls
 ---------
 - `--dry-run`: stop after writing 100 output records
 - `--limit N`: stop after writing N output records (overrides `--dry-run`)
+- `--cutoff-date`: skip bugs created before this ISO date/datetime (e.g. `2023-01-01` or
+  `2023-01-01T00:00:00+00:00`)
 """
 
 from __future__ import annotations
@@ -115,6 +117,16 @@ DIFFREV_LINE_RE = re.compile(r"^\s*Differential\s+Revision:\s*\S+\s*$", re.IGNOR
 
 
 def run(*args: str, cwd: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
+    """Run a subprocess command and capture its output.
+
+    Args:
+        *args: Command and arguments, passed directly to `subprocess.run`.
+        cwd: Optional working directory for the command.
+        check: If True, raise `CalledProcessError` for non-zero exit codes.
+
+    Returns:
+        The `subprocess.CompletedProcess` result with `stdout`/`stderr` captured as bytes.
+    """
     return subprocess.run(
         list(args),
         cwd=cwd,
@@ -125,6 +137,10 @@ def run(*args: str, cwd: Optional[str] = None, check: bool = True) -> subprocess
 
 
 def load_jsonl(path: str) -> List[Dict]:
+    """Load a JSONL file into a list of dicts.
+
+    Lines that are empty, invalid JSON, or not JSON objects are skipped.
+    """
     rows: List[Dict] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -141,6 +157,11 @@ def load_jsonl(path: str) -> List[Dict]:
 
 
 def bug_id_from_desc(desc: Optional[str]) -> Optional[str]:
+    """Extract a Bugzilla bug id from the start of a commit message.
+
+    Returns None for backouts/reverts (messages starting with "Revert" or "Backed out") and for
+    messages that don't begin with a `Bug <id>` prefix.
+    """
     s = desc or ""
     if REVERT_RE.match(s):
         return None
@@ -149,6 +170,10 @@ def bug_id_from_desc(desc: Optional[str]) -> Optional[str]:
 
 
 def clean_desc(desc: str) -> str:
+    """Normalize a commit message for the dataset.
+
+    Removes the leading `Bug <id>` prefix and drops any `Differential Revision:` lines.
+    """
     text = BUG_RE.sub("", desc or "").strip()
     lines = [ln for ln in text.splitlines() if not DIFFREV_LINE_RE.match(ln)]
     return "\n".join(lines).strip()
@@ -185,6 +210,34 @@ def normalize_bugzilla_time(s: Optional[str]) -> str:
     return text
 
 
+def parse_iso_datetime(s: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 date/datetime string into a timezone-aware datetime.
+
+    Accepts either:
+    - Date: `YYYY-MM-DD` (interpreted as midnight UTC), or
+    - Datetime: `YYYY-MM-DDTHH:MM:SS[.ffffff][±HH:MM]` (timezone assumed UTC if missing).
+
+    Returns None if parsing fails.
+    """
+    if not s:
+        return None
+    text = str(s).strip()
+    if not text:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(text + "T00:00:00")
+        except Exception:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def contiguous_prev_same_bug(commits: Sequence[Dict], start_idx: int, bug_id: str) -> List[str]:
     """From start_idx (newest match), walk backward collecting contiguous commits for the same bug."""
     nodes: List[str] = []
@@ -217,6 +270,7 @@ def unified_range_diff(
 
 
 def build_bug_to_newest_idx(commits: Sequence[Dict]) -> Dict[str, int]:
+    """Build a mapping from bug id to its newest matching commit index."""
     bug_to_newest_idx: Dict[str, int] = {}
     for i, c in enumerate(commits):
         bug_id = bug_id_from_desc(c.get("desc", ""))
@@ -226,6 +280,7 @@ def build_bug_to_newest_idx(commits: Sequence[Dict]) -> Dict[str, int]:
 
 
 def build_bug_to_earliest_idx(commits: Sequence[Dict]) -> Dict[str, int]:
+    """Build a mapping from bug id to its earliest matching commit index."""
     bug_to_earliest_idx: Dict[str, int] = {}
     for i, c in enumerate(commits):
         bug_id = bug_id_from_desc(c.get("desc", ""))
@@ -235,6 +290,10 @@ def build_bug_to_earliest_idx(commits: Sequence[Dict]) -> Dict[str, int]:
 
 
 def filter_known_bug_ids(ids: Sequence, known_bug_ids: set[str]) -> List[str]:
+    """Filter/normalize bug id values to known bug ids.
+
+    Coerces each entry to `str`, trims whitespace, and keeps only ids present in `known_bug_ids`.
+    """
     out: List[str] = []
     for x in ids or []:
         s = str(x).strip()
@@ -244,6 +303,11 @@ def filter_known_bug_ids(ids: Sequence, known_bug_ids: set[str]) -> List[str]:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments.
+
+    Args:
+        argv: Optional argv sequence (defaults to `sys.argv[1:]` when None).
+    """
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--commits-jsonl", default=DEFAULT_COMMITS_JSONL, help="Path to all_commits.jsonl")
     p.add_argument("--bugs-jsonl", default=DEFAULT_BUGS_JSONL, help="Path to all_bugs.jsonl")
@@ -251,15 +315,32 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument("--out-jsonl", default=DEFAULT_OUT_JSONL, help="Output JSONL path")
     p.add_argument("--dry-run", action="store_true", help="Write only 100 output rows")
     p.add_argument("--limit", type=int, default=0, help="Write only N rows (overrides --dry-run)")
+    p.add_argument(
+        "--cutoff-date",
+        default="",
+        help="Skip bugs created before this ISO date/datetime (e.g. 2023-01-01 or 2023-01-01T00:00:00+00:00)",
+    )
     return p.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Link bugs to diffs and write the joined JSONL dataset.
+
+    Loads commits and bugs from JSONL, selects at most one newest contiguous commit block per bug,
+    computes a net `hg diff` for that block, and writes one output JSON object per bug.
+    """
     args = parse_args(argv)
 
     if not os.path.isdir(args.hg_repo):
         print(f"Mercurial repo missing: {args.hg_repo}", file=sys.stderr)
         return 1
+
+    cutoff_dt = None
+    if args.cutoff_date:
+        cutoff_dt = parse_iso_datetime(normalize_bugzilla_time(args.cutoff_date))
+        if cutoff_dt is None:
+            print(f"Invalid --cutoff-date: {args.cutoff_date}", file=sys.stderr)
+            return 2
 
     commits = load_jsonl(args.commits_jsonl)
     bugs = load_jsonl(args.bugs_jsonl)
@@ -289,6 +370,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             bug_id = str(bug.get("id", "")).strip()
             if not bug_id:
                 continue
+
+            if cutoff_dt is not None:
+                created = parse_iso_datetime(normalize_bugzilla_time(bug.get("creation_time")))
+                if created is not None and created < cutoff_dt:
+                    continue
 
             newest_idx = bug_to_newest_idx.get(bug_id)
             if newest_idx is None:
