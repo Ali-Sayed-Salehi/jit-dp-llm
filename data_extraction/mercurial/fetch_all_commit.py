@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""Fetch Autoland commits and export them as JSONL for downstream processing.
+
+This script ensures a local clone of Mozilla's Autoland Mercurial repository exists under
+`data_extraction/mercurial/repos/autoland` (clones if missing, otherwise `hg pull -u`), then
+exports commit metadata via `hg log -Tjson -r all()` and writes it to:
+
+- `datasets/mozilla_perf/all_commits.jsonl`
+
+Each output line is a JSON object with:
+- `node`: full changeset hash
+- `desc`: commit message / description
+- `date`: Mercurial date field (typically `[epoch_seconds, tz_offset_seconds]`)
+- `parents`: parent changeset hashes
+
+Ordering: commits are written in whatever order `hg log -r all()` returns (commonly repository
+revision order, which is often close to chronological but is not explicitly sorted by date here).
+"""
 import os
 import sys
 import csv
