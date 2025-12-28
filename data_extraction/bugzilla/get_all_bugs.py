@@ -28,7 +28,6 @@ FIELDS = [
     "type",
     "regressed_by",
     "regressions",
-    "status",
     "resolution",
     "product",
     "component",
