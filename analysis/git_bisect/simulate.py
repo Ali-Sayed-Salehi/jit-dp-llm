@@ -3,15 +3,31 @@
 """
 Git-bisect simulation helpers for the Mozilla JIT dataset.
 
-This script focuses on loading and normalizing the core inputs used by
-risk-based bisection strategies:
-  - Bug dataset (`mozilla_jit.jsonl`) with an added `available_regressors` field.
-  - Ordered commit list (`all_commits.jsonl`) matching Autoland history.
-  - Risk model predictions (`risk_predictions_*.json`) with per-commit risk scores.
+This script simulates a simplified bisection workflow over a linear commit
+history window:
 
-For now, the historical simulation runs only over the commit window covered by
-`risk_predictions_final_test.json` and reports baseline test counts for a
-standard (binary-search) git-bisect procedure.
+Inputs:
+  - Bug dataset (`datasets/mozilla_jit/mozilla_jit.jsonl`)
+  - Ordered commits (`datasets/mozilla_jit/all_commits.jsonl`) matching Autoland history
+  - Risk predictions (`analysis/git_bisect/risk_predictions_*.json`) used to define the
+    simulation commit window (the min/max commit ids present in predictions)
+
+Core assumptions (by design for this simulation):
+  - Linear history: a commit at index i contains a regressor at index r iff i >= r.
+  - Single culprit per regression: if a bug has multiple "available regressors",
+    only the latest regressor commit is treated as the true culprit, stored as
+    `available_regressor`.
+
+Simulation outline for each regression bug:
+  1) Determine `culprit_index` from `available_regressor`.
+  2) Choose a "good" index via the configured lookback strategy, starting from
+     the "bad" observation point.
+  3) Choose a "bad" index as the last commit at or before `bug_creation_time`.
+  4) Run the configured bisection strategy to locate the single culprit and count tests.
+
+Run:
+  - `python analysis/git_bisect/simulate.py --dry-run`
+  - Results are written as a JSON summary to `--output`.
 """
 
 from __future__ import annotations
@@ -61,7 +77,7 @@ def load_bugs_with_available_regressors(
     window_end: int,
 ) -> List[Dict[str, Any]]:
     """
-    Load bugs from `mozilla_jit.jsonl` and add a new field `available_regressors`.
+    Load bugs from `mozilla_jit.jsonl` and add a new field `available_regressor`.
 
     For each bug, if `regressed_by` is non-empty, each referenced bug id is
     checked against the full dataset, and also required to fall within the
@@ -71,13 +87,16 @@ def load_bugs_with_available_regressors(
       - The regressor bug_id exists in the dataset, AND
       - The regressor bug has a `revision` that exists in `node_to_index`, AND
       - That revision's commit index is within [window_start, window_end].
+
+    If multiple regressors are available for a single bug, only the latest
+    (highest commit index) is retained in `available_regressor`.
     """
     bugs: List[Dict[str, Any]] = list(_read_jsonl(path))
 
     bugs_by_id = build_bug_id_index(bugs)
 
     for bug in bugs:
-        available: List[str] = []
+        latest: Optional[Tuple[int, str]] = None
         seen = set()
         regressed_by = bug.get("regressed_by") or []
         if not isinstance(regressed_by, list):
@@ -105,10 +124,11 @@ def load_bugs_with_available_regressors(
             if reg_idx < window_start or reg_idx > window_end:
                 continue
 
-            available.append(candidate_id)
+            if latest is None or reg_idx > latest[0]:
+                latest = (reg_idx, candidate_id)
             seen.add(candidate_id)
 
-        bug["available_regressors"] = available
+        bug["available_regressor"] = latest[1] if latest is not None else None
 
     return bugs
 
@@ -287,7 +307,6 @@ def simulate_strategy_combo(
     skipped = {
         "not_regression": 0,
         "no_available_regressors": 0,
-        "missing_revision_index": 0,
         "bad_not_in_window": 0,
         "good_not_in_window": 0,
         "no_regressors_in_range": 0,
@@ -299,46 +318,10 @@ def simulate_strategy_combo(
             skipped["not_regression"] += 1
             continue
 
-        available = bug.get("available_regressors") or []
-        if not available:
+        available_regressor = bug.get("available_regressor")
+        if not available_regressor:
             skipped["no_available_regressors"] += 1
             continue
-
-        revision = bug.get("revision")
-        if not revision:
-            skipped["missing_revision_index"] += 1
-            continue
-        start_index = node_to_index.get(str(revision))
-        if start_index is None:
-            skipped["missing_revision_index"] += 1
-            continue
-
-        regressor_indices: List[int] = []
-        for reg_bug_id in available:
-            reg_bug = bugs_by_id.get(str(reg_bug_id))
-            if not reg_bug:
-                raise KeyError(
-                    f"Bug {bug.get('bug_id')} references regressor bug_id={reg_bug_id}, "
-                    "but that bug_id is not present in the loaded dataset."
-                )
-            reg_rev = reg_bug.get("revision")
-            if not reg_rev:
-                raise ValueError(f"Regressor bug_id={reg_bug_id} is missing `revision`.")
-            reg_idx = node_to_index.get(str(reg_rev))
-            if reg_idx is None:
-                raise KeyError(
-                    f"Regressor bug_id={reg_bug_id} revision={reg_rev} not found in commits list."
-                )
-            regressor_indices.append(reg_idx)
-
-        lookback_outcome = lookback.find_good_index(
-            start_index=start_index, regressor_indices=regressor_indices
-        )
-        if lookback_outcome.good_index is None:
-            raise KeyError(f"lookback for Bug {bug.get('bug_id')} did not find a clean commit.")
-
-        good_index = lookback_outcome.good_index
-        lookback_tests = lookback_outcome.steps
 
         bug_time = _parse_bug_time(bug.get("bug_creation_time"))
         bad_index = _find_last_commit_before_or_at(
@@ -349,12 +332,37 @@ def simulate_strategy_combo(
                 f"Could not determine bad commit for bug_id={bug.get('bug_id')} "
                 f"bug_creation_time={bug.get('bug_creation_time')!r}"
             )
+        if bad_index > window_end:
+            skipped["bad_not_in_window"] += 1
+            continue
+
+        reg_bug_id = str(available_regressor)
+        reg_bug = bugs_by_id.get(reg_bug_id)
+        if not reg_bug:
+            raise KeyError(
+                f"Bug {bug.get('bug_id')} references regressor bug_id={reg_bug_id}, "
+                "but that bug_id is not present in the loaded dataset."
+            )
+        reg_rev = reg_bug.get("revision")
+        if not reg_rev:
+            raise ValueError(f"Regressor bug_id={reg_bug_id} is missing `revision`.")
+        culprit_index = node_to_index.get(str(reg_rev))
+        if culprit_index is None:
+            raise KeyError(
+                f"Regressor bug_id={reg_bug_id} revision={reg_rev} not found in commits list."
+            )
+
+        lookback_outcome = lookback.find_good_index(
+            start_index=bad_index, culprit_index=culprit_index
+        )
+        if lookback_outcome.good_index is None:
+            raise KeyError(f"lookback for Bug {bug.get('bug_id')} did not find a clean commit.")
+
+        good_index = lookback_outcome.good_index
+        lookback_tests = lookback_outcome.steps
 
         if good_index < window_start:
             skipped["good_not_in_window"] += 1
-            continue
-        if bad_index > window_end:
-            skipped["bad_not_in_window"] += 1
             continue
         if good_index >= bad_index:
             raise RuntimeError(
@@ -362,21 +370,20 @@ def simulate_strategy_combo(
                 f"good_index={good_index} >= bad_index={bad_index}"
             )
 
-        suspect_regressor_indices_in_range = [
-            idx for idx in regressor_indices if good_index < idx <= bad_index
-        ]
-        if not suspect_regressor_indices_in_range:
-            skipped["no_regressors_in_range"] += 1
-            continue
+        if not (good_index < culprit_index <= bad_index):
+            raise RuntimeError(
+                f"Invalid good/bad ordering for bug_id={bug.get('bug_id')}: "
+                f"good_index={good_index}, bad_index={bad_index}, culprit_index={culprit_index}"
+            )
 
         bisect_outcome = bisection.run(
             good_index=good_index,
             bad_index=bad_index,
-            suspect_indices=suspect_regressor_indices_in_range,
+            culprit_index=culprit_index,
             risk_by_index=risk_by_index,
         )
 
-        total_culprits_found += len(set(bisect_outcome.found_indices))
+        total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
         total_lookback_tests += lookback_tests
         total_bisection_tests += bisect_outcome.tests
         total_tests += lookback_tests + bisect_outcome.tests
