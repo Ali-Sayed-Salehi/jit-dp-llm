@@ -10,7 +10,7 @@ REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(REPO_PATH)
 
 from github_api.fetch_commit_data import get_commit_message, get_commit_diff
-from utils import diff_to_structured_xml
+from utils import diff_to_structured_xml, clean_commit_message
 
 parser = argparse.ArgumentParser(description="Choose which dataset to load")
 parser.add_argument(
@@ -188,7 +188,8 @@ elif args.mode == "mozilla_jit_struc":
     for bug in bugs_list:
         raw_diff = bug.get('diff')
         diff = diff_to_structured_xml(raw_diff)
-        commit_message = bug.get('commit_message', "")
+        raw_commit_message = bug.get('commit_message', "")
+        commit_message = clean_commit_message(raw_commit_message)
         commit_id = bug.get('revision')
         response = "1" if bug.get('regressor') else "0"
 
