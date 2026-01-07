@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -51,6 +52,8 @@ COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_jit", "all_commits.j
 RISK_FINAL_PATH = os.path.join(
     REPO_ROOT, "analysis", "git_bisect", "risk_predictions_final_test.json"
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -130,6 +133,12 @@ def load_bugs_with_available_regressors(
 
         bug["available_regressor"] = latest[1] if latest is not None else None
 
+    logger.debug(
+        "Loaded %d bugs; computed `available_regressor` within window [%d,%d].",
+        len(bugs),
+        window_start,
+        window_end,
+    )
     return bugs
 
 
@@ -313,6 +322,7 @@ def simulate_strategy_combo(
     }
 
     processed = 0
+    logger.info("Simulating combo %s+%s over %d bugs", lookback_code, bisection_code, len(bugs))
     for bug in bugs:
         if not bug.get("regression", False):
             skipped["not_regression"] += 1
@@ -389,6 +399,15 @@ def simulate_strategy_combo(
         total_tests += lookback_tests + bisect_outcome.tests
         processed += 1
 
+    logger.info(
+        "Finished combo %s+%s: processed=%d total_tests=%d culprits_found=%d skipped=%s",
+        lookback_code,
+        bisection_code,
+        processed,
+        total_tests,
+        total_culprits_found,
+        skipped,
+    )
     return {
         "combo": f"{lookback_code}+{bisection_code}",
         "lookback": {"code": lookback_code, "name": lookback.name},
@@ -445,6 +464,12 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--risk-final", default=RISK_FINAL_PATH)
     parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Python logging level.",
+    )
+    parser.add_argument(
         "--output",
         default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_baseline_final_test.json"),
         help="Where to write the JSON summary output.",
@@ -460,6 +485,14 @@ def get_args() -> argparse.Namespace:
 def main() -> int:
     """Run the historical simulation and write a JSON summary."""
     args = get_args()
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logger.info("Using bugs_path=%s", args.bugs_path)
+    logger.info("Using commits_path=%s", args.commits_path)
+    logger.info("Using risk_final=%s", args.risk_final)
 
     for p in (args.bugs_path, args.commits_path, args.risk_final):
         if not os.path.exists(p):
@@ -477,6 +510,14 @@ def main() -> int:
     window_start, window_end = _risk_window_from_predictions(commits, final_risk_by_commit)
     window_start_node = commits[window_start].get("node")
     window_end_node = commits[window_end].get("node")
+    logger.info(
+        "Risk window: [%d,%d] (%s..%s) over %d commits",
+        window_start,
+        window_end,
+        window_start_node,
+        window_end_node,
+        window_end - window_start + 1,
+    )
     risk_by_index = build_risk_by_index(
         commits=commits,
         risk_by_commit=final_risk_by_commit,
@@ -492,6 +533,7 @@ def main() -> int:
     )
     bugs = all_bugs[:1000] if args.dry_run else all_bugs
     bugs_by_id = build_bug_id_index(all_bugs)
+    logger.info("Loaded bugs=%d (simulating=%d dry_run=%s)", len(all_bugs), len(bugs), bool(args.dry_run))
 
     lookback_strategies: List[Tuple[str, LookbackStrategy]] = [
         ("FSL", FixedStrideLookback(stride=20)),
@@ -546,6 +588,7 @@ def main() -> int:
         },
     }
 
+    logger.info("Writing summary to %s", args.output)
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, sort_keys=True)

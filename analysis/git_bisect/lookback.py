@@ -8,8 +8,11 @@ lookback strategies model how a developer might search backwards in history to
 find a commit that does not yet contain the regression.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional, Protocol, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -55,10 +58,25 @@ class FixedStrideLookback:
         steps = 0
         while idx >= 0:
             if idx < culprit_index:
+                logger.debug(
+                    "Lookback found good_index=%d after steps=%d (start=%d culprit=%d stride=%d)",
+                    idx,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    self.stride,
+                )
                 return LookbackOutcome(good_index=idx, steps=steps)
             idx -= self.stride
             steps += 1
 
+        logger.debug(
+            "Lookback failed to find good_index (start=%d culprit=%d stride=%d steps=%d)",
+            start_index,
+            culprit_index,
+            self.stride,
+            steps,
+        )
         return LookbackOutcome(good_index=None, steps=steps)
 
 

@@ -9,8 +9,11 @@ index (the first commit at/after which tests fail), then simulate how many test
 executions are required to identify the culprit.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,10 +61,17 @@ class GitBisectBaseline:
         _ = risk_by_index  # reserved for future strategies
 
         if good_index >= bad_index:
+            logger.debug("Bisect skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
             return BisectionOutcome(tests=0, found_index=None)
 
         culprit_index = int(culprit_index)
         if culprit_index <= good_index or culprit_index > bad_index:
+            logger.debug(
+                "Bisect culprit out of range: good=%d bad=%d culprit=%d",
+                good_index,
+                bad_index,
+                culprit_index,
+            )
             return BisectionOutcome(tests=0, found_index=None)
 
         low = int(good_index)
@@ -76,6 +86,13 @@ class GitBisectBaseline:
             else:
                 low = mid
 
+        logger.debug(
+            "Bisect located culprit=%d in tests=%d (good=%d bad=%d)",
+            high,
+            tests,
+            good_index,
+            bad_index,
+        )
         return BisectionOutcome(tests=tests, found_index=high)
 
 

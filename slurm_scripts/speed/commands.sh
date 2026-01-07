@@ -84,7 +84,12 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_all_bugs.py --start-offset 83250
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
+--bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2025.jsonl \
+--log-level INFO \
+--dry-run
 
 
 echo "Script finished"
