@@ -2,9 +2,46 @@ import re
 import sys
 import json
 import os
-import pandas as pd
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def clean_commit_message(commit_message: str, *, clean_subject_only: bool = True) -> str:
+    """
+    Remove common noisy prefixes from commit messages.
+
+    Example:
+      "[wpt PR 55677] - Rename all WPT tests in dnd" -> "Rename all WPT tests in dnd"
+    """
+    if commit_message is None:
+        return ""
+
+    message = str(commit_message)
+    lines = message.splitlines()
+    if not lines:
+        return ""
+
+    def _clean_subject(subject: str) -> str:
+        # Remove one or more leading bracket/paren tags like:
+        #   "[foo] - bar", "[foo][bar] baz", "(#123): baz"
+        subject = re.sub(
+            r"^\s*(?:(?:\[[^\]]+\]|\([^)]+\))\s*)+(?:[-–—:]\s*)?",
+            "",
+            subject,
+            count=1,
+        )
+        return subject.strip()
+
+    if clean_subject_only:
+        # Clean the first non-empty line (the subject), keep the rest as-is.
+        for idx, line in enumerate(lines):
+            if line.strip():
+                lines[idx] = _clean_subject(line)
+                break
+        return "\n".join(lines).strip("\n")
+
+    cleaned_lines = [_clean_subject(line) if i == 0 else line for i, line in enumerate(lines)]
+    return "\n".join(cleaned_lines).strip("\n")
 
 
 def diff_to_structured_xml(diff_string):
@@ -143,6 +180,8 @@ def diff_to_structured_xml(diff_string):
 
 
 def main():
+    import pandas as pd
+
     input_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_perf", "perf_bugs_with_diff.jsonl")
     bugs_df = pd.read_json(input_data_path, lines=True)
     bugs_list = bugs_df.to_dict(orient='records')
