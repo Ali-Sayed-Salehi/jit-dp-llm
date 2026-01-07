@@ -433,8 +433,16 @@ def  _build_commit_time_search(commits: List[Dict[str, Any]]) -> Tuple[List[date
 def get_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Load and normalize data for git-bisect simulation.")
-    parser.add_argument("--bugs-path", default=BUGS_PATH)
-    parser.add_argument("--commits-path", default=COMMITS_PATH)
+    parser.add_argument(
+        "--bugs-path",
+        default=BUGS_PATH,
+        help="Path to `mozilla_jit.jsonl` (defaults to the repo's `datasets/mozilla_jit/`).",
+    )
+    parser.add_argument(
+        "--commits-path",
+        default=COMMITS_PATH,
+        help="Path to `all_commits.jsonl` (defaults to the repo's `datasets/mozilla_jit/`).",
+    )
     parser.add_argument("--risk-final", default=RISK_FINAL_PATH)
     parser.add_argument(
         "--output",
