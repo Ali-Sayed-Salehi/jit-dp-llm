@@ -15,13 +15,13 @@ from utils import diff_to_structured_xml
 parser = argparse.ArgumentParser(description="Choose which dataset to load")
 parser.add_argument(
     "--mode",
-    choices=["jit_llm", "jit_llm_struc", "jit_logreg", "mozilla_perf_struc"],
+    choices=["jit_llm", "jit_llm_struc", "jit_logreg", "mozilla_perf_struc", "mozilla_jit_struc"],
     required=True,
     help="""choose which data operation to do.
     jit_llm: JIT defect prediction dataset for LLMs,
     jit_logreg: JIT defect prediction dataset for logistic regression,
-    mozilla_perf: Mozilla Performance regression dataset,
-    mozilla_jit: Mozilla just-in-time defect prediction dataset,
+    mozilla_perf_struc: Mozilla Performance regression dataset,
+    mozilla_jit_struc: Mozilla just-in-time defect prediction dataset,
     jit_llm_struc: JIT defect prediction dataset for LLMs with structured commits
     """
 )
@@ -203,7 +203,7 @@ elif args.mode == "mozilla_jit_struc":
         dataset.append({'commit_id': commit_id, 'prompt': prompt, 'response': response})
 
     dataset_df = pd.DataFrame(dataset)
-    output_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_jit", "jit_llm_struc_2015.jsonl")
+    output_data_path = os.path.join(REPO_PATH, "datasets", "mozilla_jit", "jit_llm_struc_2025.jsonl")
     dataset_df.to_json(output_data_path, orient="records", lines=True)
     print(f"✅ Saved dataset to {output_data_path}")
 
