@@ -410,8 +410,6 @@ def simulate_strategy_combo(
     )
     return {
         "combo": f"{lookback_code}+{bisection_code}",
-        "lookback": {"code": lookback_code, "name": lookback.name},
-        "bisection": {"code": bisection_code, "name": bisection.name},
         "total_tests": total_tests,
         "total_lookback_tests": total_lookback_tests,
         "total_bisection_tests": total_bisection_tests,
@@ -562,6 +560,7 @@ def main() -> int:
                 )
             )
 
+    baseline_combo = f"{lookback_strategies[0][0]}+{bisection_strategies[0][0]}"
     summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
@@ -576,16 +575,12 @@ def main() -> int:
             "loaded": len(all_bugs),
             "simulated": len(bugs),
         },
-        "baseline": {
-            "combo": "FSL+GB",
-            "lookback": {"code": "FSL", "name": "fixed_stride"},
-            "bisection": {"code": "GB", "name": "git_bisect"},
-        },
-        "results": results,
         "risk_predictions": {
             "path": os.path.relpath(args.risk_final, REPO_ROOT),
             "num_commits_with_risk": len(final_risk_by_commit),
         },
+        "baseline": baseline_combo,
+        "results": results
     }
 
     logger.info("Writing summary to %s", args.output)
