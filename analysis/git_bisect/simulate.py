@@ -297,6 +297,7 @@ def simulate_strategy_combo(
     bugs: List[Dict[str, Any]],
     bugs_by_id: Dict[str, Dict[str, Any]],
     node_to_index: Dict[str, int],
+    nodes_by_index: List[Optional[str]],
     sorted_times_utc: List[datetime],
     sorted_time_indices: List[int],
     window_start: int,
@@ -308,6 +309,10 @@ def simulate_strategy_combo(
     bisection: BisectionStrategy,
 ) -> Dict[str, Any]:
     """Run simulation for a single (lookback, bisection) strategy pair."""
+    def _fmt(idx: int) -> str:
+        node = nodes_by_index[idx] if 0 <= idx < len(nodes_by_index) else None
+        return f"{idx} ({node})" if node else str(idx)
+
     total_tests = 0
     total_lookback_tests = 0
     total_bisection_tests = 0
@@ -366,7 +371,10 @@ def simulate_strategy_combo(
             start_index=bad_index, culprit_index=culprit_index
         )
         if lookback_outcome.good_index is None:
-            raise KeyError(f"lookback for Bug {bug.get('bug_id')} did not find a clean commit.")
+            raise KeyError(
+                "lookback did not find a clean commit for "
+                f"bug_id={bug.get('bug_id')} start_index={_fmt(bad_index)} culprit_index={_fmt(culprit_index)}"
+            )
 
         good_index = lookback_outcome.good_index
         lookback_tests = lookback_outcome.steps
@@ -377,13 +385,13 @@ def simulate_strategy_combo(
         if good_index >= bad_index:
             raise RuntimeError(
                 f"Invalid good/bad ordering for bug_id={bug.get('bug_id')}: "
-                f"good_index={good_index} >= bad_index={bad_index}"
+                f"good_index={_fmt(good_index)} >= bad_index={_fmt(bad_index)}"
             )
 
         if not (good_index < culprit_index <= bad_index):
             raise RuntimeError(
-                f"Invalid good/bad ordering for bug_id={bug.get('bug_id')}: "
-                f"good_index={good_index}, bad_index={bad_index}, culprit_index={culprit_index}"
+                f"Invalid culprit range for bug_id={bug.get('bug_id')}: "
+                f"good_index={_fmt(good_index)}, bad_index={_fmt(bad_index)}, culprit_index={_fmt(culprit_index)}"
             )
 
         bisect_outcome = bisection.run(
@@ -501,6 +509,9 @@ def main() -> int:
 
     commits = load_commits(args.commits_path)
     final_risk_by_commit = load_risk_predictions(args.risk_final)
+    nodes_by_index: List[Optional[str]] = [
+        str(c.get("node")) if c.get("node") else None for c in commits
+    ]
 
     node_to_index = build_node_to_index(commits)
     sorted_times_utc, sorted_time_indices = _build_commit_time_search(commits)
@@ -548,6 +559,7 @@ def main() -> int:
                     bugs=bugs,
                     bugs_by_id=bugs_by_id,
                     node_to_index=node_to_index,
+                    nodes_by_index=nodes_by_index,
                     sorted_times_utc=sorted_times_utc,
                     sorted_time_indices=sorted_time_indices,
                     window_start=window_start,
