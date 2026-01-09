@@ -39,10 +39,16 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from bisection import BisectionStrategy, GitBisectBaseline
-from lookback import FixedStrideLookback, LookbackStrategy
+from bisection import (
+    BisectionStrategy,
+    GitBisectBaseline,
+    RiskSeries,
+    RiskWeightedAdaptiveBisectionLogSurvival,
+    RiskWeightedAdaptiveBisectionSum,
+)
+from lookback import FixedStrideLookback, LookbackStrategy, NightlyBuildLookback
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -62,12 +68,12 @@ class StrategySpec:
     Declarative description of a strategy family for simulation/tuning.
 
     The `suggest_params` callable should use Optuna parameter names prefixed
-    with `<code>_` (e.g. `FSL_stride`) to avoid collisions across strategies.
+    with `<code>_` (e.g. `FSLB_stride`) to avoid collisions across strategies.
     """
     code: str
     name: str
     default_params: Dict[str, Any]
-    build: Callable[[Dict[str, Any]], Any]
+    build: Callable[["PreparedInputs", Dict[str, Any]], Any]
     suggest_params: Optional[Callable[[Any], Dict[str, Any]]] = None  # optuna.Trial -> params
 
 
@@ -399,7 +405,7 @@ def simulate_strategy_combo(
             continue
 
         lookback_outcome = lookback.find_good_index(
-            start_index=bad_index, culprit_index=culprit_index
+            start_index=bad_index, culprit_index=culprit_index, start_time_utc=bug_time
         )
         if lookback_outcome.good_index is None:
             raise KeyError(
@@ -500,7 +506,7 @@ class PreparedInputs:
     window_end: int
     window_start_node: Optional[str]
     window_end_node: Optional[str]
-    risk_by_index: List[Optional[float]]
+    risk_by_index: Sequence[Optional[float]]
     risk_predictions_path: str
     num_commits_with_risk: int
     num_bugs_loaded: int
@@ -539,6 +545,7 @@ def prepare_inputs(
         window_start=window_start,
         window_end=window_end,
     )
+    risk_by_index = RiskSeries(risk_by_index)
 
     all_bugs = load_bugs_with_available_regressors(
         bugs_path,
@@ -581,8 +588,8 @@ def run_combo(
 
     Returns the `simulate_strategy_combo` metrics with an added `params` field.
     """
-    lookback: LookbackStrategy = lookback_spec.build(lookback_params)
-    bisection: BisectionStrategy = bisection_spec.build(bisection_params)
+    lookback: LookbackStrategy = lookback_spec.build(inputs, lookback_params)
+    bisection: BisectionStrategy = bisection_spec.build(inputs, bisection_params)
 
     res = simulate_strategy_combo(
         bugs=inputs.bugs,
@@ -599,6 +606,8 @@ def run_combo(
         bisection_code=bisection_spec.code,
         bisection=bisection,
     )
+    if lookback_spec.name == NightlyBuildLookback.name and bisection_spec.name == GitBisectBaseline.name:
+        res["combo_label"] = "baseline"
     res["params"] = {
         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
         "bisection": {"code": bisection_spec.code, "name": bisection_spec.name, **bisection_params},
@@ -778,12 +787,22 @@ def main() -> int:
 
     lookback_specs: List[StrategySpec] = [
         StrategySpec(
-            code="FSL",
+            code="NBLB",
+            name="nightly_builds",
+            default_params={},
+            build=lambda inputs, _p: NightlyBuildLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+            ),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="FSLB",
             name="fixed_stride",
             default_params={"stride": 20},
-            build=lambda p: FixedStrideLookback(stride=int(p["stride"])),
+            build=lambda _inputs, p: FixedStrideLookback(stride=int(p["stride"])),
             suggest_params=lambda trial: {
-                "stride": trial.suggest_int("FSL_stride", 1, 500, log=True)
+                "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
             },
         ),
     ]
@@ -792,7 +811,21 @@ def main() -> int:
             code="GB",
             name="git_bisect",
             default_params={},
-            build=lambda _p: GitBisectBaseline(),
+            build=lambda _inputs, _p: GitBisectBaseline(),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="RWABS",
+            name="rwab-s",
+            default_params={},
+            build=lambda _inputs, _p: RiskWeightedAdaptiveBisectionSum(),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="RWABLS",
+            name="rwab-ls",
+            default_params={},
+            build=lambda _inputs, _p: RiskWeightedAdaptiveBisectionLogSurvival(),
             suggest_params=None,
         ),
     ]
@@ -827,6 +860,10 @@ def main() -> int:
         for lookback_spec in lookback_specs:
             for bisection_spec in bisection_specs:
                 combo_key = f"{lookback_spec.code}+{bisection_spec.code}"
+                is_baseline = (
+                    lookback_spec.name == NightlyBuildLookback.name
+                    and bisection_spec.name == GitBisectBaseline.name
+                )
                 logger.info("Optuna tuning combo=%s trials=%d", combo_key, int(args.mopt_trials))
                 lookback_params, bisection_params, payload = optimize_combo_params(
                     inputs=eval_inputs,
@@ -842,6 +879,7 @@ def main() -> int:
                 eval_results.append(
                     {
                         "combo": combo_key,
+                        **({"combo_label": "baseline"} if is_baseline else {}),
                         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name},
                         "bisection": {"code": bisection_spec.code, "name": bisection_spec.name},
                         "best_params": tuned_params_by_combo[combo_key],
@@ -852,6 +890,7 @@ def main() -> int:
         eval_summary = {
             "dataset": "eval",
             "dry_run": bool(args.dry_run),
+            "baseline_combo": "NBLB+GB",
             "commit_window": {
                 "start_index": eval_inputs.window_start,
                 "end_index": eval_inputs.window_end,
@@ -931,6 +970,7 @@ def main() -> int:
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
+        "baseline_combo": "NBLB+GB",
         "commit_window": {
             "start_index": final_inputs.window_start,
             "end_index": final_inputs.window_end,
