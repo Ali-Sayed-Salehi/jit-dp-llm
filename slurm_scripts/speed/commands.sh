@@ -89,7 +89,7 @@ echo "Running script ..."
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
 --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2025.jsonl \
 --log-level INFO \
---dry-run
+# --dry-run
 
 
 echo "Script finished"

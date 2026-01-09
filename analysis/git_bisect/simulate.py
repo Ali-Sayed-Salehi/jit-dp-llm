@@ -323,6 +323,7 @@ def simulate_strategy_combo(
         "no_available_regressors": 0,
         "bad_not_in_window": 0,
         "good_not_in_window": 0,
+        "culprit_after_bad": 0,
         "no_regressors_in_range": 0,
     }
 
@@ -366,6 +367,15 @@ def simulate_strategy_combo(
             raise KeyError(
                 f"Regressor bug_id={reg_bug_id} revision={reg_rev} not found in commits list."
             )
+
+        # Invariant for this simulation: the regression is observed at `bad_index`,
+        # so `bad_index` must be at/after the regressor commit index. If
+        # `culprit_index > bad_index`, then the "bad" commit is actually still
+        # "good" under the linear-history test model, indicating inconsistent
+        # timestamps/labels for this bug.
+        if culprit_index > bad_index:
+            skipped["culprit_after_bad"] += 1
+            continue
 
         lookback_outcome = lookback.find_good_index(
             start_index=bad_index, culprit_index=culprit_index
