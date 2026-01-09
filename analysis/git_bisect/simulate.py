@@ -26,8 +26,8 @@ Simulation outline for each regression bug:
   4) Run the configured bisection strategy to locate the single culprit and count tests.
 
 Run:
-  - `python analysis/git_bisect/simulate.py --dry-run`
-  - Results are written as a JSON summary to `--output`.
+  - Evaluation (Optuna tuning): `python analysis/git_bisect/simulate.py --mopt-trials 200`
+  - Replay tuned params on final test: `python analysis/git_bisect/simulate.py --final-only`
 """
 
 from __future__ import annotations
@@ -37,8 +37,9 @@ import bisect
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from bisection import BisectionStrategy, GitBisectBaseline
 from lookback import FixedStrideLookback, LookbackStrategy
@@ -49,11 +50,25 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BUGS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_jit", "mozilla_jit.jsonl")
 COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_jit", "all_commits.jsonl")
 
-RISK_FINAL_PATH = os.path.join(
-    REPO_ROOT, "analysis", "git_bisect", "risk_predictions_final_test.json"
-)
+RISK_EVAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_eval.json")
+RISK_FINAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_final_test.json")
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StrategySpec:
+    """
+    Declarative description of a strategy family for simulation/tuning.
+
+    The `suggest_params` callable should use Optuna parameter names prefixed
+    with `<code>_` (e.g. `FSL_stride`) to avoid collisions across strategies.
+    """
+    code: str
+    name: str
+    default_params: Dict[str, Any]
+    build: Callable[[Dict[str, Any]], Any]
+    suggest_params: Optional[Callable[[Any], Dict[str, Any]]] = None  # optuna.Trial -> params
 
 
 def _read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -471,6 +486,220 @@ def  _build_commit_time_search(commits: List[Dict[str, Any]]) -> Tuple[List[date
     return [t for t, _ in pairs], [i for _, i in pairs]
 
 
+@dataclass(frozen=True)
+class PreparedInputs:
+    """Preloaded, pre-indexed inputs required to run a simulation on one dataset."""
+    dataset: str
+    bugs: List[Dict[str, Any]]
+    bugs_by_id: Dict[str, Dict[str, Any]]
+    node_to_index: Dict[str, int]
+    nodes_by_index: List[Optional[str]]
+    sorted_times_utc: List[datetime]
+    sorted_time_indices: List[int]
+    window_start: int
+    window_end: int
+    window_start_node: Optional[str]
+    window_end_node: Optional[str]
+    risk_by_index: List[Optional[float]]
+    risk_predictions_path: str
+    num_commits_with_risk: int
+    num_bugs_loaded: int
+
+
+def prepare_inputs(
+    *,
+    dataset: str,
+    bugs_path: str,
+    commits_path: str,
+    risk_path: str,
+    dry_run: bool,
+) -> PreparedInputs:
+    """
+    Load commits, predictions, and bugs; build indices and the commit window.
+
+    This does all expensive IO and preprocessing once so that Optuna trials can
+    reuse the same prepared state.
+    """
+    commits = load_commits(commits_path)
+    risk_by_commit = load_risk_predictions(risk_path)
+    nodes_by_index: List[Optional[str]] = [
+        str(c.get("node")) if c.get("node") else None for c in commits
+    ]
+
+    node_to_index = build_node_to_index(commits)
+    sorted_times_utc, sorted_time_indices = _build_commit_time_search(commits)
+
+    window_start, window_end = _risk_window_from_predictions(commits, risk_by_commit)
+    window_start_node = commits[window_start].get("node")
+    window_end_node = commits[window_end].get("node")
+
+    risk_by_index = build_risk_by_index(
+        commits=commits,
+        risk_by_commit=risk_by_commit,
+        window_start=window_start,
+        window_end=window_end,
+    )
+
+    all_bugs = load_bugs_with_available_regressors(
+        bugs_path,
+        node_to_index=node_to_index,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    bugs = all_bugs[:1000] if dry_run else all_bugs
+    bugs_by_id = build_bug_id_index(all_bugs)
+
+    return PreparedInputs(
+        dataset=dataset,
+        bugs=bugs,
+        bugs_by_id=bugs_by_id,
+        node_to_index=node_to_index,
+        nodes_by_index=nodes_by_index,
+        sorted_times_utc=sorted_times_utc,
+        sorted_time_indices=sorted_time_indices,
+        window_start=window_start,
+        window_end=window_end,
+        window_start_node=str(window_start_node) if window_start_node else None,
+        window_end_node=str(window_end_node) if window_end_node else None,
+        risk_by_index=risk_by_index,
+        risk_predictions_path=risk_path,
+        num_commits_with_risk=len(risk_by_commit),
+        num_bugs_loaded=len(all_bugs),
+    )
+
+
+def run_combo(
+    *,
+    inputs: PreparedInputs,
+    lookback_spec: StrategySpec,
+    lookback_params: Dict[str, Any],
+    bisection_spec: StrategySpec,
+    bisection_params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Build concrete strategy instances and run a single simulation combo.
+
+    Returns the `simulate_strategy_combo` metrics with an added `params` field.
+    """
+    lookback: LookbackStrategy = lookback_spec.build(lookback_params)
+    bisection: BisectionStrategy = bisection_spec.build(bisection_params)
+
+    res = simulate_strategy_combo(
+        bugs=inputs.bugs,
+        bugs_by_id=inputs.bugs_by_id,
+        node_to_index=inputs.node_to_index,
+        nodes_by_index=inputs.nodes_by_index,
+        sorted_times_utc=inputs.sorted_times_utc,
+        sorted_time_indices=inputs.sorted_time_indices,
+        window_start=inputs.window_start,
+        window_end=inputs.window_end,
+        risk_by_index=inputs.risk_by_index,
+        lookback_code=lookback_spec.code,
+        lookback=lookback,
+        bisection_code=bisection_spec.code,
+        bisection=bisection,
+    )
+    res["params"] = {
+        "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
+        "bisection": {"code": bisection_spec.code, "name": bisection_spec.name, **bisection_params},
+    }
+    return res
+
+
+def optimize_combo_params(
+    *,
+    inputs: PreparedInputs,
+    lookback_spec: StrategySpec,
+    bisection_spec: StrategySpec,
+    n_trials: int,
+    seed: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """
+    Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
+
+    Objective:
+      - Minimize `total_tests`.
+      - Treat trials as infeasible if any processed bug fails to identify a culprit
+        (i.e., `total_culprits_found < processed`), returning `inf`.
+
+    Returns (best_lookback_params, best_bisection_params, payload) where payload
+    includes `metrics` (re-run at best params) and `optuna` metadata.
+    """
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
+
+    sampler = optuna.samplers.TPESampler(seed=int(seed))
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+
+    def objective(trial: Any) -> float:
+        lookback_params = (
+            lookback_spec.suggest_params(trial)
+            if lookback_spec.suggest_params is not None
+            else dict(lookback_spec.default_params)
+        )
+        bisection_params = (
+            bisection_spec.suggest_params(trial)
+            if bisection_spec.suggest_params is not None
+            else dict(bisection_spec.default_params)
+        )
+
+        res = run_combo(
+            inputs=inputs,
+            lookback_spec=lookback_spec,
+            lookback_params=lookback_params,
+            bisection_spec=bisection_spec,
+            bisection_params=bisection_params,
+        )
+
+        processed = int(res["bugs"]["processed"])
+        found = int(res["total_culprits_found"])
+        if processed <= 0 or found < processed:
+            return float("inf")
+        return float(res["total_tests"])
+
+    study.optimize(objective, n_trials=int(n_trials), show_progress_bar=False)
+
+    best_trial_params_raw = dict(study.best_trial.params)
+    for key in best_trial_params_raw.keys():
+        if not (
+            key.startswith(f"{lookback_spec.code}_")
+            or key.startswith(f"{bisection_spec.code}_")
+        ):
+            raise ValueError(
+                "Optuna parameter names must be prefixed with strategy code "
+                f"(expected {lookback_spec.code}_* or {bisection_spec.code}_*), got: {key}"
+            )
+
+    best_lookback_params = dict(lookback_spec.default_params)
+    best_bisection_params = dict(bisection_spec.default_params)
+    if lookback_spec.suggest_params is not None or bisection_spec.suggest_params is not None:
+        # Only keys produced by suggest_* are present; keep defaults for other params.
+        for k, v in best_trial_params_raw.items():
+            if k.startswith(f"{lookback_spec.code}_"):
+                best_lookback_params[k[len(f"{lookback_spec.code}_") :]] = v
+            if k.startswith(f"{bisection_spec.code}_"):
+                best_bisection_params[k[len(f"{bisection_spec.code}_") :]] = v
+
+    # Re-run once at the chosen point to record metrics.
+    best_res = run_combo(
+        inputs=inputs,
+        lookback_spec=lookback_spec,
+        lookback_params=best_lookback_params,
+        bisection_spec=bisection_spec,
+        bisection_params=best_bisection_params,
+    )
+    optuna_meta = {
+        "n_trials": int(n_trials),
+        "seed": int(seed),
+        "best_trial_number": int(study.best_trial.number),
+        "best_value_total_tests": float(study.best_value),
+        "best_trial_params_raw": best_trial_params_raw,
+    }
+    return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
+
+
 def get_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Load and normalize data for git-bisect simulation.")
@@ -484,6 +713,7 @@ def get_args() -> argparse.Namespace:
         default=COMMITS_PATH,
         help="Path to `all_commits.jsonl` (defaults to the repo's `datasets/mozilla_jit/`).",
     )
+    parser.add_argument("--risk-eval", default=RISK_EVAL_PATH)
     parser.add_argument("--risk-final", default=RISK_FINAL_PATH)
     parser.add_argument(
         "--log-level",
@@ -492,14 +722,36 @@ def get_args() -> argparse.Namespace:
         help="Python logging level.",
     )
     parser.add_argument(
-        "--output",
-        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_baseline_final_test.json"),
-        help="Where to write the JSON summary output.",
+        "--output-eval",
+        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_optuna_eval.json"),
+        help="Where to write the EVAL Optuna tuning output JSON.",
+    )
+    parser.add_argument(
+        "--output-final",
+        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_optuna_final_test.json"),
+        help="Where to write the FINAL replay output JSON.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only simulate the first 1k bug rows (for quick iteration).",
+    )
+    parser.add_argument(
+        "--mopt-trials",
+        type=int,
+        default=200,
+        help="Number of Optuna trials per (lookback,bisection) combo on EVAL.",
+    )
+    parser.add_argument(
+        "--optuna-seed",
+        type=int,
+        default=42,
+        help="Random seed for Optuna samplers.",
+    )
+    parser.add_argument(
+        "--final-only",
+        action="store_true",
+        help="Skip eval tuning; read best params from --output-eval and run FINAL replay only.",
     )
     return parser.parse_args()
 
@@ -514,110 +766,197 @@ def main() -> int:
     )
     logger.info("Using bugs_path=%s", args.bugs_path)
     logger.info("Using commits_path=%s", args.commits_path)
+    logger.info("Using risk_eval=%s", args.risk_eval)
     logger.info("Using risk_final=%s", args.risk_final)
 
-    for p in (args.bugs_path, args.commits_path, args.risk_final):
+    for p in (args.bugs_path, args.commits_path, args.risk_eval, args.risk_final):
         if not os.path.exists(p):
             raise FileNotFoundError(
                 f"Required input not found: {p}\n"
                 "If you use DVC, ensure datasets are pulled into `datasets/`."
             )
 
-    commits = load_commits(args.commits_path)
-    final_risk_by_commit = load_risk_predictions(args.risk_final)
-    nodes_by_index: List[Optional[str]] = [
-        str(c.get("node")) if c.get("node") else None for c in commits
+    lookback_specs: List[StrategySpec] = [
+        StrategySpec(
+            code="FSL",
+            name="fixed_stride",
+            default_params={"stride": 20},
+            build=lambda p: FixedStrideLookback(stride=int(p["stride"])),
+            suggest_params=lambda trial: {
+                "stride": trial.suggest_int("FSL_stride", 1, 500, log=True)
+            },
+        ),
+    ]
+    bisection_specs: List[StrategySpec] = [
+        StrategySpec(
+            code="GB",
+            name="git_bisect",
+            default_params={},
+            build=lambda _p: GitBisectBaseline(),
+            suggest_params=None,
+        ),
     ]
 
-    node_to_index = build_node_to_index(commits)
-    sorted_times_utc, sorted_time_indices = _build_commit_time_search(commits)
+    tuned_params_by_combo: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    eval_summary: Optional[Dict[str, Any]] = None
 
-    window_start, window_end = _risk_window_from_predictions(commits, final_risk_by_commit)
-    window_start_node = commits[window_start].get("node")
-    window_end_node = commits[window_end].get("node")
+    if not args.final_only:
+        eval_inputs = prepare_inputs(
+            dataset="eval",
+            bugs_path=args.bugs_path,
+            commits_path=args.commits_path,
+            risk_path=args.risk_eval,
+            dry_run=bool(args.dry_run),
+        )
+        logger.info(
+            "EVAL risk window: [%d,%d] (%s..%s) over %d commits",
+            eval_inputs.window_start,
+            eval_inputs.window_end,
+            eval_inputs.window_start_node,
+            eval_inputs.window_end_node,
+            eval_inputs.window_end - eval_inputs.window_start + 1,
+        )
+        logger.info(
+            "Loaded bugs=%d (simulating=%d dry_run=%s) for EVAL",
+            eval_inputs.num_bugs_loaded,
+            len(eval_inputs.bugs),
+            bool(args.dry_run),
+        )
+
+        eval_results: List[Dict[str, Any]] = []
+        for lookback_spec in lookback_specs:
+            for bisection_spec in bisection_specs:
+                combo_key = f"{lookback_spec.code}+{bisection_spec.code}"
+                logger.info("Optuna tuning combo=%s trials=%d", combo_key, int(args.mopt_trials))
+                lookback_params, bisection_params, payload = optimize_combo_params(
+                    inputs=eval_inputs,
+                    lookback_spec=lookback_spec,
+                    bisection_spec=bisection_spec,
+                    n_trials=int(args.mopt_trials),
+                    seed=int(args.optuna_seed),
+                )
+                tuned_params_by_combo[combo_key] = {
+                    "lookback": lookback_params,
+                    "bisection": bisection_params,
+                }
+                eval_results.append(
+                    {
+                        "combo": combo_key,
+                        "lookback": {"code": lookback_spec.code, "name": lookback_spec.name},
+                        "bisection": {"code": bisection_spec.code, "name": bisection_spec.name},
+                        "best_params": tuned_params_by_combo[combo_key],
+                        **payload,
+                    }
+                )
+
+        eval_summary = {
+            "dataset": "eval",
+            "dry_run": bool(args.dry_run),
+            "commit_window": {
+                "start_index": eval_inputs.window_start,
+                "end_index": eval_inputs.window_end,
+                "start_node": eval_inputs.window_start_node,
+                "end_node": eval_inputs.window_end_node,
+                "num_commits": eval_inputs.window_end - eval_inputs.window_start + 1,
+            },
+            "bugs": {"loaded": eval_inputs.num_bugs_loaded, "simulated": len(eval_inputs.bugs)},
+            "risk_predictions": {
+                "path": os.path.relpath(eval_inputs.risk_predictions_path, REPO_ROOT),
+                "num_commits_with_risk": eval_inputs.num_commits_with_risk,
+            },
+            "optimization": {
+                "mopt_trials_per_combo": int(args.mopt_trials),
+                "optuna_seed": int(args.optuna_seed),
+                "objective": "minimize total_tests; infeasible if culprits_found < processed",
+            },
+            "results": eval_results,
+        }
+
+        logger.info("Writing EVAL summary to %s", args.output_eval)
+        os.makedirs(os.path.dirname(args.output_eval), exist_ok=True)
+        with open(args.output_eval, "w", encoding="utf-8") as f:
+            json.dump(eval_summary, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(args.output_eval)
+    else:
+        logger.info("Loading tuned params from %s", args.output_eval)
+        with open(args.output_eval, "r", encoding="utf-8") as f:
+            eval_summary = json.load(f)
+        for row in eval_summary.get("results", []):
+            combo_key = row.get("combo")
+            best_params = row.get("best_params")
+            if combo_key and isinstance(best_params, dict):
+                tuned_params_by_combo[str(combo_key)] = best_params
+
+    final_inputs = prepare_inputs(
+        dataset="final_test",
+        bugs_path=args.bugs_path,
+        commits_path=args.commits_path,
+        risk_path=args.risk_final,
+        dry_run=bool(args.dry_run),
+    )
     logger.info(
-        "Risk window: [%d,%d] (%s..%s) over %d commits",
-        window_start,
-        window_end,
-        window_start_node,
-        window_end_node,
-        window_end - window_start + 1,
+        "FINAL risk window: [%d,%d] (%s..%s) over %d commits",
+        final_inputs.window_start,
+        final_inputs.window_end,
+        final_inputs.window_start_node,
+        final_inputs.window_end_node,
+        final_inputs.window_end - final_inputs.window_start + 1,
     )
-    risk_by_index = build_risk_by_index(
-        commits=commits,
-        risk_by_commit=final_risk_by_commit,
-        window_start=window_start,
-        window_end=window_end,
+    logger.info(
+        "Loaded bugs=%d (simulating=%d dry_run=%s) for FINAL",
+        final_inputs.num_bugs_loaded,
+        len(final_inputs.bugs),
+        bool(args.dry_run),
     )
 
-    all_bugs = load_bugs_with_available_regressors(
-        args.bugs_path,
-        node_to_index=node_to_index,
-        window_start=window_start,
-        window_end=window_end,
-    )
-    bugs = all_bugs[:1000] if args.dry_run else all_bugs
-    bugs_by_id = build_bug_id_index(all_bugs)
-    logger.info("Loaded bugs=%d (simulating=%d dry_run=%s)", len(all_bugs), len(bugs), bool(args.dry_run))
-
-    lookback_strategies: List[Tuple[str, LookbackStrategy]] = [
-        ("FSL", FixedStrideLookback(stride=20)),
-    ]
-    bisection_strategies: List[Tuple[str, BisectionStrategy]] = [
-        ("GB", GitBisectBaseline()),
-    ]
-
-    results: List[Dict[str, Any]] = []
-    for lookback_code, lookback in lookback_strategies:
-        for bisection_code, bisection in bisection_strategies:
-            results.append(
-                simulate_strategy_combo(
-                    bugs=bugs,
-                    bugs_by_id=bugs_by_id,
-                    node_to_index=node_to_index,
-                    nodes_by_index=nodes_by_index,
-                    sorted_times_utc=sorted_times_utc,
-                    sorted_time_indices=sorted_time_indices,
-                    window_start=window_start,
-                    window_end=window_end,
-                    risk_by_index=risk_by_index,
-                    lookback_code=lookback_code,
-                    lookback=lookback,
-                    bisection_code=bisection_code,
-                    bisection=bisection,
+    final_results: List[Dict[str, Any]] = []
+    for lookback_spec in lookback_specs:
+        for bisection_spec in bisection_specs:
+            combo_key = f"{lookback_spec.code}+{bisection_spec.code}"
+            params = tuned_params_by_combo.get(combo_key) or {
+                "lookback": dict(lookback_spec.default_params),
+                "bisection": dict(bisection_spec.default_params),
+            }
+            final_results.append(
+                run_combo(
+                    inputs=final_inputs,
+                    lookback_spec=lookback_spec,
+                    lookback_params=dict(params.get("lookback") or {}),
+                    bisection_spec=bisection_spec,
+                    bisection_params=dict(params.get("bisection") or {}),
                 )
             )
 
-    baseline_combo = f"{lookback_strategies[0][0]}+{bisection_strategies[0][0]}"
-    summary: Dict[str, Any] = {
+    final_summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
         "commit_window": {
-            "start_index": window_start,
-            "end_index": window_end,
-            "start_node": window_start_node,
-            "end_node": window_end_node,
-            "num_commits": window_end - window_start + 1,
+            "start_index": final_inputs.window_start,
+            "end_index": final_inputs.window_end,
+            "start_node": final_inputs.window_start_node,
+            "end_node": final_inputs.window_end_node,
+            "num_commits": final_inputs.window_end - final_inputs.window_start + 1,
         },
-        "bugs": {
-            "loaded": len(all_bugs),
-            "simulated": len(bugs),
-        },
+        "bugs": {"loaded": final_inputs.num_bugs_loaded, "simulated": len(final_inputs.bugs)},
         "risk_predictions": {
-            "path": os.path.relpath(args.risk_final, REPO_ROOT),
-            "num_commits_with_risk": len(final_risk_by_commit),
+            "path": os.path.relpath(final_inputs.risk_predictions_path, REPO_ROOT),
+            "num_commits_with_risk": final_inputs.num_commits_with_risk,
         },
-        "baseline": baseline_combo,
-        "results": results
+        "tuned_from_eval": {
+            "path": os.path.relpath(args.output_eval, REPO_ROOT),
+            "present": bool(eval_summary),
+        },
+        "results": final_results,
     }
 
-    logger.info("Writing summary to %s", args.output)
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+    logger.info("Writing FINAL summary to %s", args.output_final)
+    os.makedirs(os.path.dirname(args.output_final), exist_ok=True)
+    with open(args.output_final, "w", encoding="utf-8") as f:
+        json.dump(final_summary, f, indent=2, sort_keys=True)
         f.write("\n")
 
-    print(args.output)
+    print(args.output_final)
     return 0
 
 

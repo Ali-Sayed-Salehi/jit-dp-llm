@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class LookbackOutcome:
+    """Result of selecting a known-good commit for a single bug/regression."""
     good_index: Optional[int]
     steps: int
 

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BisectionOutcome:
+    """Result of a bisection run: tests executed and the located culprit index (if any)."""
     tests: int
     found_index: Optional[int]
 
