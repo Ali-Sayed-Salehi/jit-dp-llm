@@ -634,6 +634,25 @@ def optimize_combo_params(
     Returns (best_lookback_params, best_bisection_params, payload) where payload
     includes `metrics` (re-run at best params) and `optuna` metadata.
     """
+    if lookback_spec.suggest_params is None and bisection_spec.suggest_params is None:
+        # Nothing to optimize: run once at defaults and return.
+        best_lookback_params = dict(lookback_spec.default_params)
+        best_bisection_params = dict(bisection_spec.default_params)
+        best_res = run_combo(
+            inputs=inputs,
+            lookback_spec=lookback_spec,
+            lookback_params=best_lookback_params,
+            bisection_spec=bisection_spec,
+            bisection_params=best_bisection_params,
+        )
+        optuna_meta = {
+            "skipped": True,
+            "reason": "no_suggest_params",
+            "n_trials": 0,
+            "seed": int(seed),
+        }
+        return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
+
     try:
         import optuna
     except ImportError as exc:
