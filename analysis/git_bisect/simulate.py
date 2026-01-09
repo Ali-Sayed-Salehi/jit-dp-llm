@@ -212,10 +212,16 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
     with open(path, "r", encoding="utf-8") as f:
         blob = json.load(f)
 
-    samples = blob.get("samples") or []
+    samples = blob.get("results")
+    if not samples:
+        samples = blob.get("samples")
+    if not samples:
+        raise ValueError(
+            f"No prediction rows found in {path}: expected a non-empty `results`, `samples`, or `sample` list."
+        )
     label_order = blob.get("label_order") or ["NEGATIVE", "POSITIVE"]
     if not isinstance(samples, list):
-        raise ValueError(f"Expected `samples` list in {path}")
+        raise ValueError(f"Expected `results`/`samples` list in {path}")
     if not isinstance(label_order, list):
         raise ValueError(f"Expected `label_order` list in {path}")
 
