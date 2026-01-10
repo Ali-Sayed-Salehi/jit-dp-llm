@@ -1,18 +1,53 @@
 #!/usr/bin/env python3
 """
-Compute how many performance jobs run per revision on autoland.
+Compute how many performance jobs run per revision on Mozilla autoland.
 
-This script:
-- Loads perf test signatures from job_durations.csv.
-- Uses all_commits.jsonl as the canonical set of autoland revisions,
-  restricted to a configurable timeframe and excluding very recent submissions.
-- For each relevant revision, counts jobs whose submit_time is within
-  five minutes after the push timestamp.
-- Uses an intermediate JSONL cache that stores all jobs for each signature
-  (one JSON object per line: {"signature_id", "jobs"}), so that subsequent runs
-  can resume and/or reuse cached data instead of making fresh API calls.
-- Writes a CSV with revision, submission timestamp, and total job count,
-  plus summary statistics and a distribution plot.
+Goal
+  Produce a per-revision "how many perf tests ran?" signal over a fixed UTC
+  commit date window. This is useful for understanding perf coverage over time
+  (e.g., before doing downstream analysis or simulation).
+
+What gets counted
+  - The unit of counting is a Treeherder performance *signature* (i.e. a perf
+    test signature id), not individual job instances:
+      *For each revision, count the number of unique signature IDs that have at
+      least one job associated with that revision.*
+  - A signature contributes at most 1 count per revision even if multiple jobs
+    exist.
+  - Jobs are associated to a revision when they pass a timing sanity check:
+      - If the job has no `submit_time` (older Treeherder records), it is
+        accepted without the timing filter.
+      - Otherwise, require `push_timestamp` and only accept jobs whose
+        `submit_time` is in the interval:
+          [push_timestamp, push_timestamp + 10 minutes]
+
+Data sources
+  - Signature IDs are fetched from Treeherder via `performance/signatures`.
+  - Jobs per signature are fetched from Treeherder via `performance/summary`
+    using a lookback interval derived from `REVISION_START_DATE`.
+  - The canonical set of revisions comes from:
+      `datasets/mozilla_perf/all_commits.jsonl`
+    (one JSON object per line containing `node` and `date`).
+
+Caching / resumability
+  Treeherder calls are the expensive step. To make the process restartable,
+  per-signature job data is cached in JSONL:
+    `datasets/mozilla_perf/perf_jobs_by_signature.jsonl`
+  Each line is:
+    {"signature_id": <int>, "jobs": [<job dict>, ...]}
+  On subsequent runs, signatures already present in the cache are not refetched.
+
+Outputs (written under `datasets/mozilla_perf/`)
+  - `perf_jobs_per_revision.csv`: revision, submit_time_iso (commit time), count
+  - `perf_jobs_per_revision_details.jsonl`: same + signature_ids list
+  - `perf_jobs_stats.json`: summary statistics over counts
+  - `perf_jobs_per_revision_dist.png`: histogram of counts
+
+Configuration / usage
+  - Edit `REVISION_START_DATE` / `REVISION_END_DATE` to change the revision
+    window.
+  - Run: `python data_extraction/treeherder/get_num_perf_tests.py`
+  - Debug mode (`--debug`) samples up to 20 signatures to keep runtime short.
 """
 
 import os
@@ -294,7 +329,7 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
     Rules:
       - A signature is counted at most once per revision, even if it has
         multiple jobs.
-      - Only count jobs where submit_time is within 5 minutes AFTER push_timestamp.
+      - Only count jobs where submit_time is within 10 minutes AFTER push_timestamp.
       - Only consider revisions present in allowed_revisions, which are:
           * whose commit timestamps fall within the configured revision
             date window [REVISION_START_DATE, REVISION_END_DATE].
@@ -316,7 +351,7 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
             submit_time_str = job.get("submit_time")
 
             # If submit_time is missing (jobs older than 2025-08-08), accept the job without applying
-            # the 5-minute condition.
+            # the submit_time/push_timestamp timing condition.
             if not submit_time_str:
                 revision_signatures[rev].add(sig_id)
                 continue
@@ -334,7 +369,7 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
                 continue
 
             diff = submit_time - push_ts
-            # Only consider jobs where submit_time is in [push_ts, push_ts + 5 min]
+            # Only consider jobs where submit_time is in [push_ts, push_ts + 10 min]
             if diff < timedelta(0) or diff > max_diff:
                 continue
 
@@ -582,7 +617,7 @@ if __name__ == "__main__":
             "Compute how many performance jobs run per revision on autoland. "
             "Uses a per-signature JSONL cache so interrupted runs can resume. "
             "In debug mode, only fetch results for 20 randomly selected "
-            "signatures from job_durations.csv."
+            "signatures."
         )
     )
     parser.add_argument(
