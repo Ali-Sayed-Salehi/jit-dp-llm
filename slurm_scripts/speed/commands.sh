@@ -94,9 +94,11 @@ echo "Running script ..."
 # --log-level INFO
 # # --dry-run
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_sigs.py
+
+python /home/ali/repos/jit-dp-llm/data_extraction/treeherder/create_sig_groups.py
 
 
 echo "Script finished"
