@@ -606,8 +606,6 @@ def run_combo(
         bisection_code=bisection_spec.code,
         bisection=bisection,
     )
-    if lookback_spec.name == NightlyBuildLookback.name and bisection_spec.name == GitBisectBaseline.name:
-        res["combo_label"] = "baseline"
     res["params"] = {
         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
         "bisection": {"code": bisection_spec.code, "name": bisection_spec.name, **bisection_params},
@@ -851,6 +849,35 @@ def main() -> int:
 
     tuned_params_by_combo: Dict[str, Dict[str, Dict[str, Any]]] = {}
     eval_summary: Optional[Dict[str, Any]] = None
+    baseline_combo = "NBLB+GB"
+
+    def _pct_vs_baseline(*, total_tests: int, baseline_total_tests: int) -> Optional[float]:
+        if baseline_total_tests <= 0:
+            return None
+        return 100.0 * (float(baseline_total_tests) - float(total_tests)) / float(baseline_total_tests)
+
+    def _annotate_results_with_baseline(
+        *,
+        results: List[Dict[str, Any]],
+        get_total_tests: Any,
+        set_pct_vs_baseline: Any,
+    ) -> Dict[str, Any]:
+        baseline_row = next((r for r in results if str(r.get("combo")) == baseline_combo), None)
+        if baseline_row is None:
+            raise RuntimeError(f"Baseline combo {baseline_combo!r} not found in results.")
+
+        baseline_total_tests = int(get_total_tests(baseline_row))
+        for row in results:
+            pct = _pct_vs_baseline(
+                total_tests=int(get_total_tests(row)),
+                baseline_total_tests=baseline_total_tests,
+            )
+            set_pct_vs_baseline(row, pct)
+
+        best_row = min(results, key=lambda r: int(get_total_tests(r)))
+        return {
+            "best_combo_by_total_tests": str(best_row.get("combo")),
+        }
 
     if not args.final_only:
         eval_inputs = prepare_inputs(
@@ -898,7 +925,6 @@ def main() -> int:
                 eval_results.append(
                     {
                         "combo": combo_key,
-                        **({"combo_label": "baseline"} if is_baseline else {}),
                         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name},
                         "bisection": {"code": bisection_spec.code, "name": bisection_spec.name},
                         "best_params": tuned_params_by_combo[combo_key],
@@ -906,10 +932,17 @@ def main() -> int:
                     }
                 )
 
+        eval_comparison = _annotate_results_with_baseline(
+            results=eval_results,
+            get_total_tests=lambda r: (r.get("metrics") or {}).get("total_tests", 0),
+            set_pct_vs_baseline=lambda r, pct: r.setdefault("metrics", {}).update(
+                {"total_tests_vs_baseline_pct": pct}
+            ),
+        )
         eval_summary = {
             "dataset": "eval",
             "dry_run": bool(args.dry_run),
-            "baseline_combo": "NBLB+GB",
+            **eval_comparison,
             "commit_window": {
                 "start_index": eval_inputs.window_start,
                 "end_index": eval_inputs.window_end,
@@ -986,10 +1019,15 @@ def main() -> int:
                 )
             )
 
+    final_comparison = _annotate_results_with_baseline(
+        results=final_results,
+        get_total_tests=lambda r: r.get("total_tests", 0),
+        set_pct_vs_baseline=lambda r, pct: r.__setitem__("total_tests_vs_baseline_pct", pct),
+    )
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
-        "baseline_combo": "NBLB+GB",
+        **final_comparison,
         "commit_window": {
             "start_index": final_inputs.window_start,
             "end_index": final_inputs.window_end,
