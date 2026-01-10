@@ -24,10 +24,13 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 # Output paths
 DATASET_DIR = os.path.join(REPO_ROOT, "datasets", "mozilla_perf")
 CSV_PATH = os.path.join(DATASET_DIR, "job_durations.csv")
+SIG_GROUP_CSV_PATH = os.path.join(DATASET_DIR, "sig_group_job_durations.csv")
 PLOT_PATH = os.path.join(DATASET_DIR, "job_durations.png")
+SIG_GROUP_STATS_PATH = os.path.join(DATASET_DIR, "sig_group_job_duration_stats.json")
 
 # Input: per-signature jobs cache produced by get_num_perf_tests.py
 SIGNATURE_JOBS_JSONL = os.path.join(DATASET_DIR, "perf_jobs_by_signature.jsonl")
+SIG_GROUPS_JSONL = os.path.join(DATASET_DIR, "sig_groups.jsonl")
 
 REPOSITORY = "autoland"
 client = TreeherderClient()
@@ -87,6 +90,60 @@ def load_signature_jobs(jsonl_path: str):
     return signature_jobs
 
 
+def load_signature_to_group_id(sig_groups_jsonl_path: str) -> dict[int, int]:
+    """
+    Load signature-group mapping from a JSONL file with lines like:
+      {"Sig_group_id": 1083, "signatures": [5436251, 5436252]}
+
+    Returns dict[int, int] mapping signature_id -> signature_group_id.
+    """
+    signature_to_group: dict[int, int] = {}
+    collisions = 0
+
+    with open(sig_groups_jsonl_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            group_id = record.get("Sig_group_id")
+            signatures = record.get("signatures", [])
+            if group_id is None or not signatures:
+                continue
+
+            try:
+                group_id_int = int(group_id)
+            except Exception:
+                continue
+
+            for signature_id in signatures:
+                try:
+                    signature_id_int = int(signature_id)
+                except Exception:
+                    continue
+
+                prev = signature_to_group.get(signature_id_int)
+                if prev is not None and prev != group_id_int:
+                    collisions += 1
+                signature_to_group[signature_id_int] = group_id_int
+
+    if collisions:
+        logger.warning(
+            "Signature-to-group mapping had %d collisions (last one wins).",
+            collisions,
+        )
+    logger.info(
+        "Loaded signature group mapping for %d signatures from %s.",
+        len(signature_to_group),
+        sig_groups_jsonl_path,
+    )
+    return signature_to_group
+
+
 def job_duration_minutes(job: dict):
     """
     Fetch per-job details from Treeherder and compute duration in minutes.
@@ -137,124 +194,138 @@ def job_duration_minutes(job: dict):
         return None
 
 # -------------------------
-# Load already-processed signatures
+# Compute (or reuse) job_durations.csv
 # -------------------------
-processed_signatures = set()
 csv_exists = os.path.exists(CSV_PATH)
 if csv_exists:
-    with open(CSV_PATH, "r", newline="") as csvfile:
-        reader = csv.reader(csvfile)
-        next(reader, None)  # skip header if present
-        for row in reader:
-            try:
-                processed_signatures.add(int(row[0]))
-            except:
-                pass
-
-logger.info(
-    "Loaded %d processed signatures from previous runs.", len(processed_signatures)
-)
-
-# -------------------------
-# Load all signature jobs from cache
-# -------------------------
-signature_jobs = load_signature_jobs(SIGNATURE_JOBS_JSONL)
-logger.info("Total signatures in cache: %d", len(signature_jobs))
-
-# -------------------------
-# Write CSV row-by-row
-# -------------------------
-csv_mode = "a" if csv_exists else "w"
-
-with open(CSV_PATH, csv_mode, newline="") as csvfile:
-
-    writer = csv.writer(csvfile)
-
-    if not csv_exists:
+    logger.info("Found existing %s; skipping Treeherder fetch.", CSV_PATH)
+else:
+    with open(CSV_PATH, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
         writer.writerow(["signature_id", "duration_minutes"])
 
-    total_signatures = len(signature_jobs)
-    skipped_already_processed = 0
-    skipped_too_few_jobs = 0
-    skipped_no_durations = 0
-    written_rows = 0
+        # -------------------------
+        # Load all signature jobs from cache
+        # -------------------------
+        signature_jobs = load_signature_jobs(SIGNATURE_JOBS_JSONL)
+        logger.info("Total signatures in cache: %d", len(signature_jobs))
 
-    logger.info(
-        "Beginning per-signature processing: %d total signatures in cache.",
-        total_signatures,
-    )
+        total_signatures = len(signature_jobs)
+        skipped_already_processed = 0
+        skipped_too_few_jobs = 0
+        skipped_no_durations = 0
+        written_rows = 0
 
-    for signature_id, jobs_list in signature_jobs.items():
-        logger.debug(
-            "Processing signature_id=%s with %d cached jobs",
-            signature_id,
-            len(jobs_list) if jobs_list is not None else 0,
+        logger.info(
+            "Beginning per-signature processing: %d total signatures in cache.",
+            total_signatures,
         )
 
-        # Skip signatures already processed
-        if signature_id in processed_signatures:
-            skipped_already_processed += 1
-            logger.debug("Skipping signature_id=%s (already in CSV).", signature_id)
-            continue
-
-        # Require at least 1 jobs in the cache; otherwise skip this signature
-        if not jobs_list or len(jobs_list) < 1:
-            skipped_too_few_jobs += 1
-            logger.info(
-                "Skipping signature_id=%s: only %d jobs in cache (need >= 1).",
+        for signature_id, jobs_list in signature_jobs.items():
+            logger.debug(
+                "Processing signature_id=%s with %d cached jobs",
                 signature_id,
-                0 if not jobs_list else len(jobs_list),
+                len(jobs_list) if jobs_list is not None else 0,
             )
-            continue
 
-        # Pick first, middle, last jobs
-        ids_to_fetch = [
-            jobs_list[0],
-            jobs_list[len(jobs_list) // 2],
-            jobs_list[-1],
-        ]
-
-        durations = []
-        for job in ids_to_fetch:
-            dur = job_duration_minutes(job)
-            if dur is not None:
-                durations.append(dur)
-            else:
-                logger.debug(
-                    "duration None for job in signature_id=%s: job=%r",
+            # Require at least 1 jobs in the cache; otherwise skip this signature
+            if not jobs_list or len(jobs_list) < 1:
+                skipped_too_few_jobs += 1
+                logger.info(
+                    "Skipping signature_id=%s: only %d jobs in cache (need >= 1).",
                     signature_id,
-                    job,
+                    0 if not jobs_list else len(jobs_list),
                 )
+                continue
 
-        # If we couldn't compute at least 1 durations, skip this signature
-        if len(durations) < 1:
-            skipped_no_durations += 1
-            logger.info(
-                "Skipping signature_id=%s: could not compute duration for any of the sampled jobs.",
-                signature_id,
-            )
+            # Pick first, middle, last jobs
+            ids_to_fetch = [
+                jobs_list[0],
+                jobs_list[len(jobs_list) // 2],
+                jobs_list[-1],
+            ]
+
+            durations = []
+            for job in ids_to_fetch:
+                dur = job_duration_minutes(job)
+                if dur is not None:
+                    durations.append(dur)
+                else:
+                    logger.debug(
+                        "duration None for job in signature_id=%s: job=%r",
+                        signature_id,
+                        job,
+                    )
+
+            # If we couldn't compute at least 1 durations, skip this signature
+            if len(durations) < 1:
+                skipped_no_durations += 1
+                logger.info(
+                    "Skipping signature_id=%s: could not compute duration for any of the sampled jobs.",
+                    signature_id,
+                )
+                continue
+
+            # Mean of sampled durations
+            duration_mean = sum(durations) / len(durations)
+
+            # Format to two decimal places
+            formatted_duration = f"{duration_mean:.2f}"
+
+            writer.writerow([signature_id, formatted_duration])
+            written_rows += 1
+            csvfile.flush()
+
+    logger.info(
+        "Finished processing signatures. Total=%d, written=%d, already_processed=%d, too_few_jobs=%d, no_durations=%d",
+        total_signatures,
+        written_rows,
+        skipped_already_processed,
+        skipped_too_few_jobs,
+        skipped_no_durations,
+    )
+    logger.info("CSV written row-by-row to %s", CSV_PATH)
+
+# -------------------------
+# Create sig_group_job_durations.csv from job_durations.csv
+# -------------------------
+signature_to_group_id = load_signature_to_group_id(SIG_GROUPS_JSONL)
+
+missing_group = 0
+written_group_rows = 0
+
+with open(CSV_PATH, "r", newline="") as in_csvfile, open(
+    SIG_GROUP_CSV_PATH, "w", newline=""
+) as out_csvfile:
+    reader = csv.reader(in_csvfile)
+    writer = csv.writer(out_csvfile)
+
+    header = next(reader, None)
+    duration_col_name = header[1] if header and len(header) >= 2 else "duration_minutes"
+    writer.writerow(["signature_group_id", duration_col_name])
+
+    for row in reader:
+        if not row or len(row) < 2:
+            continue
+        try:
+            signature_id = int(row[0])
+        except Exception:
             continue
 
-        # Mean of sampled durations
-        duration_mean = sum(durations) / len(durations)
+        group_id = signature_to_group_id.get(signature_id)
+        if group_id is None:
+            missing_group += 1
+            continue
 
-        # Format to two decimal places
-        formatted_duration = f"{duration_mean:.2f}"
-
-        # Append to CSV
-        writer.writerow([signature_id, formatted_duration])
-        written_rows += 1
-        csvfile.flush()
+        writer.writerow([group_id, row[1]])
+        written_group_rows += 1
 
 logger.info(
-    "Finished processing signatures. Total=%d, written=%d, already_processed=%d, too_few_jobs=%d, no_durations=%d",
-    total_signatures,
-    written_rows,
-    skipped_already_processed,
-    skipped_too_few_jobs,
-    skipped_no_durations,
+    "Wrote %d rows to %s (%d rows missing a signature_group_id).",
+    written_group_rows,
+    SIG_GROUP_CSV_PATH,
+    missing_group,
 )
-logger.info("CSV written row-by-row to %s", CSV_PATH)
 
 # ============================================================
 # 4) PLOT USING THE CSV FILE
@@ -263,7 +334,7 @@ logger.info("CSV written row-by-row to %s", CSV_PATH)
 plot_durations = []
 
 # Load CSV values back for plotting
-with open(CSV_PATH, "r", newline="") as csvfile:
+with open(SIG_GROUP_CSV_PATH, "r", newline="") as csvfile:
     reader = csv.reader(csvfile)
     next(reader, None)  # header
     for row in reader:
@@ -361,16 +432,15 @@ if plot_durations:
     }
 
     # Print stats to console
-    logger.info("=== Job Duration Statistics (minutes) ===")
+    logger.info("=== Signature-Group Job Duration Statistics (minutes) ===")
     logger.info("%s", json.dumps(stats_json, indent=4))
     logger.info("========================================")
 
     # Save stats to JSON file
-    STATS_PATH = os.path.join(DATASET_DIR, "job_duration_stats.json")
-    with open(STATS_PATH, "w") as f:
+    with open(SIG_GROUP_STATS_PATH, "w") as f:
         json.dump(stats_json, f, indent=4)
 
-    logger.info("Saved statistics JSON to %s", STATS_PATH)
+    logger.info("Saved statistics JSON to %s", SIG_GROUP_STATS_PATH)
 
     # ------- Plot section (unchanged) -------
     plt.hist(plot_durations, bins=50)
