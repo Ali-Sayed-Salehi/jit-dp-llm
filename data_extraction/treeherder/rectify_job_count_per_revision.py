@@ -91,9 +91,9 @@ def rectify(
     output_jsonl: str,
     sig_to_group: Dict[int, int],
     *,
-    allow_missing_signatures: bool,
+    strict: bool,
 ) -> None:
-    missing_sigs = set()
+    missing_sig_first_line: Dict[int, int] = {}
     total_rows = 0
 
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)), exist_ok=True)
@@ -116,13 +116,13 @@ def rectify(
                     )
                 group_id = sig_to_group.get(sig)
                 if group_id is None:
-                    missing_sigs.add(sig)
-                    if allow_missing_signatures:
-                        continue
-                    raise KeyError(
-                        f"Signature id {sig} (line {line_num} of {input_jsonl}) "
-                        "not found in sig_groups mapping input"
-                    )
+                    missing_sig_first_line.setdefault(sig, line_num)
+                    if strict:
+                        raise KeyError(
+                            f"Signature id {sig} (line {line_num} of {input_jsonl}) "
+                            "not found in sig_groups mapping input"
+                        )
+                    continue
                 group_ids.append(group_id)
 
             group_ids = stable_unique(group_ids)
@@ -133,11 +133,17 @@ def rectify(
 
             out_f.write(json.dumps(row) + "\n")
 
-    if missing_sigs:
-        missing_preview = ", ".join(map(str, sorted(missing_sigs)[:20]))
-        more = "" if len(missing_sigs) <= 20 else f" (+{len(missing_sigs) - 20} more)"
+    if missing_sig_first_line:
+        missing_sigs_sorted = sorted(missing_sig_first_line.items(), key=lambda kv: kv[0])
+        missing_preview = ", ".join(f"{sig}@{ln}" for sig, ln in missing_sigs_sorted[:20])
+        more = (
+            ""
+            if len(missing_sig_first_line) <= 20
+            else f" (+{len(missing_sig_first_line) - 20} more)"
+        )
         print(
-            f"[WARN] {len(missing_sigs)} signature ids missing from sig_groups mapping: "
+            f"[WARN] {len(missing_sig_first_line)} signature ids missing from sig_groups mapping "
+            f"(showing sig@first_line): "
             f"{missing_preview}{more}",
             file=sys.stderr,
         )
@@ -156,10 +162,16 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="sig_groups.jsonl path mapping signatures to Sig_group_id.",
     )
     p.add_argument("--output", default=DEFAULT_OUTPUT_JSONL, help="Output JSONL path.")
-    p.add_argument(
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "--strict",
+        action="store_true",
+        help="Error out if a signature ID is not found in sig_groups mapping.",
+    )
+    g.add_argument(
         "--allow-missing-signatures",
         action="store_true",
-        help="Skip signature IDs not found in sig_groups mapping (warn at end).",
+        help="(Default) Skip signature IDs not found in sig_groups mapping (warn at end).",
     )
     return p.parse_args(argv)
 
@@ -179,7 +191,7 @@ def main(argv: List[str]) -> int:
         args.input,
         args.output,
         sig_to_group,
-        allow_missing_signatures=args.allow_missing_signatures,
+        strict=args.strict,
     )
     return 0
 

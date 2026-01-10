@@ -294,6 +294,9 @@ signature_to_group_id = load_signature_to_group_id(SIG_GROUPS_JSONL)
 missing_group = 0
 written_group_rows = 0
 
+group_duration_sum: dict[int, float] = {}
+group_duration_count: dict[int, int] = {}
+
 with open(CSV_PATH, "r", newline="") as in_csvfile, open(
     SIG_GROUP_CSV_PATH, "w", newline=""
 ) as out_csvfile:
@@ -317,7 +320,25 @@ with open(CSV_PATH, "r", newline="") as in_csvfile, open(
             missing_group += 1
             continue
 
-        writer.writerow([group_id, row[1]])
+        try:
+            duration_val = float(row[1])
+        except Exception:
+            continue
+
+        if group_id not in group_duration_sum:
+            group_duration_sum[group_id] = duration_val
+            group_duration_count[group_id] = 1
+        else:
+            group_duration_sum[group_id] += duration_val
+            group_duration_count[group_id] += 1
+
+    for group_id in sorted(group_duration_sum):
+        total_duration = group_duration_sum[group_id]
+        count = group_duration_count[group_id]
+        if not count:
+            continue
+        mean_duration = total_duration / count
+        writer.writerow([group_id, f"{mean_duration:.2f}"])
         written_group_rows += 1
 
 logger.info(
