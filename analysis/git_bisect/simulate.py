@@ -723,12 +723,12 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-eval",
-        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_optuna_eval.json"),
+        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "results", "simulation_optuna_eval.json"),
         help="Where to write the EVAL Optuna tuning output JSON.",
     )
     parser.add_argument(
         "--output-final",
-        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "simulation_optuna_final_test.json"),
+        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "results", "simulation_optuna_final_test.json"),
         help="Where to write the FINAL replay output JSON.",
     )
     parser.add_argument(
