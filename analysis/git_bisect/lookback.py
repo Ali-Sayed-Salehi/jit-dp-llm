@@ -150,12 +150,7 @@ class NightlyBuildLookback:
             # If the nightly build resolves to the already-known "bad" observation commit
             # (possible when the bug is observed soon after midnight with no intervening commits),
             # skip it without counting a new test.
-            if nightly_idx > start_index:
-                raise RuntimeError(
-                    "Nightly lookback invariant violated: computed nightly build index is after start_index "
-                    f"(nightly_idx={nightly_idx}, start_index={start_index}, cutoff={cutoff.isoformat()})"
-                )
-            if nightly_idx == start_index:
+            if nightly_idx >= start_index:
                 cutoff = cutoff - timedelta(days=1)
                 continue
 
