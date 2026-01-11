@@ -33,7 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 
 
@@ -47,47 +47,105 @@ DEFAULT_ALL_SIGNATURES_JSONL = os.path.join(DATASET_DIR, "all_signatures.jsonl")
 DEFAULT_DETAILED_OUTPUT_JSONL = os.path.join(DATASET_DIR, "sigs_by_job_id_detailed.jsonl")
 
 
-def iter_jsonl(path: str):
+def iter_jsonl(path: str, *, stats: Counter[str] | None = None):
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
+            if stats is not None:
+                stats["lines_total"] += 1
             line = line.strip()
             if not line:
+                if stats is not None:
+                    stats["blank_lines"] += 1
                 continue
             try:
                 yield json.loads(line)
             except json.JSONDecodeError:
+                if stats is not None:
+                    stats["json_decode_errors"] += 1
                 continue
 
 
-def build_sigs_by_job_id(signature_jobs_jsonl: str) -> dict[int, set[int]]:
+def build_sigs_by_job_id(
+    signature_jobs_jsonl: str, *, stats: Counter[str] | None = None
+) -> tuple[dict[int, set[int]], dict[str, set[int]]]:
     job_to_sigs: dict[int, set[int]] = defaultdict(set)
+    unique_skipped: dict[str, set[int]] = {
+        "sig_jobs_not_list": set(),
+        "sig_jobs_empty": set(),
+        "sig_no_valid_jobs": set(),
+        "sig_non_dict_job_records": set(),
+        "sig_missing_job_id": set(),
+        "sig_non_int_job_id": set(),
+    }
 
-    for record in iter_jsonl(signature_jobs_jsonl):
+    for record in iter_jsonl(signature_jobs_jsonl, stats=stats):
+        if stats is not None:
+            stats["signature_records_total"] += 1
+
+        if not isinstance(record, dict):
+            if stats is not None:
+                stats["signature_records_non_dict"] += 1
+            continue
+
         signature_id = record.get("signature_id")
         if signature_id is None:
+            if stats is not None:
+                stats["signature_records_missing_signature_id"] += 1
             continue
         try:
             signature_id_int = int(signature_id)
         except Exception:
+            if stats is not None:
+                stats["signature_records_non_int_signature_id"] += 1
             continue
+        if stats is not None:
+            stats["signature_ids_parsed"] += 1
 
         jobs = record.get("jobs") or []
         if not isinstance(jobs, list):
+            if stats is not None:
+                stats["signature_records_jobs_not_list"] += 1
+            unique_skipped["sig_jobs_not_list"].add(signature_id_int)
+            continue
+        if not jobs:
+            if stats is not None:
+                stats["signature_records_jobs_empty"] += 1
+            unique_skipped["sig_jobs_empty"].add(signature_id_int)
             continue
 
+        valid_jobs_for_signature = 0
         for job in jobs:
             if not isinstance(job, dict):
+                if stats is not None:
+                    stats["job_records_non_dict"] += 1
+                unique_skipped["sig_non_dict_job_records"].add(signature_id_int)
                 continue
+            if stats is not None:
+                stats["job_records_total"] += 1
             job_id = job.get("job_id", job.get("id"))
             if job_id is None:
+                if stats is not None:
+                    stats["job_records_missing_job_id"] += 1
+                unique_skipped["sig_missing_job_id"].add(signature_id_int)
                 continue
             try:
                 job_id_int = int(job_id)
             except Exception:
+                if stats is not None:
+                    stats["job_records_non_int_job_id"] += 1
+                unique_skipped["sig_non_int_job_id"].add(signature_id_int)
                 continue
+            valid_jobs_for_signature += 1
             job_to_sigs[job_id_int].add(signature_id_int)
+            if stats is not None:
+                stats["job_records_added"] += 1
 
-    return job_to_sigs
+        if valid_jobs_for_signature == 0:
+            if stats is not None:
+                stats["signature_records_no_valid_jobs"] += 1
+            unique_skipped["sig_no_valid_jobs"].add(signature_id_int)
+
+    return job_to_sigs, unique_skipped
 
 
 def write_sigs_by_job_id(job_to_sigs: dict[int, set[int]], out_jsonl: str) -> None:
@@ -101,18 +159,30 @@ def write_sigs_by_job_id(job_to_sigs: dict[int, set[int]], out_jsonl: str) -> No
             f.write(json.dumps(record) + "\n")
 
 
-def load_sigs_by_job_id(path: str) -> dict[int, list[int]]:
+def load_sigs_by_job_id(path: str, *, stats: Counter[str] | None = None) -> dict[int, list[int]]:
     job_to_sigs: dict[int, list[int]] = {}
-    for record in iter_jsonl(path):
+    for record in iter_jsonl(path, stats=stats):
+        if stats is not None:
+            stats["job_records_total"] += 1
+
         if not isinstance(record, dict):
+            if stats is not None:
+                stats["job_records_non_dict"] += 1
             continue
         job_id = record.get("job_id")
         sig_ids = record.get("signature_ids")
         if job_id is None or not isinstance(sig_ids, list):
+            if stats is not None:
+                if job_id is None:
+                    stats["job_records_missing_job_id"] += 1
+                if not isinstance(sig_ids, list):
+                    stats["job_records_signature_ids_not_list"] += 1
             continue
         try:
             job_id_int = int(job_id)
         except Exception:
+            if stats is not None:
+                stats["job_records_non_int_job_id"] += 1
             continue
 
         parsed_sigs: list[int] = []
@@ -120,9 +190,13 @@ def load_sigs_by_job_id(path: str) -> dict[int, list[int]]:
             try:
                 parsed_sigs.append(int(sig_id))
             except Exception:
+                if stats is not None:
+                    stats["job_records_non_int_signature_id"] += 1
                 continue
 
         job_to_sigs[job_id_int] = sorted(set(parsed_sigs))
+        if stats is not None:
+            stats["job_records_loaded"] += 1
 
     return job_to_sigs
 
@@ -172,7 +246,8 @@ def write_sigs_by_job_id_detailed(
     out_jsonl: str,
     exclude_fields: set[str],
 ) -> list[set[str]]:
-    job_to_sigs = load_sigs_by_job_id(sigs_by_job_id_jsonl)
+    load_stats: Counter[str] = Counter()
+    job_to_sigs = load_sigs_by_job_id(sigs_by_job_id_jsonl, stats=load_stats)
     sig_details = load_all_signatures(all_signatures_jsonl)
 
     os.makedirs(os.path.dirname(out_jsonl), exist_ok=True)
@@ -207,6 +282,23 @@ def write_sigs_by_job_id_detailed(
         print(
             f"[WARN] Missing metadata for {missing_sig_ids} signature IDs while building {out_jsonl}."
         )
+    if load_stats:
+        non_int_sigs = load_stats.get("job_records_non_int_signature_id", 0)
+        if non_int_sigs:
+            print(
+                f"[INFO] Dropped {non_int_sigs} non-integer signature_id values while loading {sigs_by_job_id_jsonl}."
+            )
+        dropped_jobs = (
+            load_stats.get("job_records_non_dict", 0)
+            + load_stats.get("job_records_missing_job_id", 0)
+            + load_stats.get("job_records_non_int_job_id", 0)
+            + load_stats.get("job_records_signature_ids_not_list", 0)
+        )
+        if dropped_jobs:
+            print(
+                f"[INFO] Dropped {dropped_jobs} job records while loading {sigs_by_job_id_jsonl} "
+                "(non-dict / missing job_id / non-int job_id / signature_ids not list)."
+            )
 
     return per_job_common_keys
 
@@ -255,9 +347,49 @@ def main() -> int:
                 "Create sigs_by_job_id.jsonl first, or run get_num_perf_tests.py to generate "
                 "perf_jobs_by_signature.jsonl."
             )
-        job_to_sigs = build_sigs_by_job_id(args.signature_jobs_jsonl)
+        build_stats: Counter[str] = Counter()
+        job_to_sigs, unique_skipped = build_sigs_by_job_id(
+            args.signature_jobs_jsonl, stats=build_stats
+        )
         write_sigs_by_job_id(job_to_sigs, args.sigs_by_job_jsonl)
         print(f"Wrote {len(job_to_sigs)} jobs to {args.sigs_by_job_jsonl}")
+        if build_stats:
+            print("[INFO] Build stats for sigs_by_job_id.jsonl:")
+            print(
+                "  signature records:",
+                build_stats.get("signature_records_total", 0),
+                "| skipped missing signature_id:",
+                build_stats.get("signature_records_missing_signature_id", 0),
+                "| skipped non-int signature_id:",
+                build_stats.get("signature_records_non_int_signature_id", 0),
+                "| skipped jobs not list:",
+                build_stats.get("signature_records_jobs_not_list", 0),
+                "| skipped jobs empty:",
+                build_stats.get("signature_records_jobs_empty", 0),
+                "| signatures with no valid jobs:",
+                build_stats.get("signature_records_no_valid_jobs", 0),
+            )
+            print(
+                "  job records:",
+                build_stats.get("job_records_total", 0),
+                "| skipped non-dict job:",
+                build_stats.get("job_records_non_dict", 0),
+                "| skipped missing job_id:",
+                build_stats.get("job_records_missing_job_id", 0),
+                "| skipped non-int job_id:",
+                build_stats.get("job_records_non_int_job_id", 0),
+                "| added:",
+                build_stats.get("job_records_added", 0),
+            )
+            if unique_skipped:
+                print(
+                    "  unique signatures skipped (where ID parsable):",
+                    "{"
+                    + ", ".join(
+                        f"{k}={len(v)}" for k, v in sorted(unique_skipped.items())
+                    )
+                    + "}",
+                )
 
     if not os.path.exists(args.all_signatures_jsonl):
         raise FileNotFoundError(
