@@ -98,9 +98,9 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_sigs.py
 
-# python /home/ali/repos/jit-dp-llm/data_extraction/treeherder/create_sig_groups.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_sig_groups.py
 
-python /home/ali/repos/jit-dp-llm/data_extraction/treeherder/rectify_job_count_per_revision.py
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/rectify_job_count_per_revision.py
 
 
 echo "Script finished"
