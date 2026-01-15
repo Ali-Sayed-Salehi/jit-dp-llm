@@ -58,37 +58,87 @@ Batching strategies determine when to “flush” a batch and call a bisection s
 - A single `TestExecutor` for the whole simulation run.
 - The same bisection function signature: `bisect_fn(batch, batch_end_time, ...)`.
 
+### Common mechanics (flush boundaries, suites, and the “-s” variants)
+For all strategies, the batching policy defines **batch boundaries**: contiguous slices of the commit stream. When a boundary is reached, the policy schedules an initial “batch test” and (if needed) launches bisection to localize culprits within that slice.
+
+- **What “flush” means**: the strategy decides a `(batch_start_idx, batch_end_idx, batch_end_time)` and considers the commits in that interval as one unit of work.
+- **When the initial run starts**:
+  - Time-window policies typically start the run at the *window end time* (even if the last commit arrived earlier).
+  - Size/risk stream policies typically start the run at the *timestamp of the last commit in the batch*.
+- **What the initial run executes**:
+  - Non-`-s` variants: the bisection strategy is responsible for the initial “batch root” run (`is_batch_root=True`), which uses `get_batch_signature_durations()` (often “full suite”, optionally capped/downsampled).
+  - `-s` variants: the batching strategy itself runs a **subset suite** for the batch and only triggers bisection if that subset would reveal a failure. Implementation detail: the `-s` strategies all route through `_simulate_signature_union_driver(...)`, which:
+    - Builds the subset suite as the union of signature-groups Mozilla actually ran for revisions in the batch (`perf_jobs_per_revision_details_rectified.jsonl`).
+    - Detects a regressor in that batch only if the subset suite intersects that regressor’s failing signature-groups (`alert_summary_fail_perf_sigs.csv` → `sig_groups.jsonl`).
+    - Invokes `bisect_fn(..., is_batch_root=False)` because the “batch root” suite has already been run by the batching policy.
+
 ### TWB / TWB-s - Time-Window Batching
-- **TWB**: batches commits into fixed wall-clock windows of size `batch_hours`.
-- When the window ends, it triggers a batch test at the *window end time* and bisection runs on the collected commits.
-- **TWB-s**: same batching windows, but each batch test runs only the union of perf signature-groups actually tested in that window (“subset suite”), and a regressor is “detected” only if the subset overlaps its failing signature-groups.
+- **Trigger rule (TWB)**: partition the stream into fixed wall-clock windows of size `batch_hours` based on commit timestamps.
+  - Commits with `ts` in `[window_start, window_end)` are collected into the same batch.
+  - When the window ends, we flush and schedule the initial run at `window_end` (not at the last commit time).
+- **Initial suite (TWB)**: the bisection strategy runs the batch root suite (typically “full suite”) at the flush time with `is_batch_root=True`.
+- **Why this matters**: window end alignment can introduce “waiting time” (extra latency) for commits near the beginning of a window, but it also prevents tiny batches during bursty periods.
+
+- **TWB-s**: same window boundaries, but the initial run is a subset suite:
+  - **Subset construction**: union of signature-groups actually tested by Mozilla across the revisions in the window.
+  - **Detection semantics**: a regressor in the window is only detected when the subset suite overlaps at least one of its failing signature-groups; otherwise, no bisection is triggered for that regressor at that window boundary.
+  - **Bisection call**: when detection happens, bisection is invoked with `is_batch_root=False` (because the subset suite already ran).
 
 ### FSB / FSB-s - Fixed-Size Batching
-- **FSB**: batches commits into contiguous groups of size `batch_size` and flushes when the group is full.
-- **FSB-s**: same grouping, but uses subset suite detection (union of signature-groups actually tested in that batch).
+- **Trigger rule (FSB)**: group commits into contiguous chunks of size `batch_size`.
+  - Flush as soon as the batch reaches `batch_size` commits (the final batch may be smaller).
+  - The initial run is scheduled at the timestamp of the last commit in the batch.
+- **Intuition**: unlike TWB, this enforces a predictable “commits-per-batch” load, but the wall-clock time span of a batch can vary depending on commit rate.
+
+- **FSB-s**: same boundaries as FSB, but uses subset suite detection (union of signature-groups actually tested within that batch), and triggers bisection only when the subset overlaps failing signature-groups.
 
 ### RASB / RASB-s - Risk-Adaptive Stream Batching
-- Maintains `prod_clean = Π(1 - risk_i)` across the current batch.
-- Flushes when `fail_prob = 1 - prod_clean >= threshold`.
-- **RASB-s** uses subset suite detection for the batch run.
+- **Trigger rule (RASB)**: grow a batch until its predicted probability of containing at least one failure crosses a threshold.
+  - Assumes independent per-commit failure probabilities (`risk_i`).
+  - Maintains `prod_clean = Π(1 - risk_i)` over the current batch.
+  - Flushes when `fail_prob = 1 - prod_clean >= threshold`.
+  - Schedules the initial run at the timestamp of the last commit in the batch.
+- **Intuition**: produces smaller batches when risk is high (for faster detection/localization) and larger batches when risk is low (for lower testing overhead).
+
+- **RASB-s**: same boundary rule, but the initial run is a subset suite and detection depends on overlap with failing signature-groups.
 
 ### RAPB / RAPB-s - Risk-Aware Priority Batching (threshold + aging)
-- Maintains a risk score per commit with an “aging” term over time, favoring older untested commits.
-- Flushes batches based on a threshold and aging parameter, modeling a policy that prioritizes risky and stale work.
-- **RAPB-s** uses subset suite detection.
+- **Parameters**: `params = (threshold_T, aging_rate)`.
+- **Trigger rule (RAPB)**: like RASB, but “ages” each commit’s risk the longer it has been waiting in the current batch.
+  - For each commit, compute a waiting time in hours since it entered the batch.
+  - Convert base risk into an aged risk `aged_p` using an exponential term controlled by `aging_rate`.
+  - Recompute a batch failure probability from the aged risks, and flush when it exceeds `threshold_T`.
+  - Flush time is the timestamp of the most recent commit.
+- **Intuition**: prevents very old commits from waiting indefinitely when the stream is mostly low-risk (aging increases urgency over time).
+
+- **RAPB-s**: same boundary rule, but uses subset suite detection and triggers bisection only when overlap occurs.
 
 ### RRBB / RRBB-s - Risk-Ranked Budget Batching
-- Accumulates commits until a fixed “risk budget” is exceeded, then flushes.
-- **RRBB-s** uses subset suite detection.
+- **Trigger rule (RRBB)**: accumulate commits until a linear “risk budget” is exceeded.
+  - Maintains `risk_sum = Σ risk_i` across the current batch.
+  - Flushes when `risk_sum >= risk_budget`.
+  - Flush time is the timestamp of the most recent commit.
+- **How to interpret `risk_budget`**: for probabilistic risks, `risk_sum ≈ 1.0` loosely corresponds to “about one expected failing commit per batch” (though it is not the same as the RASB independence model).
+
+- **RRBB-s**: same boundaries, but uses subset suite detection and overlap-based triggering.
 
 ### RATB / RATB-s - Risk-Adaptive Time-Window Batching
-- Uses a time window and a risk threshold jointly to decide when to flush.
-- **RATB-s** uses subset suite detection.
+- **Parameters**: `params = (threshold, time_window_hours)` (or a scalar `threshold` with a default window of 4h).
+- **Trigger rule (RATB)**: hybrid of a risk-triggered flush and a TWB-style maximum batch age.
+  - Stream commits in time order, maintaining a contiguous current batch.
+  - **Risk trigger**: if a commit arrives with `risk >= threshold`, include it and immediately flush the batch.
+  - **Time-window fallback**: if no high-risk commit arrives, flush when the current batch’s age exceeds `time_window_hours` (the time span from the first commit in the batch).
+  - Flush time is the timestamp of the last commit included in the flush.
+- **Intuition**: ensures “prompt handling” of very risky commits while still bounding worst-case staleness during low-risk periods.
+
+- **RATB-s**: same boundaries, but uses subset suite detection and overlap-based triggering.
 
 ### TWSB - Time-Window Subset Batching (per-revision)
-- Runs per-revision subset suites (the signature-groups Mozilla actually ran for that revision).
-- Triggers bisection when a revision’s subset first exercises any failing signature-group for a regressor.
-- Unlike other batching strategies, this is closer to a continuous per-commit testing stream.
+- **Per-revision subset**: instead of flushing explicit multi-commit batches, run a subset suite at *every* revision using the signature-groups Mozilla actually ran for that revision.
+- **Trigger rule**: for a regressor commit `j`, trigger bisection at the first revision `i >= j` whose tested subset intersects any of `j`’s failing signature-groups.
+  - The bisection range starts at the last known clean revision (for those failing signature-groups) and ends at `i`.
+  - The “batch end time” passed to bisection is the completion time of the per-revision subset suite for `i`.
+- **Intuition**: models a more continuous “test what was run on each revision” world; detection timing is driven by which signature-groups happen to be exercised over time.
 
 ## Bisection Strategies (`bisection_strats.py`)
 
