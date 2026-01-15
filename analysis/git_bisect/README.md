@@ -109,8 +109,9 @@ Includes:
 ### Final output (`--output-final`)
 Includes:
 - Dataset metadata
+- Best-combo keys: `best_combo_by_total_tests`, `best_combo_by_mean_tests_per_search`, `best_combo_by_max_tests_per_search`
 - Per-combo metrics, plus:
-  - `total_tests_vs_baseline_pct`, `mean_tests_per_search_vs_baseline_pct`, etc.
+  - `total_tests_saved_vs_baseline_pct`, `mean_tests_per_search_saved_vs_baseline_pct`, etc.
   - `params`: flattened “used params” like `{"Lookback_stride": 350, "Bisection_k": 20}`
 
 Per-combo metrics fields:
@@ -129,4 +130,3 @@ Baseline for comparisons is `NBLB+GB` (nightly builds + standard git bisect). Pe
   - Choose a short `code` (used in combo keys).
   - Provide `default_params` and `build`.
   - If tunable, provide `suggest_params` and ensure Optuna parameter names are prefixed with `<CODE>_` (e.g. `TWLB_hours`).
-

@@ -953,6 +953,8 @@ def main() -> int:
         results: List[Dict[str, Any]],
         metric_specs: Sequence[Tuple[Any, Any]],
         get_total_tests: Any,
+        get_mean_tests_per_search: Any,
+        get_max_tests_per_search: Any,
     ) -> Dict[str, Any]:
         baseline_row = next((r for r in results if str(r.get("combo")) == baseline_combo), None)
         if baseline_row is None:
@@ -964,9 +966,23 @@ def main() -> int:
                 pct = _pct_vs_baseline(value=_as_float(get_value(row)), baseline_value=baseline_value)
                 set_pct(row, pct)
 
+        def _best_combo(get_value: Any) -> Optional[str]:
+            best_combo: Optional[str] = None
+            best_value: Optional[float] = None
+            for row in results:
+                v = _as_float(get_value(row))
+                if v is None:
+                    continue
+                if best_value is None or v < best_value:
+                    best_value = float(v)
+                    best_combo = str(row.get("combo"))
+            return best_combo
+
         best_row = min(results, key=lambda r: int(get_total_tests(r)))
         return {
             "best_combo_by_total_tests": str(best_row.get("combo")),
+            "best_combo_by_mean_tests_per_search": _best_combo(get_mean_tests_per_search),
+            "best_combo_by_max_tests_per_search": _best_combo(get_max_tests_per_search),
         }
 
     if not args.final_only:
@@ -1027,20 +1043,22 @@ def main() -> int:
             metric_specs=[
                 (
                     lambda r: (r.get("metrics") or {}).get("total_tests"),
-                    lambda r, pct: r.setdefault("metrics", {}).update({"total_tests_vs_baseline_pct": pct}),
+                    lambda r, pct: r.setdefault("metrics", {}).update({"total_tests_saved_vs_baseline_pct": pct}),
                 ),
                 (
                     lambda r: (r.get("metrics") or {}).get("mean_tests_per_search"),
                     lambda r, pct: r.setdefault("metrics", {}).update(
-                        {"mean_tests_per_search_vs_baseline_pct": pct}
+                        {"mean_tests_per_search_saved_vs_baseline_pct": pct}
                     ),
                 ),
                 (
                     lambda r: (r.get("metrics") or {}).get("max_tests_per_search"),
-                    lambda r, pct: r.setdefault("metrics", {}).update({"max_tests_per_search_vs_baseline_pct": pct}),
+                    lambda r, pct: r.setdefault("metrics", {}).update({"max_tests_per_search_saved_vs_baseline_pct": pct}),
                 ),
             ],
             get_total_tests=lambda r: (r.get("metrics") or {}).get("total_tests", 0),
+            get_mean_tests_per_search=lambda r: (r.get("metrics") or {}).get("mean_tests_per_search"),
+            get_max_tests_per_search=lambda r: (r.get("metrics") or {}).get("max_tests_per_search"),
         )
         eval_summary = {
             "dataset": "eval",
@@ -1134,18 +1152,20 @@ def main() -> int:
         metric_specs=[
             (
                 lambda r: r.get("total_tests"),
-                lambda r, pct: r.__setitem__("total_tests_vs_baseline_pct", pct),
+                lambda r, pct: r.__setitem__("total_tests_saved_vs_baseline_pct", pct),
             ),
             (
                 lambda r: r.get("mean_tests_per_search"),
-                lambda r, pct: r.__setitem__("mean_tests_per_search_vs_baseline_pct", pct),
+                lambda r, pct: r.__setitem__("mean_tests_per_search_saved_vs_baseline_pct", pct),
             ),
             (
                 lambda r: r.get("max_tests_per_search"),
-                lambda r, pct: r.__setitem__("max_tests_per_search_vs_baseline_pct", pct),
+                lambda r, pct: r.__setitem__("max_tests_per_search_saved_vs_baseline_pct", pct),
             ),
         ],
         get_total_tests=lambda r: r.get("total_tests", 0),
+        get_mean_tests_per_search=lambda r: r.get("mean_tests_per_search"),
+        get_max_tests_per_search=lambda r: r.get("max_tests_per_search"),
     )
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
