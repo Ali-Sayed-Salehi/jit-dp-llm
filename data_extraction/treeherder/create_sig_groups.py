@@ -46,20 +46,42 @@ def iter_jsonl(path: str) -> Iterable[Any]:
 
 def load_jobs(
     input_jsonl: str,
-) -> tuple[dict[int, set[int]], set[int], Counter[str], Counter[str]]:
+) -> tuple[dict[int, set[int]], set[int], Counter[str], Counter[str], Counter[str], dict[str, set[int]]]:
     """
     Returns:
       - job_to_sigs: job_id -> set(sig_id)
       - all_sig_ids: all parsed signature IDs across all jobs
+      - sig_parse_stats: counters for signature parsing/skip reasons
       - dropped_sig_values: counter of non-int signature_id representations
       - dropped_job_records: counter of job-level parse issues
+      - unique_skipped_sig_ids: sets of skipped signature IDs (where parseable as int)
     """
     job_to_sigs: dict[int, set[int]] = {}
     all_sig_ids: set[int] = set()
+    sig_parse_stats: Counter[str] = Counter()
     dropped_sig_values: Counter[str] = Counter()
     dropped_job_records: Counter[str] = Counter()
+    unique_skipped_sig_ids: dict[str, set[int]] = {
+        "skipped_due_to_dropped_job_record": set(),
+        "skipped_non_int_signature_id_value": set(),
+    }
 
     for record in iter_jsonl(input_jsonl):
+        sig_ids = record.get("signature_ids") if isinstance(record, dict) else None
+        parsed_sig_ids: set[int] = set()
+        if isinstance(sig_ids, list):
+            sig_parse_stats["signature_id_values_total"] += len(sig_ids)
+            for raw in sig_ids:
+                try:
+                    sig_id_int = int(raw)
+                except Exception:
+                    sig_parse_stats["signature_id_values_non_int"] += 1
+                    dropped_sig_values[repr(raw)] += 1
+                    continue
+                parsed_sig_ids.add(sig_id_int)
+        elif sig_ids is not None:
+            sig_parse_stats["signature_ids_not_list"] += 1
+
         if not isinstance(record, dict):
             dropped_job_records["non_dict_record"] += 1
             continue
@@ -67,31 +89,44 @@ def load_jobs(
         job_id = record.get("job_id")
         if job_id is None:
             dropped_job_records["missing_job_id"] += 1
+            unique_skipped_sig_ids["skipped_due_to_dropped_job_record"].update(parsed_sig_ids)
+            sig_parse_stats["signature_ids_skipped_due_to_dropped_job_record"] += len(
+                parsed_sig_ids
+            )
             continue
         try:
             job_id_int = int(job_id)
         except Exception:
             dropped_job_records["non_int_job_id"] += 1
+            unique_skipped_sig_ids["skipped_due_to_dropped_job_record"].update(parsed_sig_ids)
+            sig_parse_stats["signature_ids_skipped_due_to_dropped_job_record"] += len(
+                parsed_sig_ids
+            )
             continue
 
-        sig_ids = record.get("signature_ids")
         if not isinstance(sig_ids, list):
             dropped_job_records["signature_ids_not_list"] += 1
             continue
 
-        parsed: set[int] = set()
-        for raw in sig_ids:
-            try:
-                sig_id_int = int(raw)
-            except Exception:
-                dropped_sig_values[repr(raw)] += 1
-                continue
-            parsed.add(sig_id_int)
+        for sig_id_int in parsed_sig_ids:
             all_sig_ids.add(sig_id_int)
 
-        job_to_sigs[job_id_int] = parsed
+        job_to_sigs[job_id_int] = parsed_sig_ids
+        sig_parse_stats["signature_ids_parsed"] += len(parsed_sig_ids)
 
-    return job_to_sigs, all_sig_ids, dropped_sig_values, dropped_job_records
+    # Unique raw non-int signature_id values dropped (can't be coerced to int)
+    sig_parse_stats["unique_non_int_signature_id_values"] = len(dropped_sig_values)
+    sig_parse_stats["unique_skipped_due_to_dropped_job_record"] = len(
+        unique_skipped_sig_ids["skipped_due_to_dropped_job_record"]
+    )
+    return (
+        job_to_sigs,
+        all_sig_ids,
+        sig_parse_stats,
+        dropped_sig_values,
+        dropped_job_records,
+        unique_skipped_sig_ids,
+    )
 
 
 def main() -> int:
@@ -119,9 +154,14 @@ def main() -> int:
             "Run data_extraction/treeherder/get_sigs_per_job.py first."
         )
 
-    job_to_sigs, all_sig_ids, dropped_sig_values, dropped_job_records = load_jobs(
-        args.input
-    )
+    (
+        job_to_sigs,
+        all_sig_ids,
+        sig_parse_stats,
+        dropped_sig_values,
+        dropped_job_records,
+        unique_skipped_sig_ids,
+    ) = load_jobs(args.input)
 
     sig_to_jobs: dict[int, set[int]] = defaultdict(set)
     for job_id, sig_ids in job_to_sigs.items():
@@ -172,9 +212,29 @@ def main() -> int:
 
     if dropped_job_records:
         print("[INFO] Dropped job records:", dict(dropped_job_records))
+        dropped_due_to_job = sig_parse_stats.get("signature_ids_skipped_due_to_dropped_job_record", 0)
+        if dropped_due_to_job:
+            print(
+                "[INFO] Signatures skipped due to dropped job records:",
+                dropped_due_to_job,
+                "(unique parsed ints:",
+                sig_parse_stats.get("unique_skipped_due_to_dropped_job_record", 0),
+                ")",
+            )
     if dropped_sig_values:
         most_common = dropped_sig_values.most_common(10)
-        print("[INFO] Dropped non-integer signature_ids (top 10):", most_common)
+        print(
+            "[INFO] Dropped non-integer signature_ids:",
+            sig_parse_stats.get("signature_id_values_non_int", 0),
+            "(unique raw values:",
+            sig_parse_stats.get("unique_non_int_signature_id_values", 0),
+            "; top 10:",
+            most_common,
+            ")",
+        )
+    else:
+        if sig_parse_stats.get("signature_id_values_total", 0):
+            print("[INFO] Dropped non-integer signature_ids: 0")
 
     print(f"Wrote {len(groups)} signature groups to {args.output}")
     return 0

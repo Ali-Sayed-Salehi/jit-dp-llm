@@ -65,8 +65,8 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
-JOB_DURATIONS_CSV = os.path.join(
-    REPO_ROOT, "datasets", "mozilla_perf", "job_durations.csv"
+SIG_GROUP_JOB_DURATIONS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "sig_group_job_durations.csv"
 )
 
 BATCH_HOURS = 4
@@ -82,12 +82,12 @@ DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
-DEFAULT_TEST_DURATION_MIN = 21.0
+DEFAULT_TEST_DURATION_MIN = 20.0
 
 NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
 
-# Number of perf signatures to run for each "full suite" batch test step.
-# If this is -1 or larger than the available signatures, all signatures are used.
+# Number of perf signature-groups to run for each "full suite" batch test step.
+# If this is -1 or larger than the available groups, all groups are used.
 FULL_SUITE_SIGNATURES_PER_RUN = 200
 
 # Global toggle for lightweight, debugging-oriented runs.
@@ -126,7 +126,7 @@ random.seed(RANDOM_SEED)
 def _load_batch_signature_durations(path):
     """
     Load durations (in minutes) for a 'full batch run':
-    all signatures from job_durations.csv.
+    all signature-groups from sig_group_job_durations.csv.
     Only the durations are needed here (we don't care about ids for ET).
     """
     durations = []
@@ -155,7 +155,7 @@ def _load_batch_signature_durations(path):
 
 
 # Used by run_exhaustive_testing
-BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(JOB_DURATIONS_CSV)
+BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(SIG_GROUP_JOB_DURATIONS_CSV)
 
 
 def get_args():
@@ -230,8 +230,8 @@ def get_args():
         type=int,
         default=FULL_SUITE_SIGNATURES_PER_RUN,
         help=(
-            "Number of perf signatures to run per 'full suite' batch test step "
-            "(-1 means use all signatures; positive values cap via random subset)."
+            "Number of perf signature-groups to run per 'full suite' batch test step "
+            "(-1 means use all groups; positive values cap via random subset)."
         ),
     )
     parser.add_argument(
@@ -239,8 +239,8 @@ def get_args():
         action="store_true",
         help=(
             "If set, each initial batch test run executes only a random subset "
-            "of perf signatures, with size equal to --full-suite-sigs-per-run. "
-            "By default (flag not set), all signatures that appear at least "
+            "of perf signature-groups, with size equal to --full-suite-sigs-per-run. "
+            "By default (flag not set), all signature-groups that appear at least "
             "once within the cutoff window are executed."
         ),
     )
@@ -633,14 +633,14 @@ def run_exhaustive_testing(commits):
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        # Full suite, but capped to a fixed random subset of signatures
+        # Full suite, but capped to a fixed random subset of signature-groups
         # if a non-negative cap is configured. A negative value (e.g., -1)
-        # means "use all signatures".
+        # means "use all signature-groups".
         limit = FULL_SUITE_SIGNATURES_PER_RUN
         if limit is None:
             raise RuntimeError(
                 "FULL_SUITE_SIGNATURES_PER_RUN must not be None in "
-                "run_exhaustive_testing; use -1 to indicate 'all signatures'."
+                "run_exhaustive_testing; use -1 to indicate 'all signature-groups'."
             )
         if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS_ET) > limit:
             durations = random.sample(BATCH_SIGNATURE_DURATIONS_ET, limit)
@@ -1629,7 +1629,7 @@ def main():
     # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
     global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
     NUM_TEST_WORKERS = args.num_test_workers
-    # By default, each initial batch test run executes all signatures
+    # By default, each initial batch test run executes all signature-groups
     # that appear at least once within the cutoff window. If the user
     # passes --dont-use-all-tests-per-batch, we instead cap each run
     # to a random subset whose size is --full-suite-sigs-per-run.
@@ -1641,7 +1641,7 @@ def main():
             elif val == 0:
                 raise ValueError(
                     "--full-suite-sigs-per-run must be a positive integer "
-                    "or -1 to indicate 'use all signatures'; got 0."
+                    "or -1 to indicate 'use all signature-groups'; got 0."
                 )
             else:
                 FULL_SUITE_SIGNATURES_PER_RUN = val
@@ -1649,7 +1649,7 @@ def main():
             # Fall back to default cap (may itself be -1 or a positive cap).
             FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
     else:
-        # Default: no cap; use all signatures from the cutoff-window union.
+        # Default: no cap; use all signature-groups from the cutoff-window union.
         FULL_SUITE_SIGNATURES_PER_RUN = -1
 
     DRY_RUN = bool(getattr(args, "dry_run", False))
@@ -1733,7 +1733,7 @@ def main():
         len(failing_revisions),
     )
 
-    # Restrict the "full suite" batch runs to the union of signatures
+    # Restrict the "full suite" batch runs to the union of signature-groups
     # that actually appear at least once within the cutoff windows used
     # for EVAL and FINAL. Whether we run all of them or a random subset
     # is controlled by FULL_SUITE_SIGNATURES_PER_RUN.
@@ -1744,11 +1744,11 @@ def main():
     )
     configure_full_suite_signatures_union(cutoff_revs)
 
-    # Sanity check: ensure that all failing perf signatures for the
+    # Sanity check: ensure that all failing perf signature-groups for the
     # commits we will simulate (within the EVAL and FINAL windows) are
-    # actually present in perf_jobs_per_revision_details.jsonl. If not,
+    # actually present in perf_jobs_per_revision_details_rectified.jsonl. If not,
     # the simulation would be unable to exercise all relevant failing
-    # signatures and results would be misleading.
+    # signature-groups and results would be misleading.
     validate_failing_signatures_coverage(failing_revisions=failing_revisions)
 
     if args.final_only:

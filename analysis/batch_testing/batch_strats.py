@@ -18,7 +18,7 @@ from bisection_strats import (
     run_test_suite,
     get_tested_signatures_for_revision,
     get_signature_durations_for_ids,
-    get_failing_signatures_for_revision,
+    get_failing_signature_groups_for_revision,
 )
 
 
@@ -31,7 +31,7 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
     Parameters
     ----------
     total_tests_run:
-        Total number of perf-signature executions (across all suite runs).
+        Total number of perf job executions (signature-group runs, across all suite runs).
     culprit_times:
         List of minutes-to-culprit for regressors that were found.
     feedback_times:
@@ -65,42 +65,44 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
 
-def _union_tested_signature_ids_for_commits(commits):
+def _union_tested_signature_group_ids_for_commits(commits):
     """
-    Compute the union of perf signature IDs that Mozilla actually tested across
+    Compute the union of perf signature-group IDs that Mozilla actually tested across
     the given commits.
 
     Used by the "-s" batching variants, where each batch's initial suite is the
-    union of signatures observed in that batch (instead of the global full
-    suite). Signature membership comes from
-    `perf_jobs_per_revision_details.jsonl` via
+    union of signature-groups observed in that batch (instead of the global full
+    suite). Group membership comes from
+    `perf_jobs_per_revision_details_rectified.jsonl` via
     `get_tested_signatures_for_revision`.
     """
-    sig_ids = set()
+    sig_group_ids = set()
     for c in commits:
         rev = c["commit_id"]
-        for sig in get_tested_signatures_for_revision(rev):
+        for sig_group in get_tested_signatures_for_revision(rev):
             try:
-                sig_ids.add(int(sig))
+                sig_group_ids.add(int(sig_group))
             except (TypeError, ValueError):
                 continue
-    return sig_ids
+    return sig_group_ids
 
 
 def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
     """
     Shared implementation for the "-s" batching variants.
 
-    Each "batch test" executes only the union of perf signatures that Mozilla
+    Each "batch test" executes only the union of perf signature-groups that Mozilla
     actually ran for the revisions in that batch (from
-    perf_jobs_per_revision_details.jsonl). A regressor is detected by a batch
-    run only if that union includes at least one of the regressor's failing
-    signatures (from alert_summary_fail_perf_sigs.csv).
+    perf_jobs_per_revision_details_rectified.jsonl, interpreted as
+    signature-groups). A regressor is detected by a batch run only if that
+    union includes at least one of the regressor's failing signature-groups
+    (derived from alert_summary_fail_perf_sigs.csv via sig_groups.jsonl).
 
     When a batch run detects at least one regressor, we trigger a bisection
-    between the last clean revision (per failing signature) and the end of the
-    batch, using `bisect_fn`. The bisection itself uses failing signatures as
-    usual (via bisection_strats), and we treat the batch run as the "root"
+    between the last clean revision (per failing signature-group) and the end of the
+    batch, using `bisect_fn`. The bisection itself uses failing signature-groups
+    (derived from failing signatures via bisection_strats), and we treat
+    the batch run as the "root"
     failure so bisection is invoked with is_batch_root=False.
     """
     total_tests_run = 0
@@ -124,7 +126,7 @@ def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
             return
         bug_rev = c["commit_id"]
         fail_sigs = set()
-        for sig in get_failing_signatures_for_revision(bug_rev):
+        for sig in get_failing_signature_groups_for_revision(bug_rev):
             try:
                 fail_sigs.add(int(sig))
             except (TypeError, ValueError):
@@ -148,7 +150,7 @@ def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
             note_regressor(idx, commits[idx])
 
         batch_commits = commits[batch_start_idx : batch_end_idx + 1]
-        suite_sig_ids = _union_tested_signature_ids_for_commits(batch_commits)
+        suite_sig_ids = _union_tested_signature_group_ids_for_commits(batch_commits)
 
         if suite_sig_ids:
             durations = get_signature_durations_for_ids(suite_sig_ids)
@@ -219,14 +221,15 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
     """
     Time-Window Subset Batching (TWSB).
 
-    For each revision, we run only the perf signatures that Mozilla actually
-    executed for that revision (from perf_jobs_per_revision_details.json).
-    When this per-revision subset first exercises any failing signature for a
+    For each revision, we run only the perf signature-groups that Mozilla actually
+    executed for that revision (from perf_jobs_per_revision_details_rectified.jsonl,
+    interpreted as signature-groups).
+    When this per-revision subset first exercises any failing signature-group for a
     regressor that lies between the last known clean revision and the current
     revision, we trigger a bisection between that last clean revision and the
     current revision, using the provided bisect_fn.
 
-    Each bisection step uses the same failing-signature suite as other
+    Each bisection step uses the same failing signature-group suite as other
     bisection strategies (via bisection_strats).
     """
     logger.info(
@@ -245,16 +248,16 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
 
     executor = TestExecutor(num_workers)
 
-    # Precompute, for each commit, the set of perf signatures that actually ran.
-    tested_sig_sets = []
+    # Precompute, for each commit, the set of perf signature-groups that actually ran.
+    tested_sig_group_sets = []
     for c in commits:
         rev = c["commit_id"]
-        tested_sig_sets.append(set(get_tested_signatures_for_revision(rev)))
+        tested_sig_group_sets.append(set(get_tested_signatures_for_revision(rev)))
 
     # For each regressor commit j, precompute:
-    #   - fail_sigs[j]: its failing signatures (from alert_summary_fail_perf_sigs.csv)
+    #   - fail_sigs[j]: its failing signature-groups (from alert_summary_fail_perf_sigs.csv via sig_groups.jsonl)
     #   - last_clean_for_regressor[j]: index of the most recent commit k < j
-    #     that ran at least one of those failing signatures (i.e., was clean
+    #     that ran at least one of those failing signature-groups (i.e., was clean
     #     when exercising them, since the bug has not landed yet).
     regressor_fail_sigs = {}
     last_clean_for_regressor = {}
@@ -263,7 +266,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
     for idx, c in enumerate(commits):
         if c["true_label"]:
             bug_rev = c["commit_id"]
-            fail_sigs = set(get_failing_signatures_for_revision(bug_rev))
+            fail_sigs = set(get_failing_signature_groups_for_revision(bug_rev))
             regressor_fail_sigs[idx] = fail_sigs
 
             last_clean_idx_for_j = -1
@@ -274,15 +277,15 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
             last_clean_for_regressor[idx] = last_clean_idx_for_j
 
         # After computing last_clean_for_regressor for any regressor at idx,
-        # update "last seen" indices for all signatures tested at this commit.
-        for sig in tested_sig_sets[idx]:
+        # update "last seen" indices for all signature-groups tested at this commit.
+        for sig in tested_sig_group_sets[idx]:
             last_seen_index_by_sig[sig] = idx
 
     handled_regressor_idxs = set()
 
     for idx, c in enumerate(commits):
         submit_time = c["ts"]
-        sig_id_set = tested_sig_sets[idx]
+        sig_id_set = tested_sig_group_sets[idx]
 
         if sig_id_set:
             durations = get_signature_durations_for_ids(sig_id_set)
@@ -295,7 +298,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
             continue
 
         # Check whether this revision is the first one (since each bug's
-        # regressor) to exercise any of that bug's failing signatures.
+        # regressor) to exercise any of that bug's failing signature-groups.
         for j, fail_sigs in regressor_fail_sigs.items():
             if j in handled_regressor_idxs:
                 continue
@@ -311,7 +314,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
 
             # We iterate idx in time order and mark j as handled immediately
             # after triggering, so this is the first revision >= j whose
-            # subset exercises any failing signature for bug j.
+            # subset exercises any failing signature-group for bug j.
             last_clean_idx_for_j = last_clean_for_regressor.get(j, -1)
             batch_start_idx = max(0, last_clean_idx_for_j + 1)
             if batch_start_idx > idx:
@@ -334,7 +337,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
                 culprit_times,
                 feedback_times,
                 executor,
-                False,  # is_batch_root=False so we only use failing signatures
+                False,  # is_batch_root=False so we only use failing signature-groups
             )
 
             handled_regressor_idxs.add(j)
@@ -410,9 +413,9 @@ def simulate_twb_s_with_bisect(commits, bisect_fn, batch_hours, num_workers):
     Time-Window Batching with subset suite detection (TWB-s).
 
     Same windowing as TWB, but the initial batch test uses a *subset suite*:
-    the union of perf signatures Mozilla actually ran for revisions in that
-    window. A regressor can be detected only if the subset suite intersects its
-    failing signatures.
+    the union of perf signature-groups Mozilla actually ran for revisions in
+    that window. A regressor can be detected only if the subset suite
+    intersects its failing signature-groups.
 
     Once a batch run detects regressors, bisection is invoked with
     `is_batch_root=False` because the batch suite has already run.
@@ -497,8 +500,8 @@ def simulate_fsb_s_with_bisect(commits, bisect_fn, batch_size, num_workers):
     Fixed-Size Batching with subset suite detection (FSB-s).
 
     Same grouping as FSB, but each batch's initial run uses the union of
-    signatures observed within the batch (subset suite), and a regressor is
-    detected only if that suite overlaps its failing signatures.
+    signature-groups observed within the batch (subset suite), and a regressor
+    is detected only if that suite overlaps its failing signature-groups.
     """
     batches = []
     if not commits:
@@ -588,8 +591,9 @@ def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
     RASB with subset suite detection (RASB-s).
 
     Same batching trigger as RASB, but the initial batch run uses a subset
-    suite (union of signatures observed within the batch). Detection depends on
-    overlap between that subset and each regressor's failing signatures.
+    suite (union of signature-groups observed within the batch). Detection
+    depends on overlap between that subset and each regressor's failing
+    signature-groups.
     """
     batches = []
     if not commits:
@@ -698,8 +702,8 @@ def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
     RAPB with subset suite detection (RAPB-s).
 
     Uses the same batching trigger as RAPB, but the batch run uses a subset
-    suite (union of signatures observed within the batch) and detection depends
-    on overlap with failing signatures.
+    suite (union of signature-groups observed within the batch) and detection
+    depends on overlap with failing signature-groups.
     """
     threshold_T, aging_rate = params
     batches = []
@@ -960,10 +964,10 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
     RATB with subset suite detection (RATB-s).
 
     Uses the same batching boundaries as RATB, but models each batch's initial
-    run as a subset suite (union of signatures observed within the batch).
-    Detection depends on overlap with failing signatures, and bisection is
-    invoked with `is_batch_root=False` because the batch suite is assumed to
-    have already run.
+    run as a subset suite (union of signature-groups observed within the
+    batch). Detection depends on overlap with failing signature-groups, and
+    bisection is invoked with `is_batch_root=False` because the batch suite is
+    assumed to have already run.
     """
     if isinstance(params, tuple):
         threshold, time_window_hours = params

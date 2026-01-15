@@ -2,7 +2,7 @@
 Bisection strategies and shared execution/time model for the batch-testing simulator.
 
 This module provides:
-  - Perf metadata loading utilities (signature IDs, durations, failing signatures).
+  - Perf metadata loading utilities (signature-group IDs, durations, failing signatures).
   - A central test-capacity simulator (`TestExecutor` + `run_test_suite`).
   - Bisection strategies that operate on batches (TOB, PAR, RWAB, TKRB, SWB, SWF).
 
@@ -22,29 +22,39 @@ import heapq
 SCRIPT_DIR = os.path.dirname(__file__)
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-JOB_DURATIONS_CSV = os.path.join(
-    REPO_ROOT, "datasets", "mozilla_perf", "job_durations.csv"
+SIG_GROUP_JOB_DURATIONS_CSV = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "sig_group_job_durations.csv"
 )
 ALERT_FAIL_SIGS_CSV = os.path.join(
     REPO_ROOT, "datasets", "mozilla_perf", "alert_summary_fail_perf_sigs.csv"
 )
 PERF_JOBS_PER_REV_JSON = os.path.join(
-    REPO_ROOT, "datasets", "mozilla_perf", "perf_jobs_per_revision_details.jsonl"
+    REPO_ROOT,
+    "datasets",
+    "mozilla_perf",
+    "perf_jobs_per_revision_details_rectified.jsonl",
+)
+SIG_GROUPS_JSONL = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "sig_groups.jsonl"
 )
 
 # Fallbacks and knobs (configured by the main simulation script).
-_default_test_duration_min = 21.0
-# -1 means "use all available signatures" (no downsampling).
+_default_test_duration_min = 20.0
+# -1 means "use all available signature-groups" (no downsampling).
 _full_suite_signatures_per_run = -1
 
-# signature_id -> duration_minutes
-SIGNATURE_DURATIONS = {}
-# revision (commit_id) -> list[int signature_id]
+# signature_id -> signature_group_id
+SIG_TO_GROUP_ID = {}
+# signature_group_id -> duration_minutes
+SIG_GROUP_DURATIONS = {}
+# revision (commit_id) -> list[int signature_id] (raw failing signatures)
 REVISION_FAIL_SIG_IDS = {}
-# revision (commit_id) -> list[int signature_id] actually tested on that revision
-REVISION_TESTED_SIG_IDS = {}
-# list[float] of durations for the "full" batch test (all signatures)
-BATCH_SIGNATURE_DURATIONS = []
+# revision (commit_id) -> list[int signature_group_id] actually tested on that revision
+REVISION_TESTED_SIG_GROUP_IDS = {}
+# list[float] of durations for the "full" batch test (all signature groups)
+BATCH_SIG_GROUP_DURATIONS = []
+
+_warned_missing_sig_group_duration_ids = set()
 
 TKRB_TOP_K = 1
 
@@ -61,12 +71,12 @@ def configure_bisection_defaults(
     Parameters
     ----------
     default_test_duration_min:
-        Fallback duration (minutes) used when a signature ID has no recorded
-        duration in `job_durations.csv`.
+        Fallback duration (minutes) used when a signature-group ID has no
+        recorded duration in `sig_group_job_durations.csv`.
     full_suite_signatures_per_run:
-        Caps the number of signatures used for a "full suite" run:
-          - `-1` => use all available signatures
-          - `N>0` => randomly sample N signatures (models partial suite runs)
+        Caps the number of signature-groups used for a "full suite" run:
+          - `-1` => use all available signature-groups
+          - `N>0` => randomly sample N signature-groups (models partial suite runs)
 
     These knobs are typically set by `simulation.py` so all strategies share
     the same configuration.
@@ -79,12 +89,12 @@ def configure_bisection_defaults(
     if full_suite_signatures_per_run is not None:
         val = int(full_suite_signatures_per_run)
         if val < 0:
-            # -1 => use all signatures (no cap)
+            # -1 => use all signature-groups (no cap)
             _full_suite_signatures_per_run = -1
         elif val == 0:
             raise ValueError(
                 "full_suite_signatures_per_run must be a positive integer "
-                "or -1 to indicate 'use all signatures'; got 0."
+                "or -1 to indicate 'use all signature-groups'; got 0."
             )
         else:
             _full_suite_signatures_per_run = val
@@ -100,18 +110,18 @@ def configure_bisection_defaults(
 def configure_full_suite_signatures_union(revisions):
     """
     Given an iterable of revision ids that fall within the simulation's
-    cutoff windows, compute the union of all perf signatures that were
+    cutoff windows, compute the union of all perf signature-groups that were
     actually tested on at least one of those revisions and update the
     full-suite batch durations accordingly.
 
     This is used when we want each initial batch test run to execute all
     tests that appear at least once within the cutoff window, instead of
-    all signatures from job_durations.csv.
+    all signature-groups from sig_group_job_durations.csv.
 
-    This function mutates the module-level `BATCH_SIGNATURE_DURATIONS`, which
+    This function mutates the module-level `BATCH_SIG_GROUP_DURATIONS`, which
     is consumed by `get_batch_signature_durations()`.
     """
-    global BATCH_SIGNATURE_DURATIONS
+    global BATCH_SIG_GROUP_DURATIONS
 
     _load_perf_metadata()
     _load_perf_jobs_per_revision()
@@ -123,71 +133,73 @@ def configure_full_suite_signatures_union(revisions):
             "cannot construct a full-suite signature union."
         )
 
-    sig_ids = set()
+    sig_group_ids = set()
     for rev in rev_set:
-        for sig in REVISION_TESTED_SIG_IDS.get(rev, []):
-            sig_id = int(sig)
-            sig_ids.add(sig_id)
+        for sig_group in REVISION_TESTED_SIG_GROUP_IDS.get(rev, []):
+            try:
+                sig_group_ids.add(int(sig_group))
+            except (TypeError, ValueError):
+                continue
 
-    if not sig_ids:
+    if not sig_group_ids:
         raise RuntimeError(
-            "configure_full_suite_signatures_union: no tested signatures "
+            "configure_full_suite_signatures_union: no tested signature-groups "
             "found for the provided revisions; cannot build full suite."
         )
 
     # Use recorded durations where available; fall back to the default
-    # duration for any signature missing from job_durations.csv.
-    BATCH_SIGNATURE_DURATIONS = [
-        SIGNATURE_DURATIONS.get(sig_id, _default_test_duration_min)
-        for sig_id in sig_ids
+    # duration for any signature-group missing from sig_group_job_durations.csv.
+    BATCH_SIG_GROUP_DURATIONS = [
+        _get_sig_group_duration_minutes(sig_group_id)
+        for sig_group_id in sig_group_ids
     ]
 
 
 def _load_perf_metadata():
     """
     Load:
-      - job_durations.csv => SIGNATURE_DURATIONS, BATCH_SIGNATURE_DURATIONS
+      - sig_group_job_durations.csv => SIG_GROUP_DURATIONS, BATCH_SIG_GROUP_DURATIONS
       - alert_summary_fail_perf_sigs.csv => REVISION_FAIL_SIG_IDS
     """
-    global SIGNATURE_DURATIONS, REVISION_FAIL_SIG_IDS, BATCH_SIGNATURE_DURATIONS
+    global SIG_GROUP_DURATIONS, REVISION_FAIL_SIG_IDS, BATCH_SIG_GROUP_DURATIONS
 
-    if SIGNATURE_DURATIONS and BATCH_SIGNATURE_DURATIONS and REVISION_FAIL_SIG_IDS:
+    if SIG_GROUP_DURATIONS and BATCH_SIG_GROUP_DURATIONS and REVISION_FAIL_SIG_IDS:
         # Already loaded
         logger.debug("Perf metadata already loaded; skipping reload.")
         return
 
-    # ----- job_durations.csv -----
-    sig_durations = {}
+    # ----- sig_group_job_durations.csv -----
+    sig_group_durations = {}
     try:
-        logger.info("Loading job durations from %s", JOB_DURATIONS_CSV)
-        with open(JOB_DURATIONS_CSV, newline="", encoding="utf-8") as f:
+        logger.info("Loading signature-group job durations from %s", SIG_GROUP_JOB_DURATIONS_CSV)
+        with open(SIG_GROUP_JOB_DURATIONS_CSV, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                sig = row.get("signature_id")
+                sig_group = row.get("signature_group_id")
                 dur = row.get("duration_minutes")
-                if not sig or not dur:
+                if not sig_group or not dur:
                     continue
                 try:
-                    sig_id = int(sig)
+                    sig_group_id = int(sig_group)
                     duration = float(dur)
                 except ValueError:
                     continue
-                sig_durations[sig_id] = duration
+                sig_group_durations[sig_group_id] = duration
     except FileNotFoundError as exc:
         raise FileNotFoundError(
-            f"job_durations.csv not found at {JOB_DURATIONS_CSV}"
+            f"sig_group_job_durations.csv not found at {SIG_GROUP_JOB_DURATIONS_CSV}"
         ) from exc
 
-    SIGNATURE_DURATIONS = sig_durations
-    if not SIGNATURE_DURATIONS:
+    SIG_GROUP_DURATIONS = sig_group_durations
+    if not SIG_GROUP_DURATIONS:
         raise RuntimeError(
-            f"No valid job duration rows loaded from {JOB_DURATIONS_CSV}"
+            f"No valid signature-group duration rows loaded from {SIG_GROUP_JOB_DURATIONS_CSV}"
         )
-    BATCH_SIGNATURE_DURATIONS = list(SIGNATURE_DURATIONS.values())
+    BATCH_SIG_GROUP_DURATIONS = list(SIG_GROUP_DURATIONS.values())
     logger.info(
-        "Loaded %d signature durations; BATCH_SIGNATURE_DURATIONS length=%d",
-        len(SIGNATURE_DURATIONS),
-        len(BATCH_SIGNATURE_DURATIONS),
+        "Loaded %d signature-group durations; BATCH_SIG_GROUP_DURATIONS length=%d",
+        len(SIG_GROUP_DURATIONS),
+        len(BATCH_SIG_GROUP_DURATIONS),
     )
 
     # ----- alert_summary_fail_perf_sigs.csv -----
@@ -239,24 +251,24 @@ def _load_perf_metadata():
 def _load_perf_jobs_per_revision():
     """
     Load:
-      - perf_jobs_per_revision_details.jsonl => REVISION_TESTED_SIG_IDS
+      - perf_jobs_per_revision_details_rectified.jsonl => REVISION_TESTED_SIG_GROUP_IDS
 
     The JSON file can be either:
       * a JSON-lines file (one JSON object per line), or
       * a single JSON list of objects.
     Each object is expected to have:
       - 'revision': str
-      - 'signature_ids': list[int]
+      - 'signature_group_ids': list[int]
     """
-    global REVISION_TESTED_SIG_IDS
+    global REVISION_TESTED_SIG_GROUP_IDS
 
-    if REVISION_TESTED_SIG_IDS:
+    if REVISION_TESTED_SIG_GROUP_IDS:
         return
 
     mapping = {}
     try:
         logger.info(
-            "Loading tested perf signatures per revision from %s (JSONL)",
+            "Loading tested perf signature-groups per revision from %s (JSONL)",
             PERF_JOBS_PER_REV_JSON,
         )
         with open(PERF_JOBS_PER_REV_JSON, "r", encoding="utf-8") as f:
@@ -276,34 +288,127 @@ def _load_perf_jobs_per_revision():
                 if not isinstance(obj, dict):
                     continue
                 rev = obj.get("revision")
-                sig_ids = obj.get("signature_ids") or []
+                sig_group_ids = obj.get("signature_group_ids") or []
                 if not rev:
                     continue
                 try:
-                    sig_ids_int = [int(s) for s in sig_ids]
+                    sig_group_ids_int = [int(s) for s in sig_group_ids]
                 except (TypeError, ValueError):
-                    sig_ids_int = []
-                mapping[rev] = sig_ids_int
+                    sig_group_ids_int = []
+                mapping[rev] = sig_group_ids_int
     except FileNotFoundError as exc:
         raise FileNotFoundError(
-            f"perf_jobs_per_revision_details.jsonl not found at {PERF_JOBS_PER_REV_JSON}"
+            "perf_jobs_per_revision_details_rectified.jsonl not found at "
+            f"{PERF_JOBS_PER_REV_JSON}"
         ) from exc
 
-    REVISION_TESTED_SIG_IDS = mapping
-    if not REVISION_TESTED_SIG_IDS:
+    REVISION_TESTED_SIG_GROUP_IDS = mapping
+    if not REVISION_TESTED_SIG_GROUP_IDS:
         raise RuntimeError(
-            f"No tested perf signatures loaded from {PERF_JOBS_PER_REV_JSON}"
+            f"No tested perf signature-groups loaded from {PERF_JOBS_PER_REV_JSON}"
         )
     logger.info(
-        "Loaded tested signatures for %d revisions",
-        len(REVISION_TESTED_SIG_IDS),
+        "Loaded tested signature-groups for %d revisions",
+        len(REVISION_TESTED_SIG_GROUP_IDS),
     )
+
+def _load_sig_groups_mapping():
+    """
+    Load:
+      - sig_groups.jsonl => SIG_TO_GROUP_ID
+
+    Expected JSONL rows:
+      {"Sig_group_id": 1040, "signatures": [72111, 72112]}
+    """
+    global SIG_TO_GROUP_ID
+
+    if SIG_TO_GROUP_ID:
+        return
+
+    mapping = {}
+    try:
+        logger.info("Loading signature->signature-group mapping from %s (JSONL)", SIG_GROUPS_JSONL)
+        with open(SIG_GROUPS_JSONL, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSONL line in %s: %s",
+                        SIG_GROUPS_JSONL,
+                        line[:200],
+                    )
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                group_id = obj.get("Sig_group_id")
+                signatures = obj.get("signatures") or []
+                try:
+                    group_id_int = int(group_id)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(signatures, list):
+                    continue
+                for sig in signatures:
+                    try:
+                        sig_id_int = int(sig)
+                    except (TypeError, ValueError):
+                        continue
+                    prev = mapping.get(sig_id_int)
+                    if prev is not None and prev != group_id_int:
+                        raise ValueError(
+                            f"Signature {sig_id_int} maps to multiple groups ({prev}, {group_id_int}) "
+                            f"in {SIG_GROUPS_JSONL}"
+                        )
+                    mapping[sig_id_int] = group_id_int
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"sig_groups.jsonl not found at {SIG_GROUPS_JSONL}"
+        ) from exc
+
+    SIG_TO_GROUP_ID = mapping
+    if not SIG_TO_GROUP_ID:
+        raise RuntimeError(
+            f"No valid signature->group mappings loaded from {SIG_GROUPS_JSONL}"
+        )
+    logger.info("Loaded %d signature->group mappings", len(SIG_TO_GROUP_ID))
+
+
+def _get_sig_group_duration_minutes(sig_group_id: int) -> float:
+    """
+    Map a signature-group ID to its duration (in minutes).
+
+    If the group is missing from sig_group_job_durations.csv, log a warning
+    (once per group id) and fall back to `_default_test_duration_min`.
+    """
+    _load_perf_metadata()
+    try:
+        gid = int(sig_group_id)
+    except (TypeError, ValueError):
+        return float(_default_test_duration_min)
+
+    dur = SIG_GROUP_DURATIONS.get(gid)
+    if dur is None:
+        if gid not in _warned_missing_sig_group_duration_ids:
+            _warned_missing_sig_group_duration_ids.add(gid)
+            logger.warning(
+                "Missing duration for signature_group_id=%s in %s; using default %.2f min",
+                str(gid),
+                SIG_GROUP_JOB_DURATIONS_CSV,
+                float(_default_test_duration_min),
+            )
+        return float(_default_test_duration_min)
+
+    return float(dur)
 
 
 def validate_failing_signatures_coverage(failing_revisions=None):
     """
-    Ensure that failing perf signatures are covered by the
-    perf_jobs_per_revision_details.jsonl dataset, restricted to a
+    Ensure that failing perf signature-groups are covered by the
+    perf_jobs_per_revision_details_rectified.jsonl dataset, restricted to a
     specific set of failing revisions.
 
     Args:
@@ -315,10 +420,13 @@ def validate_failing_signatures_coverage(failing_revisions=None):
             - if failing_revisions is None or empty,
             - if any of the failing_revisions is missing from
               alert_summary_fail_perf_sigs.csv,
-            - or if any relevant failing signature is not covered by
-              the perf_jobs_per_revision_details.jsonl dataset.
+            - if any failing signature cannot be mapped to a signature-group
+              via sig_groups.jsonl,
+            - or if any relevant failing signature-group is not covered by
+              the perf_jobs_per_revision_details_rectified.jsonl dataset.
     """
     _load_perf_metadata()
+    _load_sig_groups_mapping()
     _load_perf_jobs_per_revision()
 
     if not REVISION_FAIL_SIG_IDS:
@@ -331,11 +439,11 @@ def validate_failing_signatures_coverage(failing_revisions=None):
         )
         return
 
-    if not REVISION_TESTED_SIG_IDS:
+    if not REVISION_TESTED_SIG_GROUP_IDS:
         raise RuntimeError(
-            "perf_jobs_per_revision_details.jsonl did not yield any "
-            "tested-signature data. Cannot validate that failing perf "
-            "signatures are covered. Please regenerate the dataset at: "
+            "perf_jobs_per_revision_details_rectified.jsonl did not yield any "
+            "tested signature-group data. Cannot validate that failing perf "
+            "signature-groups are covered. Please regenerate the dataset at: "
             f"{PERF_JOBS_PER_REV_JSON}"
         )
 
@@ -349,7 +457,7 @@ def validate_failing_signatures_coverage(failing_revisions=None):
     if not failing_revisions:
         raise RuntimeError(
             "failing_revisions is empty; cannot validate perf "
-            "signature coverage without any failing revisions."
+            "signature-group coverage without any failing revisions."
         )
 
     # Ensure every failing revision is present in the alert CSV.
@@ -380,39 +488,66 @@ def validate_failing_signatures_coverage(failing_revisions=None):
             except (TypeError, ValueError):
                 continue
 
-    # Collect the set of all signature IDs that appear anywhere in the
-    # perf_jobs_per_revision_details.jsonl dataset.
-    tested_sig_ids = set()
-    for sig_ids in REVISION_TESTED_SIG_IDS.values():
-        for sig in sig_ids:
+    # Map failing signatures -> failing signature-groups (must be possible).
+    failing_sig_ids = set()
+    for rev in failing_revisions:
+        for sig in REVISION_FAIL_SIG_IDS.get(rev, []):
             try:
-                tested_sig_ids.add(int(sig))
+                failing_sig_ids.add(int(sig))
             except (TypeError, ValueError):
                 continue
 
-    missing = sorted(failing_sig_ids - tested_sig_ids)
-    if missing:
-        # Limit how many we show in the error message to keep it readable.
-        sample = ", ".join(str(sig) for sig in missing[:20])
-        extra = "" if len(missing) <= 20 else f" (and {len(missing) - 20} more...)"
+    failing_sig_group_ids = set()
+    missing_sig_to_group = sorted(sig for sig in failing_sig_ids if sig not in SIG_TO_GROUP_ID)
+    if missing_sig_to_group:
+        sample = ", ".join(str(sig) for sig in missing_sig_to_group[:20])
+        extra = "" if len(missing_sig_to_group) <= 20 else f" (and {len(missing_sig_to_group) - 20} more...)"
         raise RuntimeError(
-            "Found failing perf signatures that are not covered by "
-            "perf_jobs_per_revision_details.jsonl at all. "
-            "Each relevant failing signature (for the revisions under "
+            "Found failing perf signatures that are missing a sig_groups.jsonl mapping "
+            "to a signature-group. This means the simulation cannot translate failures "
+            "into signature-group jobs for bisection.\n"
+            f"First missing signature_ids: {sample}{extra}\n"
+            f"sig_groups JSONL: {SIG_GROUPS_JSONL}\n"
+            f"Alert CSV: {ALERT_FAIL_SIGS_CSV}"
+        )
+
+    for sig in failing_sig_ids:
+        failing_sig_group_ids.add(SIG_TO_GROUP_ID[int(sig)])
+
+    # Collect the set of all signature-group IDs that appear anywhere in the
+    # perf_jobs_per_revision_details_rectified.jsonl dataset.
+    tested_sig_group_ids = set()
+    for group_ids in REVISION_TESTED_SIG_GROUP_IDS.values():
+        for gid in group_ids:
+            try:
+                tested_sig_group_ids.add(int(gid))
+            except (TypeError, ValueError):
+                continue
+
+    missing_groups = sorted(failing_sig_group_ids - tested_sig_group_ids)
+    if missing_groups:
+        sample = ", ".join(str(gid) for gid in missing_groups[:20])
+        extra = "" if len(missing_groups) <= 20 else f" (and {len(missing_groups) - 20} more...)"
+        raise RuntimeError(
+            "Found failing perf signature-groups that are not covered by "
+            "perf_jobs_per_revision_details_rectified.jsonl at all. "
+            "Each relevant failing signature-group (for the revisions under "
             "consideration) should appear at least once somewhere in the "
             "perf jobs dataset. This means the simulation cannot "
-            "exercise all required failing signatures.\n"
-            f"First missing signature_ids: {sample}{extra}\n"
+            "exercise all required failing signature-groups.\n"
+            f"First missing signature_group_ids: {sample}{extra}\n"
             f"Alert CSV: {ALERT_FAIL_SIGS_CSV}\n"
+            f"sig_groups JSONL: {SIG_GROUPS_JSONL}\n"
             f"Perf jobs JSONL: {PERF_JOBS_PER_REV_JSON}"
         )
 
 
 def get_batch_signature_durations():
     """
-    Durations (minutes) for a "full suite" perf run.
+    Durations (minutes) for a "full suite" perf run (signature-groups).
 
-    By default this is all signatures from `job_durations.csv`, but it can be
+    By default this is all signature-groups from `sig_group_job_durations.csv`,
+    but it can be
     capped to a fixed-size random subset via `_full_suite_signatures_per_run`.
 
     This suite is used for the *first* run of a batch when bisection strategies
@@ -420,54 +555,65 @@ def get_batch_signature_durations():
     """
     _load_perf_metadata()
 
-    if not BATCH_SIGNATURE_DURATIONS:
+    if not BATCH_SIG_GROUP_DURATIONS:
         return [_default_test_duration_min]
 
     limit = _full_suite_signatures_per_run
     # Non-negative limit => cap via random subset when smaller than the
     # available suite size. Negative (e.g., -1) means "use all".
-    if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS) > limit:
-        durations = random.sample(BATCH_SIGNATURE_DURATIONS, limit)
+    if isinstance(limit, int) and limit >= 0 and len(BATCH_SIG_GROUP_DURATIONS) > limit:
+        durations = random.sample(BATCH_SIG_GROUP_DURATIONS, limit)
     else:
-        durations = BATCH_SIGNATURE_DURATIONS
+        durations = BATCH_SIG_GROUP_DURATIONS
 
     return durations
 
 
 def get_failing_signature_durations_for_batch(batch_sorted):
     """
-    Durations (minutes) for the failing signatures revealed by the initial
+    Durations (minutes) for the failing signature-groups revealed by the initial
     full batch run for this batch.
 
     We take the union of failing perf signatures for all *regressor* commits
     in this batch (true_label == True) using alert_summary_fail_perf_sigs.csv,
-    and map them to durations via job_durations.csv.
+    map them to signature-groups via sig_groups.jsonl, then map to durations
+    via sig_group_job_durations.csv (with a default fallback).
 
     This matches the workflow:
-      - First full batch run fails on some signatures.
-      - All bisection steps then only run those failing signatures.
+      - First full batch run fails on some signature-groups.
+      - All bisection steps then only run those failing signature-groups.
     """
     _load_perf_metadata()
+    _load_sig_groups_mapping()
 
-    sig_ids = set()
+    has_regressor = any(c.get("true_label") for c in (batch_sorted or []))
+    sig_group_ids = set()
 
     for c in batch_sorted:
         if not c.get("true_label"):
             continue
         cid = c["commit_id"]
         for sig in REVISION_FAIL_SIG_IDS.get(cid, []):
-            if sig in SIGNATURE_DURATIONS:
-                sig_ids.add(sig)
+            try:
+                sig_id_int = int(sig)
+            except (TypeError, ValueError):
+                continue
+            gid = SIG_TO_GROUP_ID.get(sig_id_int)
+            if gid is None:
+                continue
+            sig_group_ids.add(int(gid))
 
-    # if not sig_ids:
-    #     # No regressors or no metadata: in principle there would be no
-    #     # bisection, so this is rarely used. Fall back to full suite
-    #     # to avoid undercounting if it does get used.
-    #     return get_batch_signature_durations()
+    if has_regressor and not sig_group_ids:
+        logger.warning(
+            "No failing signature-groups could be derived for a batch containing regressors; "
+            "falling back to default duration %.2f min for bisection steps.",
+            float(_default_test_duration_min),
+        )
+        return [float(_default_test_duration_min)]
 
-    durations = [SIGNATURE_DURATIONS[s] for s in sig_ids]
+    durations = [_get_sig_group_duration_minutes(gid) for gid in sig_group_ids]
     logger.debug(
-        "Computed failing signature durations for batch of size %d: %d signatures",
+        "Computed failing signature-group durations for batch of size %d: %d signature-groups",
         len(batch_sorted),
         len(durations),
     )
@@ -476,27 +622,27 @@ def get_failing_signature_durations_for_batch(batch_sorted):
 
 def get_tested_signatures_for_revision(revision):
     """
-    Return the list of signature IDs that were actually tested for the given
-    revision according to perf_jobs_per_revision_details.jsonl.
+    Return the list of signature-group IDs that were actually tested for the given
+    revision according to perf_jobs_per_revision_details_rectified.jsonl.
     """
     _load_perf_jobs_per_revision()
-    return REVISION_TESTED_SIG_IDS.get(revision, [])
+    return REVISION_TESTED_SIG_GROUP_IDS.get(revision, [])
 
 
 def get_signature_durations_for_ids(signature_ids):
     """
-    Map a collection of signature IDs to their durations (in minutes) using
-    job_durations.csv. For any unknown signature, we fall back to
-    _default_test_duration_min.
+    Map a collection of signature-group IDs to their durations (in minutes) using
+    sig_group_job_durations.csv. For any unknown signature-group, we fall back to
+    _default_test_duration_min (and log a warning once per missing group id).
     """
     _load_perf_metadata()
     durations = []
     for sig in signature_ids:
         try:
-            sig_id = int(sig)
+            sig_group_id = int(sig)
         except (TypeError, ValueError):
             continue
-        dur = SIGNATURE_DURATIONS.get(sig_id, _default_test_duration_min)
+        dur = _get_sig_group_duration_minutes(sig_group_id)
         durations.append(dur)
     if not durations:
         durations = [_default_test_duration_min]
@@ -510,6 +656,61 @@ def get_failing_signatures_for_revision(revision):
     """
     _load_perf_metadata()
     return REVISION_FAIL_SIG_IDS.get(revision, [])
+
+
+def get_signature_group_id_for_signature(signature_id):
+    """
+    Map a single perf signature ID to its signature-group ID via sig_groups.jsonl.
+
+    Returns:
+        int signature_group_id, or None if the signature is unmapped.
+    """
+    _load_sig_groups_mapping()
+    try:
+        sig_id_int = int(signature_id)
+    except (TypeError, ValueError):
+        return None
+    return SIG_TO_GROUP_ID.get(sig_id_int)
+
+
+def get_failing_signature_groups_for_revision(revision):
+    """
+    Return the list of failing signature-group IDs for a given revision.
+
+    This derives group IDs from alert_summary_fail_perf_sigs.csv (signature IDs)
+    by mapping each signature via sig_groups.jsonl.
+    """
+    _load_perf_metadata()
+    _load_sig_groups_mapping()
+
+    sig_ids = REVISION_FAIL_SIG_IDS.get(revision, []) or []
+    failing_group_ids = set()
+    missing = set()
+    for sig in sig_ids:
+        try:
+            sig_id_int = int(sig)
+        except (TypeError, ValueError):
+            continue
+        gid = SIG_TO_GROUP_ID.get(sig_id_int)
+        if gid is None:
+            missing.add(sig_id_int)
+            continue
+        failing_group_ids.add(int(gid))
+
+    if missing:
+        sample = ", ".join(str(s) for s in sorted(missing)[:20])
+        extra = "" if len(missing) <= 20 else f" (and {len(missing) - 20} more...)"
+        logger.warning(
+            "Missing signature->group mapping for %d failing signatures on revision %s "
+            "(first missing signature_ids: %s%s). Those signatures will be ignored for "
+            "signature-group based simulation.",
+            len(missing),
+            str(revision),
+            sample,
+            extra,
+        )
+
+    return sorted(failing_group_ids)
 
 class TestExecutor:
     """
@@ -625,12 +826,12 @@ def _run_interval_and_update(
     Semantics:
 
       - For the first test in a batch (first_test == True), we model a *full*
-        perf batch run: all signatures from job_durations.csv.
+        perf batch run: all signature-groups from sig_group_job_durations.csv.
 
       - For subsequent interval tests (bisection steps), we model a targeted run
-        using the failing perf signatures for this batch.
+        using the failing perf signature-groups for this batch.
 
-    Cost is counted as the number of signatures run in the suite.
+    Cost is counted as the number of signature-group jobs run in the suite.
     """
     if lo > hi:
         return False, current_time, first_test, total_tests_run
@@ -701,9 +902,9 @@ def time_ordered_bisect(
     Cost/time model:
 
       - First call within a batch:
-          * Full batch run (all signatures).
+          * Full batch run (all signature-groups).
       - Subsequent calls (bisection steps):
-          * Only the failing signatures for this batch.
+          * Only the failing signature-groups for this batch.
     """
     if not batch:
         return total_tests_run, culprit_times, feedback_times
@@ -811,12 +1012,12 @@ def exhaustive_parallel(
     Parallel 'no-bisection' strategy with realistic durations.
     
       - For each batch:
-          * First test: ONE "full" batch run using ALL signatures
-            from job_durations.csv.
+          * First test: ONE "full" batch run using ALL signature-groups
+            from sig_group_job_durations.csv.
 
           * Subsequent per-commit runs (for all commits EXCEPT the last):
-              - Use the SAME failing-signature suite as bisection for
-                this batch, i.e., the union of failing perf signatures
+              - Use the SAME failing signature-group suite as bisection for
+                this batch, i.e., the union of failing perf signature-groups
                 across all regressor revisions in this batch, as derived
                 from alert_summary_fail_perf_sigs.csv.
 
@@ -835,7 +1036,7 @@ def exhaustive_parallel(
     culprits_before = len(culprit_times)
     logger.debug("exhaustive_parallel: starting batch_size=%d", n)
 
-    # Precompute batch-level failing signatures (same set used everywhere in this batch)
+    # Precompute batch-level failing signature-groups (same set used everywhere in this batch)
     batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
 
     # Degenerate: single commit
@@ -863,7 +1064,7 @@ def exhaustive_parallel(
 
     # Normal case: at least 2 commits
     if is_batch_root:
-        # 1) One "full" batch run: all signatures.
+        # 1) One "full" batch run: all signature-groups.
         durations_full = get_batch_signature_durations()
         total_tests_run += len(durations_full)
         finish_time_batch = run_test_suite(executor, start_time, durations_full)
