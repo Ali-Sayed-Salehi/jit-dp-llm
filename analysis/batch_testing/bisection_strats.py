@@ -471,6 +471,9 @@ def _load_signature_platforms():
     Each JSONL row is expected to include:
       - "id": int (signature id)
       - "machine_platform": str
+
+    If the platform value is unrecognized, we log a warning (once per distinct
+    platform string) and default that signature to the "linux" pool.
     """
     global SIG_ID_TO_POOL
 
@@ -508,12 +511,11 @@ def _load_signature_platforms():
                     if mp and mp not in _warned_unknown_machine_platform_values:
                         _warned_unknown_machine_platform_values.add(mp)
                         logger.warning(
-                            "Unrecognized machine_platform value %r in %s; defaulting affected "
-                            "signature-groups to the default pool.",
+                            "Unrecognized machine_platform value %r in %s; defaulting to linux pool.",
                             mp,
                             ALL_SIGNATURES_JSONL,
                         )
-                    continue
+                    pool = "linux"
                 mapping[sig_id_int] = pool
     except FileNotFoundError as exc:
         raise FileNotFoundError(
