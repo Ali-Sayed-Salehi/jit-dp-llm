@@ -129,6 +129,32 @@ random.seed(RANDOM_SEED)
 
 # =================================
 
+def _worker_pools_for_output(pools: dict) -> dict:
+    """
+    Produce a stable, human-friendly worker pool mapping for JSON output.
+
+    - In single-pool mode, emits {"default": N}
+    - In multi-pool mode, emits android/windows/linux/mac/ios first (when present),
+      then any extra pools in sorted order.
+    """
+    if not isinstance(pools, dict):
+        return {"default": int(pools)}
+
+    if set(pools.keys()) == {"default"}:
+        return {"default": int(pools["default"])}
+
+    preferred = ["android", "windows", "linux", "mac", "ios"]
+    out = {}
+    for k in preferred:
+        if k in pools:
+            out[k] = int(pools[k])
+    for k in sorted(pools.keys()):
+        if k in out:
+            continue
+        out[k] = int(pools[k])
+    return out
+
+
 def _load_batch_signature_durations(path):
     """
     Load ET "full suite" jobs from sig_group_job_durations.csv.
@@ -980,7 +1006,8 @@ def run_evaluation_mopt(
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "worker_pools": WORKER_POOLS,
+        "worker_pools": _worker_pools_for_output(WORKER_POOLS),
+        "num_test_workers_by_pool": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
@@ -1334,6 +1361,7 @@ def run_evaluation_mopt(
             "Baseline (TWSB + PAR)",
             "num_test_workers",
             "worker_pools",
+            "num_test_workers_by_pool",
         ):
             continue
         if not isinstance(v, dict):
@@ -1487,7 +1515,8 @@ def run_final_test_unified(
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
         },
-        "worker_pools": WORKER_POOLS,
+        "worker_pools": _worker_pools_for_output(WORKER_POOLS),
+        "num_test_workers_by_pool": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
@@ -1510,6 +1539,7 @@ def run_final_test_unified(
             "bet_overall_improvement_over_baseline",
             "num_test_workers",
             "worker_pools",
+            "num_test_workers_by_pool",
         ):
             continue
 
