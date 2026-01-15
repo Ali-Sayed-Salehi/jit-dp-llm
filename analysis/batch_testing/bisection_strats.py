@@ -62,6 +62,8 @@ DEFAULT_WORKER_POOLS = {
 _default_test_duration_min = 20.0
 # -1 means "use all available signature-groups" (no downsampling).
 _full_suite_signatures_per_run = -1
+# Constant build-time overhead applied once per suite run (minutes).
+_build_time_minutes = 90.0  # 1.5 hours
 
 # signature_id -> signature_group_id
 SIG_TO_GROUP_ID = {}
@@ -92,6 +94,7 @@ logger = logging.getLogger(__name__)
 def configure_bisection_defaults(
     default_test_duration_min=None,
     full_suite_signatures_per_run=None,
+    build_time_minutes=None,
 ):
     """
     Configure global defaults used by the simulator's time/cost model.
@@ -105,11 +108,14 @@ def configure_bisection_defaults(
         Caps the number of signature-groups used for a "full suite" run:
           - `-1` => use all available signature-groups
           - `N>0` => randomly sample N signature-groups (models partial suite runs)
+    build_time_minutes:
+        Constant build-time overhead (minutes) added once per suite run (both
+        batch root runs and bisection-step runs).
 
     These knobs are typically set by `simulation.py` so all strategies share
     the same configuration.
     """
-    global _default_test_duration_min, _full_suite_signatures_per_run
+    global _default_test_duration_min, _full_suite_signatures_per_run, _build_time_minutes
 
     if default_test_duration_min is not None:
         _default_test_duration_min = float(default_test_duration_min)
@@ -127,11 +133,20 @@ def configure_bisection_defaults(
         else:
             _full_suite_signatures_per_run = val
 
+    if build_time_minutes is not None:
+        val = float(build_time_minutes)
+        if val < 0:
+            raise ValueError(
+                f"build_time_minutes must be non-negative; got {build_time_minutes!r}"
+            )
+        _build_time_minutes = val
+
     logger.info(
         "Configured bisection defaults: default_test_duration_min=%.2f, "
-        "full_suite_signatures_per_run=%s",
+        "full_suite_signatures_per_run=%s, build_time_minutes=%.2f",
         _default_test_duration_min,
         str(_full_suite_signatures_per_run),
+        float(_build_time_minutes),
     )
 
 
@@ -1036,7 +1051,10 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
     if not durations_minutes:
         return requested_start_time
 
-    last_finish = requested_start_time
+    # Build must complete before the suite's jobs become ready.
+    ready_time = requested_start_time + timedelta(minutes=float(_build_time_minutes))
+
+    last_finish = ready_time
     count = 0
     for entry in durations_minutes:
         count += 1
@@ -1049,7 +1067,7 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
             dur = entry.get("duration_minutes")
 
         finish_time = executor.schedule(
-            requested_start_time,
+            ready_time,
             dur,
             signature_group_id=sig_group_id,
         )

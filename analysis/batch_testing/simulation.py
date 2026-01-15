@@ -83,6 +83,9 @@ PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
 DEFAULT_TEST_DURATION_MIN = 20.0
+# Constant build-time overhead applied once per suite run (batch tests + bisection steps).
+BUILD_TIME_HOURS = 1.5
+BUILD_TIME_MINUTES = BUILD_TIME_HOURS * 60.0
 
 # Central test machine capacity, expressed as per-platform worker pools.
 # Each signature-group job is routed to a pool based on `machine_platform`
@@ -1726,6 +1729,7 @@ def main():
     configure_bisection_defaults(
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
         full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
+        build_time_minutes=BUILD_TIME_MINUTES,
     )
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval

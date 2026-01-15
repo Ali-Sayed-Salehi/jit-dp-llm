@@ -31,6 +31,8 @@ The simulator models two kinds of test runs:
 
 Each **logical run** (full suite or targeted) consumes “CPU cost” equal to the number of signature-groups in its suite, and occupies worker capacity according to the suite’s per-job durations.
 
+Additionally, each logical run includes a constant **build-time overhead** (currently 1.5 hours) that is added once per run on top of the suite job durations.
+
 ### Central test executor (parallelism model)
 `TestExecutor(worker_pools)` models per-platform worker pools:
 
