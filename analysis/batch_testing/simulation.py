@@ -84,7 +84,10 @@ RANDOM_SEED = 42
 
 DEFAULT_TEST_DURATION_MIN = 20.0
 
-NUM_TEST_WORKERS = 25  # <--- central test machine capacity (K), overridable via --num-test-workers
+# Central test machine capacity, expressed as per-platform worker pools.
+# Each signature-group job is routed to a pool based on `machine_platform`
+# metadata (see datasets/mozilla_perf/all_signatures.jsonl).
+WORKER_POOLS = dict(bisection_mod.DEFAULT_WORKER_POOLS)
 
 # Number of perf signature-groups to run for each "full suite" batch test step.
 # If this is -1 or larger than the available groups, all groups are used.
@@ -125,33 +128,37 @@ random.seed(RANDOM_SEED)
 
 def _load_batch_signature_durations(path):
     """
-    Load durations (in minutes) for a 'full batch run':
-    all signature-groups from sig_group_job_durations.csv.
-    Only the durations are needed here (we don't care about ids for ET).
+    Load ET "full suite" jobs from sig_group_job_durations.csv.
+
+    Returns:
+      list[(signature_group_id, duration_minutes)]
     """
-    durations = []
+    suite = []
     try:
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                sig_group = row.get("signature_group_id")
                 dur = row.get("duration_minutes")
-                if not dur:
+                if not sig_group or not dur:
                     continue
                 try:
-                    durations.append(float(dur))
+                    sig_group_id = int(sig_group)
+                    duration = float(dur)
                 except ValueError:
                     continue
+                suite.append((sig_group_id, duration))
     except FileNotFoundError as exc:
         raise FileNotFoundError(
-            f"Batch signature durations CSV not found at: {path}"
+            f"ET full-suite durations CSV not found at: {path}"
         ) from exc
 
-    if not durations:
+    if not suite:
         raise RuntimeError(
-            f"No valid duration_minutes entries found in CSV at: {path}"
+            f"No valid (signature_group_id, duration_minutes) entries found in CSV at: {path}"
         )
 
-    return durations
+    return suite
 
 
 # Used by run_exhaustive_testing
@@ -222,8 +229,42 @@ def get_args():
     parser.add_argument(
         "--num-test-workers",
         type=int,
-        default=NUM_TEST_WORKERS,
-        help="Number of parallel test workers (central test machine capacity K).",
+        default=None,
+        help=(
+            "(Deprecated) If set, use a single shared worker pool with this many "
+            "workers (ignores per-platform pools). If omitted, uses per-platform "
+            "worker pools."
+        ),
+    )
+    parser.add_argument(
+        "--workers-android",
+        type=int,
+        default=bisection_mod.ANDROID_WORKERS,
+        help="Android worker pool size (signature-groups routed by machine_platform).",
+    )
+    parser.add_argument(
+        "--workers-windows",
+        type=int,
+        default=bisection_mod.WINDOWS_WORKERS,
+        help="Windows worker pool size (signature-groups routed by machine_platform).",
+    )
+    parser.add_argument(
+        "--workers-linux",
+        type=int,
+        default=bisection_mod.LINUX_WORKERS,
+        help="Linux worker pool size (signature-groups routed by machine_platform).",
+    )
+    parser.add_argument(
+        "--workers-mac",
+        type=int,
+        default=bisection_mod.MAC_WORKERS,
+        help="Mac worker pool size (signature-groups routed by machine_platform).",
+    )
+    parser.add_argument(
+        "--workers-ios",
+        type=int,
+        default=bisection_mod.IOS_WORKERS,
+        help="iOS worker pool size (signature-groups routed by machine_platform).",
     )
     parser.add_argument(
         "--full-suite-sigs-per-run",
@@ -627,8 +668,11 @@ def run_exhaustive_testing(commits):
     culprit_times = []
     feedback_times = {}
 
-    executor = TestExecutor(NUM_TEST_WORKERS)
-    logger.debug("Created TestExecutor with %d workers for exhaustive testing", NUM_TEST_WORKERS)
+    executor = TestExecutor(WORKER_POOLS)
+    logger.debug(
+        "Created TestExecutor with worker pools for exhaustive testing: %s",
+        WORKER_POOLS,
+    )
 
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
@@ -896,7 +940,7 @@ def run_evaluation_mopt(
             base_commits_for_context,
             exhaustive_parallel,
             None,
-            NUM_TEST_WORKERS,
+            WORKER_POOLS,
         )
         baseline = convert_result_minutes_to_hours(baseline)
     baseline_max_ttc = baseline.get("max_time_to_culprit_hr", None)
@@ -933,7 +977,8 @@ def run_evaluation_mopt(
     # unified output (same shape as before)
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
-        "num_test_workers": NUM_TEST_WORKERS,
+        "worker_pools": WORKER_POOLS,
+        "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
@@ -1051,7 +1096,7 @@ def run_evaluation_mopt(
                     base_commits_for_context, predicted_indices, pred_thr
                 )
 
-                res = b_fn(base_commits_for_context, bis_fn, param, NUM_TEST_WORKERS)
+                res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
                 return (
                     res.get("total_tests_run", float("inf")),
@@ -1113,7 +1158,7 @@ def run_evaluation_mopt(
                     base_commits_for_context, predicted_indices, pred_thr
                 )
 
-                res = b_fn(base_commits_for_context, bis_fn, param, NUM_TEST_WORKERS)
+                res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
 
                 if normalized_batch_name == "TWB":
@@ -1229,7 +1274,7 @@ def run_evaluation_mopt(
                 base_commits_for_context,
                 bis_fn,
                 None,
-                NUM_TEST_WORKERS,
+                WORKER_POOLS,
             )
             res = convert_result_minutes_to_hours(res)
 
@@ -1404,7 +1449,7 @@ def run_final_test_unified(
     baseline_final = {}
     if baseline_selected:
         baseline_final = simulate_twsb_with_bisect(
-            base_commits_final, exhaustive_parallel, None, NUM_TEST_WORKERS
+            base_commits_final, exhaustive_parallel, None, WORKER_POOLS
         )
         baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -1426,7 +1471,8 @@ def run_final_test_unified(
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
         },
-        "num_test_workers": NUM_TEST_WORKERS,
+        "worker_pools": WORKER_POOLS,
+        "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
         final_results["Baseline (TWSB + PAR)"] = baseline_final
@@ -1447,6 +1493,7 @@ def run_final_test_unified(
             "best_by_mean_feedback_time",
             "bet_overall_improvement_over_baseline",
             "num_test_workers",
+            "worker_pools",
         ):
             continue
 
@@ -1502,7 +1549,7 @@ def run_final_test_unified(
             base_commits_final, predicted_indices_final, pred_thr
         )
 
-        res_final = b_fn(base_commits_final, bis_fn, param, NUM_TEST_WORKERS)
+        res_final = b_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
         res_final = convert_result_minutes_to_hours(res_final)
 
         violates = (
@@ -1609,13 +1656,19 @@ def main():
 
     logger.info("Starting batch-testing simulation CLI")
     logger.info(
-        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%d, "
+        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
+        "workers(android/windows/linux/mac/ios)=(%d/%d/%d/%d/%d), "
         "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
-        args.num_test_workers,
+        str(args.num_test_workers),
+        int(getattr(args, "workers_android", 0)),
+        int(getattr(args, "workers_windows", 0)),
+        int(getattr(args, "workers_linux", 0)),
+        int(getattr(args, "workers_mac", 0)),
+        int(getattr(args, "workers_ios", 0)),
         str(args.full_suite_sigs_per_run),
         str(args.dont_use_all_tests_per_batch),
         str(getattr(args, "batching", "all")),
@@ -1626,9 +1679,24 @@ def main():
         RANDOM_SEED,
     )
 
-    # Apply CLI override to global NUM_TEST_WORKERS and FULL_SUITE_SIGNATURES_PER_RUN
-    global NUM_TEST_WORKERS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
-    NUM_TEST_WORKERS = args.num_test_workers
+    # Apply CLI overrides to global WORKER_POOLS and FULL_SUITE_SIGNATURES_PER_RUN
+    global WORKER_POOLS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
+    if args.num_test_workers is not None:
+        # Single shared pool (legacy mode)
+        WORKER_POOLS = {"default": int(args.num_test_workers)}
+    else:
+        WORKER_POOLS = {
+            "android": int(getattr(args, "workers_android", bisection_mod.ANDROID_WORKERS)),
+            "windows": int(getattr(args, "workers_windows", bisection_mod.WINDOWS_WORKERS)),
+            "linux": int(getattr(args, "workers_linux", bisection_mod.LINUX_WORKERS)),
+            "mac": int(getattr(args, "workers_mac", bisection_mod.MAC_WORKERS)),
+            "ios": int(getattr(args, "workers_ios", bisection_mod.IOS_WORKERS)),
+        }
+
+    # Basic validation: pool sizes must be positive integers.
+    bad_pools = {k: v for k, v in WORKER_POOLS.items() if int(v) <= 0}
+    if bad_pools:
+        raise ValueError(f"All worker pool sizes must be positive; got: {bad_pools}")
     # By default, each initial batch test run executes all signature-groups
     # that appear at least once within the cutoff window. If the user
     # passes --dont-use-all-tests-per-batch, we instead cap each run

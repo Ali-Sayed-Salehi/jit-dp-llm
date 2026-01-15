@@ -6,7 +6,7 @@ The code intentionally separates:
 
 - **Batching strategies** (`analysis/batch_testing/batch_strats.py`): decide *which commits are grouped together* and *when a batch test run happens*.
 - **Bisection strategies** (`analysis/batch_testing/bisection_strats.py`): given a batch (already known to contain a failure), decide *which intervals/prefixes to test* to identify culprit commits.
-- **Execution/time model** (`analysis/batch_testing/bisection_strats.py`): `TestExecutor` models a fixed-size pool of test workers; `run_test_suite` schedules suites; `_run_interval_and_update` implements “test this interval” semantics shared by multiple strategies.
+- **Execution/time model** (`analysis/batch_testing/bisection_strats.py`): `TestExecutor` models per-platform worker pools; `run_test_suite` schedules suites; `_run_interval_and_update` implements “test this interval” semantics shared by multiple strategies.
 
 ## Core Objects and Semantics
 
@@ -22,20 +22,21 @@ Throughout the simulator a “commit” is a dict with at least:
 The simulator models two kinds of test runs:
 
 1. **Full suite run** (“batch root”):
-   - Represents a batch test run that executes a “full suite” of perf signatures.
-   - In code: `get_batch_signature_durations()` decides what “full suite” means (all signatures or a capped/subsampled set).
+   - Represents a batch test run that executes a “full suite” of perf signature-groups.
+   - In code: `get_batch_signature_durations()` decides what “full suite” means (all signature-groups or a capped/subsampled set).
 
 2. **Targeted run** (“bisection step”):
-   - Represents a follow-up run using only the **failing-signature suite** for the batch (union of failing perf signatures across regressors in that batch).
+   - Represents a follow-up run using only the **failing signature-group suite** for the batch (union of failing signature-groups across regressors in that batch).
    - In code: `get_failing_signature_durations_for_batch(batch)` computes the durations for that suite.
 
-Each **logical run** (full suite or targeted) consumes “CPU cost” equal to the number of signatures in its suite, and occupies worker capacity according to the suite’s per-test durations.
+Each **logical run** (full suite or targeted) consumes “CPU cost” equal to the number of signature-groups in its suite, and occupies worker capacity according to the suite’s per-job durations.
 
 ### Central test executor (parallelism model)
-`TestExecutor(num_workers)` models a fixed number of test workers:
+`TestExecutor(worker_pools)` models per-platform worker pools:
 
 - Each test in a suite is scheduled onto the earliest-available worker.
-- Suites can be run concurrently: if multiple suites are submitted with the same `requested_start_time`, their tests interleave on the worker pool.
+- Suites can be run concurrently: if multiple suites are submitted with the same `requested_start_time`, their jobs interleave within each platform pool.
+- Each signature-group job is routed to a pool based on `machine_platform` metadata (via `datasets/mozilla_perf/all_signatures.jsonl` and `datasets/mozilla_perf/sig_groups.jsonl`).
 - `run_test_suite(executor, t0, durations)` returns the time when the last test in that suite finishes.
 
 This is how “parallel test capacity K” is modeled for all strategies.
@@ -58,11 +59,11 @@ Batching strategies determine when to “flush” a batch and call a bisection s
 ### TWB / TWB-s - Time-Window Batching
 - **TWB**: batches commits into fixed wall-clock windows of size `batch_hours`.
 - When the window ends, it triggers a batch test at the *window end time* and bisection runs on the collected commits.
-- **TWB-s**: same batching windows, but each batch test runs only the union of perf signatures actually tested in that window (“subset suite”), and a regressor is “detected” only if the subset overlaps its failing signatures.
+- **TWB-s**: same batching windows, but each batch test runs only the union of perf signature-groups actually tested in that window (“subset suite”), and a regressor is “detected” only if the subset overlaps its failing signature-groups.
 
 ### FSB / FSB-s - Fixed-Size Batching
 - **FSB**: batches commits into contiguous groups of size `batch_size` and flushes when the group is full.
-- **FSB-s**: same grouping, but uses subset suite detection (union of signatures actually tested in that batch).
+- **FSB-s**: same grouping, but uses subset suite detection (union of signature-groups actually tested in that batch).
 
 ### RASB / RASB-s - Risk-Adaptive Stream Batching
 - Maintains `prod_clean = Π(1 - risk_i)` across the current batch.
@@ -83,8 +84,8 @@ Batching strategies determine when to “flush” a batch and call a bisection s
 - **RATB-s** uses subset suite detection.
 
 ### TWSB - Time-Window Subset Batching (per-revision)
-- Runs per-revision subset suites (the signatures Mozilla actually ran for that revision).
-- Triggers bisection when a revision’s subset first exercises any failing signature for a regressor.
+- Runs per-revision subset suites (the signature-groups Mozilla actually ran for that revision).
+- Triggers bisection when a revision’s subset first exercises any failing signature-group for a regressor.
 - Unlike other batching strategies, this is closer to a continuous per-commit testing stream.
 
 ## Bisection Strategies (`bisection_strats.py`)
@@ -92,7 +93,7 @@ Batching strategies determine when to “flush” a batch and call a bisection s
 All bisection strategies share:
 
 - A central worker pool (`TestExecutor`).
-- A cost model in “number of signatures run”.
+- A cost model in “number of signature-groups run”.
 - A time model in “when the last test in each suite completes”.
 
 ### TOB - Time-Ordered Bisection
