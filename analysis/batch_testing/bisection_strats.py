@@ -62,10 +62,7 @@ DEFAULT_WORKER_POOLS = {
 _default_test_duration_min = 20.0
 # -1 means "use all available signature-groups" (no downsampling).
 _full_suite_signatures_per_run = -1
-# Per-job build-time overhead (minutes) added to each signature-group job.
-#
-# This models CI-style jobs where each "test job" includes its own build/setup
-# time and therefore consumes worker capacity while building.
+# Constant build-time overhead applied once per suite run (minutes).
 _build_time_minutes = 90.0  # 1.5 hours
 # When a signature-group cannot be mapped to a platform (or platform metadata is
 # missing/unrecognized), route it to this pool key. The default is "mac", but
@@ -118,9 +115,8 @@ def configure_bisection_defaults(
           - `-1` => use all available signature-groups
           - `N>0` => randomly sample N signature-groups (models partial suite runs)
     build_time_minutes:
-        Build-time overhead (minutes) added to each signature-group job's
-        duration so it consumes worker capacity (both batch root runs and
-        bisection-step runs).
+        Constant build-time overhead (minutes) added once per suite run (both
+        batch root runs and bisection-step runs).
     unknown_platform_pool:
         Pool key to route signature-groups/jobs to when platform routing cannot
         be determined (missing signature-group id, missing signature metadata,
@@ -1085,11 +1081,10 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
     if not durations_minutes:
         return requested_start_time
 
-    # Build/setup time is modeled as part of each job's runtime so it consumes
-    # worker capacity (instead of being a separate wall-clock delay).
-    overhead_min = float(_build_time_minutes)
+    # Build must complete before the suite's jobs become ready.
+    ready_time = requested_start_time + timedelta(minutes=float(_build_time_minutes))
 
-    last_finish = requested_start_time
+    last_finish = ready_time
     count = 0
     for entry in durations_minutes:
         count += 1
@@ -1101,16 +1096,9 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
             sig_group_id = entry.get("signature_group_id")
             dur = entry.get("duration_minutes")
 
-        try:
-            dur_float = float(dur)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                f"Invalid duration_minutes entry passed to run_test_suite: {dur!r}"
-            ) from exc
-
         finish_time = executor.schedule(
-            requested_start_time,
-            dur_float + overhead_min,
+            ready_time,
+            dur,
             signature_group_id=sig_group_id,
         )
         if finish_time > last_finish:

@@ -83,8 +83,7 @@ PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
 DEFAULT_TEST_DURATION_MIN = 20.0
-# Build-time overhead added to each signature-group job so it consumes worker capacity
-# (batch tests + bisection steps).
+# Constant build-time overhead applied once per suite run (batch tests + bisection steps).
 BUILD_TIME_HOURS = 1.5
 BUILD_TIME_MINUTES = BUILD_TIME_HOURS * 60.0
 
