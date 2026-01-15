@@ -1325,16 +1325,29 @@ def run_evaluation_mopt(
             out_eval[combo_key] = result_entry
 
     # summary (unified)
-    combo_items = [
-        (k, v)
-        for k, v in out_eval.items()
-        if k
-        not in (
+    # Only consider actual (strategy + bisection) result entries; `out_eval`
+    # also contains metadata keys like worker pool sizing.
+    combo_items = []
+    for k, v in out_eval.items():
+        if k in (
             "Exhaustive Testing (ET)",
             "Baseline (TWSB + PAR)",
             "num_test_workers",
-        )
-    ]
+            "worker_pools",
+        ):
+            continue
+        if not isinstance(v, dict):
+            continue
+        if not all(
+            metric in v
+            for metric in (
+                "total_tests_run",
+                "max_time_to_culprit_hr",
+                "mean_feedback_time_hr",
+            )
+        ):
+            continue
+        combo_items.append((k, v))
 
     # Per-metric bests
     out_eval["best_by_total_tests"] = (
