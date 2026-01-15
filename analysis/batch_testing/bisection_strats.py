@@ -64,6 +64,11 @@ _default_test_duration_min = 20.0
 _full_suite_signatures_per_run = -1
 # Constant build-time overhead applied once per suite run (minutes).
 _build_time_minutes = 90.0  # 1.5 hours
+# When a signature-group cannot be mapped to a platform (or platform metadata is
+# missing/unrecognized), route it to this pool key. The default is "mac", but
+# can be overridden via `configure_bisection_defaults()`.
+DEFAULT_UNKNOWN_PLATFORM_POOL = "mac"
+_unknown_platform_pool = DEFAULT_UNKNOWN_PLATFORM_POOL
 
 # signature_id -> signature_group_id
 SIG_TO_GROUP_ID = {}
@@ -95,6 +100,7 @@ def configure_bisection_defaults(
     default_test_duration_min=None,
     full_suite_signatures_per_run=None,
     build_time_minutes=None,
+    unknown_platform_pool=None,
 ):
     """
     Configure global defaults used by the simulator's time/cost model.
@@ -111,11 +117,15 @@ def configure_bisection_defaults(
     build_time_minutes:
         Constant build-time overhead (minutes) added once per suite run (both
         batch root runs and bisection-step runs).
+    unknown_platform_pool:
+        Pool key to route signature-groups/jobs to when platform routing cannot
+        be determined (missing signature-group id, missing signature metadata,
+        or unrecognized `machine_platform`).
 
     These knobs are typically set by `simulation.py` so all strategies share
     the same configuration.
     """
-    global _default_test_duration_min, _full_suite_signatures_per_run, _build_time_minutes
+    global _default_test_duration_min, _full_suite_signatures_per_run, _build_time_minutes, _unknown_platform_pool
 
     if default_test_duration_min is not None:
         _default_test_duration_min = float(default_test_duration_min)
@@ -141,12 +151,22 @@ def configure_bisection_defaults(
             )
         _build_time_minutes = val
 
+    if unknown_platform_pool is not None:
+        pool = str(unknown_platform_pool).strip()
+        if not pool:
+            raise ValueError(
+                f"unknown_platform_pool must be a non-empty string; got {unknown_platform_pool!r}"
+            )
+        _unknown_platform_pool = pool.lower()
+
     logger.info(
         "Configured bisection defaults: default_test_duration_min=%.2f, "
-        "full_suite_signatures_per_run=%s, build_time_minutes=%.2f",
+        "full_suite_signatures_per_run=%s, build_time_minutes=%.2f, "
+        "unknown_platform_pool=%s",
         _default_test_duration_min,
         str(_full_suite_signatures_per_run),
         float(_build_time_minutes),
+        str(_unknown_platform_pool),
     )
 
 
@@ -473,7 +493,8 @@ def _load_signature_platforms():
       - "machine_platform": str
 
     If the platform value is unrecognized, we log a warning (once per distinct
-    platform string) and default that signature to the "linux" pool.
+    platform string) and default that signature to the configured fallback pool
+    (`_unknown_platform_pool`).
     """
     global SIG_ID_TO_POOL
 
@@ -511,11 +532,12 @@ def _load_signature_platforms():
                     if mp and mp not in _warned_unknown_machine_platform_values:
                         _warned_unknown_machine_platform_values.add(mp)
                         logger.warning(
-                            "Unrecognized machine_platform value %r in %s; defaulting to linux pool.",
+                            "Unrecognized machine_platform value %r in %s; defaulting to %s pool.",
                             mp,
                             ALL_SIGNATURES_JSONL,
+                            _unknown_platform_pool,
                         )
-                    pool = "linux"
+                    pool = _unknown_platform_pool
                 mapping[sig_id_int] = pool
     except FileNotFoundError as exc:
         raise FileNotFoundError(
@@ -539,12 +561,12 @@ def _get_worker_pool_for_signature_group(sig_group_id):
         per group id) and use its machine_platform to choose the pool.
     """
     if sig_group_id is None:
-        return "linux"
+        return _unknown_platform_pool
 
     try:
         gid = int(sig_group_id)
     except (TypeError, ValueError):
-        return "linux"
+        return _unknown_platform_pool
 
     cached = SIG_GROUP_ID_TO_POOL.get(gid)
     if cached is not None:
@@ -562,7 +584,7 @@ def _get_worker_pool_for_signature_group(sig_group_id):
                 str(gid),
                 SIG_GROUPS_JSONL,
             )
-        pool = "linux"
+        pool = _unknown_platform_pool
         SIG_GROUP_ID_TO_POOL[gid] = pool
         return pool
 
@@ -587,7 +609,7 @@ def _get_worker_pool_for_signature_group(sig_group_id):
                 str(gid),
                 ALL_SIGNATURES_JSONL,
             )
-        pool = "linux"
+        pool = _unknown_platform_pool
 
     SIG_GROUP_ID_TO_POOL[gid] = pool
     return pool
@@ -974,8 +996,14 @@ class TestExecutor:
             raise ValueError(f"All worker pool sizes must be positive; got: {bad}")
 
         self.pool_sizes = pool_sizes
-        # Prefer linux as the default pool when present.
-        self.default_pool = "linux" if "linux" in self.pool_sizes else next(iter(self.pool_sizes))
+        # Prefer configured fallback pool when present (default: "mac").
+        preferred_defaults = []
+        for candidate in (_unknown_platform_pool, "mac", "linux"):
+            if candidate and candidate not in preferred_defaults:
+                preferred_defaults.append(candidate)
+        self.default_pool = next(
+            (k for k in preferred_defaults if k in self.pool_sizes), next(iter(self.pool_sizes))
+        )
 
         # Per-pool min-heaps of (free_time, worker_index), lazily initialized.
         self._worker_heaps = {}

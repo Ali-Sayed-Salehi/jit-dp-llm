@@ -296,6 +296,16 @@ def get_args():
         help="iOS worker pool size (signature-groups routed by machine_platform).",
     )
     parser.add_argument(
+        "--unknown-platform-pool",
+        type=str,
+        default=bisection_mod.DEFAULT_UNKNOWN_PLATFORM_POOL,
+        help=(
+            "Worker pool key to use when a signature-group/job cannot be mapped to a "
+            "platform (missing signature-group id, missing signature metadata, or "
+            "unrecognized machine_platform)."
+        ),
+    )
+    parser.add_argument(
         "--full-suite-sigs-per-run",
         type=int,
         default=FULL_SUITE_SIGNATURES_PER_RUN,
@@ -1700,6 +1710,7 @@ def main():
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
         "workers(android/windows/linux/mac/ios)=(%d/%d/%d/%d/%d), "
+        "unknown_platform_pool=%s, "
         "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
@@ -1711,6 +1722,7 @@ def main():
         int(getattr(args, "workers_linux", 0)),
         int(getattr(args, "workers_mac", 0)),
         int(getattr(args, "workers_ios", 0)),
+        str(getattr(args, "unknown_platform_pool", "")),
         str(args.full_suite_sigs_per_run),
         str(args.dont_use_all_tests_per_batch),
         str(getattr(args, "batching", "all")),
@@ -1734,6 +1746,13 @@ def main():
             "mac": int(getattr(args, "workers_mac", bisection_mod.MAC_WORKERS)),
             "ios": int(getattr(args, "workers_ios", bisection_mod.IOS_WORKERS)),
         }
+
+    unknown_platform_pool = str(getattr(args, "unknown_platform_pool", "")).strip().lower()
+    if args.num_test_workers is None and unknown_platform_pool not in WORKER_POOLS:
+        raise ValueError(
+            f"--unknown-platform-pool must be one of {sorted(WORKER_POOLS.keys())}; "
+            f"got {unknown_platform_pool!r}"
+        )
 
     # Basic validation: pool sizes must be positive integers.
     bad_pools = {k: v for k, v in WORKER_POOLS.items() if int(v) <= 0}
@@ -1769,6 +1788,7 @@ def main():
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
         full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
         build_time_minutes=BUILD_TIME_MINUTES,
+        unknown_platform_pool=unknown_platform_pool,
     )
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
     INPUT_JSON_EVAL = args.input_json_eval
