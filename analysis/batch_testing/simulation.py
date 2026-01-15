@@ -1007,7 +1007,6 @@ def run_evaluation_mopt(
     out_eval = {
         "Exhaustive Testing (ET)": et_results,
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
-        "num_test_workers_by_pool": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
@@ -1361,7 +1360,6 @@ def run_evaluation_mopt(
             "Baseline (TWSB + PAR)",
             "num_test_workers",
             "worker_pools",
-            "num_test_workers_by_pool",
         ):
             continue
         if not isinstance(v, dict):
@@ -1516,7 +1514,6 @@ def run_final_test_unified(
             "upper": final_upper.isoformat() if final_upper else None,
         },
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
-        "num_test_workers_by_pool": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
     if baseline_selected:
@@ -1539,7 +1536,6 @@ def run_final_test_unified(
             "bet_overall_improvement_over_baseline",
             "num_test_workers",
             "worker_pools",
-            "num_test_workers_by_pool",
         ):
             continue
 
