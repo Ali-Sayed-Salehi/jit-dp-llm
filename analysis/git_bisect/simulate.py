@@ -629,6 +629,21 @@ def run_combo(
     return res
 
 
+def _flatten_params_for_output(*, lookback_params: Dict[str, Any], bisection_params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Produce a compact, output-friendly parameter mapping.
+
+    The final JSON output omits strategy metadata and includes only the actually
+    used parameter values with stable, namespaced keys (e.g. `Lookback_stride`).
+    """
+    flattened: Dict[str, Any] = {}
+    for key, value in lookback_params.items():
+        flattened[f"Lookback_{key}"] = value
+    for key, value in bisection_params.items():
+        flattened[f"Bisection_{key}"] = value
+    return flattened
+
+
 def optimize_combo_params(
     *,
     inputs: PreparedInputs,
@@ -1046,14 +1061,21 @@ def main() -> int:
                 "lookback": dict(lookback_spec.default_params),
                 "bisection": dict(bisection_spec.default_params),
             }
+            lookback_params = dict(params.get("lookback") or {})
+            bisection_params = dict(params.get("bisection") or {})
             final_results.append(
                 run_combo(
                     inputs=final_inputs,
                     lookback_spec=lookback_spec,
-                    lookback_params=dict(params.get("lookback") or {}),
+                    lookback_params=lookback_params,
                     bisection_spec=bisection_spec,
-                    bisection_params=dict(params.get("bisection") or {}),
+                    bisection_params=bisection_params,
                 )
+            )
+            final_results[-1].pop("bugs", None)
+            final_results[-1]["params"] = _flatten_params_for_output(
+                lookback_params=lookback_params,
+                bisection_params=bisection_params,
             )
 
     final_comparison = _annotate_results_with_baseline(
