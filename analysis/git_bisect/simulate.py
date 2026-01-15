@@ -45,10 +45,13 @@ from bisection import (
     BisectionStrategy,
     GitBisectBaseline,
     RiskSeries,
+    SequentialWalkBackwardBisection,
+    SequentialWalkForwardBisection,
+    TopKRiskFirstBisection,
     RiskWeightedAdaptiveBisectionLogSurvival,
     RiskWeightedAdaptiveBisectionSum,
 )
-from lookback import FixedStrideLookback, LookbackStrategy, NightlyBuildLookback
+from lookback import FixedStrideLookback, LookbackStrategy, NightlyBuildLookback, RiskAwareTriggerLookback, TimeWindowLookback
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -853,6 +856,31 @@ def main() -> int:
                 "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
             },
         ),
+        StrategySpec(
+            code="RATLB",
+            name="risk_aware_trigger",
+            default_params={"threshold": 0.5},
+            build=lambda inputs, p: RiskAwareTriggerLookback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="TWLB",
+            name="time_window",
+            default_params={"hours": 24},
+            build=lambda inputs, p: TimeWindowLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                hours=float(p["hours"]),
+            ),
+            suggest_params=lambda trial: {
+                "hours": trial.suggest_int("TWLB_hours", 1, 24 * 30, log=True)
+            },
+        ),
     ]
     bisection_specs: List[StrategySpec] = [
         StrategySpec(
@@ -861,6 +889,29 @@ def main() -> int:
             default_params={},
             build=lambda _inputs, _p: GitBisectBaseline(),
             suggest_params=None,
+        ),
+        StrategySpec(
+            code="SWBB",
+            name="swbb",
+            default_params={},
+            build=lambda _inputs, _p: SequentialWalkBackwardBisection(),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="SWFB",
+            name="swfb",
+            default_params={},
+            build=lambda _inputs, _p: SequentialWalkForwardBisection(),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="TKRB",
+            name="tkrb-k",
+            default_params={"k": 10},
+            build=lambda _inputs, p: TopKRiskFirstBisection(k=int(p["k"])),
+            suggest_params=lambda trial: {
+                "k": trial.suggest_int("TKRB_k", 1, 500, log=True)
+            },
         ),
         StrategySpec(
             code="RWABS",

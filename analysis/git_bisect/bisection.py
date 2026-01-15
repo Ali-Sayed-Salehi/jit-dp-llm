@@ -12,6 +12,7 @@ executions are required to identify the culprit.
 import logging
 from dataclasses import dataclass
 import math
+import heapq
 from typing import Optional, Protocol, Sequence, overload
 
 import bisect
@@ -418,8 +419,283 @@ class RiskWeightedAdaptiveBisectionLogSurvival:
         return BisectionOutcome(tests=tests, found_index=high)
 
 
+class SequentialWalkBackwardBisection:
+    """
+    Sequential Walk Backward Bisection (SWBB).
+
+    Model:
+      - We start with a known-good commit at `good_index` and a known-bad commit at
+        `bad_index`, so the culprit lies in (good_index, bad_index].
+      - Treat `bad_index` as the current known-bad boundary `hi`.
+      - Sequentially test commits in reverse: hi-1, hi-2, ...
+      - Each failing test moves `hi` backward.
+      - The first passing test identifies the culprit as the current `hi`
+        (the next commit after the passing boundary).
+
+    This corresponds to testing prefixes [lo, hi-1], [lo, hi-2], ... in a linear
+    history where testing at commit k is equivalent to testing [0, k].
+    """
+
+    name = "swbb"
+
+    def run(
+        self,
+        *,
+        good_index: int,
+        bad_index: int,
+        culprit_index: int,
+        risk_by_index: Optional[Sequence[Optional[float]]] = None,
+    ) -> BisectionOutcome:
+        _ = risk_by_index  # not used by this strategy
+
+        if good_index >= bad_index:
+            logger.debug("SWBB skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
+            return BisectionOutcome(tests=0, found_index=None)
+
+        culprit_index = int(culprit_index)
+        if culprit_index <= good_index or culprit_index > bad_index:
+            logger.debug(
+                "SWBB culprit out of range: good=%d bad=%d culprit=%d",
+                good_index,
+                bad_index,
+                culprit_index,
+            )
+            return BisectionOutcome(tests=0, found_index=None)
+
+        good_index = int(good_index)
+        hi = int(bad_index)  # known-bad boundary
+        tests = 0
+
+        # Probe from (bad-1) down to (good+1).
+        for probe in range(int(bad_index) - 1, good_index, -1):
+            tests += 1
+            if probe >= culprit_index:
+                # Still failing; move the known-bad boundary backward.
+                hi = probe
+                continue
+
+            # Passing boundary found; culprit is the current known-bad boundary.
+            logger.debug(
+                "SWBB located culprit=%d in tests=%d (good=%d bad=%d)",
+                hi,
+                tests,
+                good_index,
+                bad_index,
+            )
+            return BisectionOutcome(tests=tests, found_index=hi)
+
+        # Never observed a pass within (good, bad); culprit must be good+1.
+        logger.debug(
+            "SWBB located culprit=%d in tests=%d (good=%d bad=%d)",
+            hi,
+            tests,
+            good_index,
+            bad_index,
+        )
+        return BisectionOutcome(tests=tests, found_index=hi)
+
+
+class SequentialWalkForwardBisection:
+    """
+    Sequential Walk Forward Bisection (SWFB).
+
+    Model:
+      - We start with a known-good commit at `good_index` and a known-bad commit at
+        `bad_index`, so the culprit lies in (good_index, bad_index].
+      - Sequentially test commits moving forward from the start of the unknown
+        region: good+1, good+2, ...
+      - The first failing test identifies the culprit index (since the previous
+        commit must have been clean).
+    """
+
+    name = "swfb"
+
+    def run(
+        self,
+        *,
+        good_index: int,
+        bad_index: int,
+        culprit_index: int,
+        risk_by_index: Optional[Sequence[Optional[float]]] = None,
+    ) -> BisectionOutcome:
+        _ = risk_by_index  # not used by this strategy
+
+        if good_index >= bad_index:
+            logger.debug("SWFB skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
+            return BisectionOutcome(tests=0, found_index=None)
+
+        culprit_index = int(culprit_index)
+        if culprit_index <= good_index or culprit_index > bad_index:
+            logger.debug(
+                "SWFB culprit out of range: good=%d bad=%d culprit=%d",
+                good_index,
+                bad_index,
+                culprit_index,
+            )
+            return BisectionOutcome(tests=0, found_index=None)
+
+        good_index = int(good_index)
+        bad_index = int(bad_index)
+        tests = 0
+
+        for probe in range(good_index + 1, bad_index + 1):
+            tests += 1
+            if probe >= culprit_index:
+                logger.debug(
+                    "SWFB located culprit=%d in tests=%d (good=%d bad=%d)",
+                    probe,
+                    tests,
+                    good_index,
+                    bad_index,
+                )
+                return BisectionOutcome(tests=tests, found_index=int(probe))
+
+        # Should be unreachable due to the culprit range check above.
+        return BisectionOutcome(tests=tests, found_index=None)
+
+
+class TopKRiskFirstBisection:
+    """
+    Top-K Risk-First Bisection (TKRB-K).
+
+    Phase 1 (risk-first):
+      - Select the top-K highest-risk commits in (good_index, bad_index] using
+        `risk_by_index`.
+      - For each candidate commit `i`, test `i-1` and `i` (caching results).
+      - If `i` fails and `i-1` passes, then `i` is the culprit.
+
+    Phase 2 (fallback):
+      - If not found, run a standard git-bisect binary search on (good,bad]
+        while reusing any cached test results from phase 1.
+    """
+
+    name = "tkrb-k"
+
+    def __init__(self, k: int = 10) -> None:
+        if k <= 0:
+            raise ValueError("k must be positive")
+        self.k = int(k)
+
+    def _risk(self, idx: int, risk_by_index: Sequence[Optional[float]]) -> float:
+        v = risk_by_index[idx]
+        return 0.0 if v is None else float(v)
+
+    def run(
+        self,
+        *,
+        good_index: int,
+        bad_index: int,
+        culprit_index: int,
+        risk_by_index: Optional[Sequence[Optional[float]]] = None,
+    ) -> BisectionOutcome:
+        if risk_by_index is None:
+            raise ValueError("TKRB-K requires risk_by_index to be provided")
+
+        if good_index >= bad_index:
+            logger.debug("TKRB-K skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
+            return BisectionOutcome(tests=0, found_index=None)
+
+        culprit_index = int(culprit_index)
+        if culprit_index <= good_index or culprit_index > bad_index:
+            logger.debug(
+                "TKRB-K culprit out of range: good=%d bad=%d culprit=%d",
+                good_index,
+                bad_index,
+                culprit_index,
+            )
+            return BisectionOutcome(tests=0, found_index=None)
+
+        good_index = int(good_index)
+        bad_index = int(bad_index)
+
+        cache: dict[int, bool] = {
+            good_index: False,  # known good
+            bad_index: True,  # known bad
+        }
+
+        def test(idx: int) -> bool:
+            """Return True if commit idx fails; counts as a test when uncached."""
+            if idx in cache:
+                return cache[idx]
+            out = bool(int(idx) >= culprit_index)
+            cache[int(idx)] = out
+            return out
+
+        tests = 0
+
+        def test_and_count(idx: int) -> bool:
+            nonlocal tests
+            if idx in cache:
+                return cache[idx]
+            tests += 1
+            return test(idx)
+
+        # ---- Phase 1: risk-first scan over top-K commits. ----
+        start = good_index + 1
+        end = bad_index + 1  # inclusive end for range()
+        if start < end:
+            k = min(self.k, end - start)
+            top_indices = heapq.nlargest(
+                k,
+                range(start, end),
+                key=lambda i: (self._risk(i, risk_by_index), -int(i)),
+            )
+
+            for idx in top_indices:
+                prev = idx - 1
+                if prev <= good_index:
+                    prev_failed = False
+                    cache[prev] = False
+                else:
+                    prev_failed = test_and_count(prev)
+
+                idx_failed = test_and_count(idx)
+                if idx_failed and not prev_failed:
+                    logger.debug(
+                        "TKRB-K found culprit=%d during risk-first phase (tests=%d good=%d bad=%d k=%d)",
+                        idx,
+                        tests,
+                        good_index,
+                        bad_index,
+                        self.k,
+                    )
+                    return BisectionOutcome(tests=tests, found_index=int(idx))
+
+        # Use any newly discovered pass/fail results to tighten the search interval.
+        best_good = max(i for i, failed in cache.items() if not failed)
+        best_bad = min(i for i, failed in cache.items() if failed)
+        low = max(good_index, int(best_good))
+        high = min(bad_index, int(best_bad))
+        if low >= high:
+            # Should not happen under a consistent monotone model; fall back to original bounds.
+            low = good_index
+            high = bad_index
+
+        # ---- Phase 2: standard git-bisect with memoization. ----
+        while high - low > 1:
+            mid = (low + high) // 2
+            mid_failed = test_and_count(mid)
+            if mid_failed:
+                high = mid
+            else:
+                low = mid
+
+        logger.debug(
+            "TKRB-K located culprit=%d in tests=%d (good=%d bad=%d k=%d)",
+            high,
+            tests,
+            good_index,
+            bad_index,
+            self.k,
+        )
+        return BisectionOutcome(tests=tests, found_index=int(high))
+
+
 BISECTION_STRATEGIES = {
     GitBisectBaseline.name: GitBisectBaseline,
     RiskWeightedAdaptiveBisectionSum.name: RiskWeightedAdaptiveBisectionSum,
     RiskWeightedAdaptiveBisectionLogSurvival.name: RiskWeightedAdaptiveBisectionLogSurvival,
+    SequentialWalkBackwardBisection.name: SequentialWalkBackwardBisection,
+    SequentialWalkForwardBisection.name: SequentialWalkForwardBisection,
+    TopKRiskFirstBisection.name: TopKRiskFirstBisection,
 }
