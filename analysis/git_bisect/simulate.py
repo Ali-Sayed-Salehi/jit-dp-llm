@@ -344,6 +344,7 @@ def simulate_strategy_combo(
     total_lookback_tests = 0
     total_bisection_tests = 0
     total_culprits_found = 0
+    max_tests_per_search = 0
 
     skipped = {
         "not_regression": 0,
@@ -438,11 +439,24 @@ def simulate_strategy_combo(
             risk_by_index=risk_by_index,
         )
 
+        tests_per_search = int(lookback_tests) + int(bisect_outcome.tests)
+        if tests_per_search > max_tests_per_search:
+            max_tests_per_search = tests_per_search
+
         total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
         total_lookback_tests += lookback_tests
         total_bisection_tests += bisect_outcome.tests
         total_tests += lookback_tests + bisect_outcome.tests
         processed += 1
+
+    mean_tests_per_search: Optional[float]
+    max_tests_per_search_out: Optional[int]
+    if processed <= 0:
+        mean_tests_per_search = None
+        max_tests_per_search_out = None
+    else:
+        mean_tests_per_search = float(total_tests) / float(processed)
+        max_tests_per_search_out = int(max_tests_per_search)
 
     logger.info(
         "Finished combo %s+%s: processed=%d total_tests=%d culprits_found=%d skipped=%s",
@@ -458,6 +472,8 @@ def simulate_strategy_combo(
         "total_tests": total_tests,
         "total_lookback_tests": total_lookback_tests,
         "total_bisection_tests": total_bisection_tests,
+        "mean_tests_per_search": mean_tests_per_search,
+        "max_tests_per_search": max_tests_per_search_out,
         "total_culprits_found": total_culprits_found,
         "bugs": {"processed": processed, "skipped": skipped},
     }
@@ -851,28 +867,36 @@ def main() -> int:
     eval_summary: Optional[Dict[str, Any]] = None
     baseline_combo = "NBLB+GB"
 
-    def _pct_vs_baseline(*, total_tests: int, baseline_total_tests: int) -> Optional[float]:
-        if baseline_total_tests <= 0:
+    def _as_float(value: Any) -> Optional[float]:
+        if value is None:
             return None
-        return 100.0 * (float(baseline_total_tests) - float(total_tests)) / float(baseline_total_tests)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _pct_vs_baseline(*, value: Optional[float], baseline_value: Optional[float]) -> Optional[float]:
+        if baseline_value is None or baseline_value <= 0.0:
+            return None
+        if value is None:
+            return None
+        return 100.0 * (float(baseline_value) - float(value)) / float(baseline_value)
 
     def _annotate_results_with_baseline(
         *,
         results: List[Dict[str, Any]],
+        metric_specs: Sequence[Tuple[Any, Any]],
         get_total_tests: Any,
-        set_pct_vs_baseline: Any,
     ) -> Dict[str, Any]:
         baseline_row = next((r for r in results if str(r.get("combo")) == baseline_combo), None)
         if baseline_row is None:
             raise RuntimeError(f"Baseline combo {baseline_combo!r} not found in results.")
 
-        baseline_total_tests = int(get_total_tests(baseline_row))
-        for row in results:
-            pct = _pct_vs_baseline(
-                total_tests=int(get_total_tests(row)),
-                baseline_total_tests=baseline_total_tests,
-            )
-            set_pct_vs_baseline(row, pct)
+        for get_value, set_pct in metric_specs:
+            baseline_value = _as_float(get_value(baseline_row))
+            for row in results:
+                pct = _pct_vs_baseline(value=_as_float(get_value(row)), baseline_value=baseline_value)
+                set_pct(row, pct)
 
         best_row = min(results, key=lambda r: int(get_total_tests(r)))
         return {
@@ -934,10 +958,23 @@ def main() -> int:
 
         eval_comparison = _annotate_results_with_baseline(
             results=eval_results,
+            metric_specs=[
+                (
+                    lambda r: (r.get("metrics") or {}).get("total_tests"),
+                    lambda r, pct: r.setdefault("metrics", {}).update({"total_tests_vs_baseline_pct": pct}),
+                ),
+                (
+                    lambda r: (r.get("metrics") or {}).get("mean_tests_per_search"),
+                    lambda r, pct: r.setdefault("metrics", {}).update(
+                        {"mean_tests_per_search_vs_baseline_pct": pct}
+                    ),
+                ),
+                (
+                    lambda r: (r.get("metrics") or {}).get("max_tests_per_search"),
+                    lambda r, pct: r.setdefault("metrics", {}).update({"max_tests_per_search_vs_baseline_pct": pct}),
+                ),
+            ],
             get_total_tests=lambda r: (r.get("metrics") or {}).get("total_tests", 0),
-            set_pct_vs_baseline=lambda r, pct: r.setdefault("metrics", {}).update(
-                {"total_tests_vs_baseline_pct": pct}
-            ),
         )
         eval_summary = {
             "dataset": "eval",
@@ -1021,8 +1058,21 @@ def main() -> int:
 
     final_comparison = _annotate_results_with_baseline(
         results=final_results,
+        metric_specs=[
+            (
+                lambda r: r.get("total_tests"),
+                lambda r, pct: r.__setitem__("total_tests_vs_baseline_pct", pct),
+            ),
+            (
+                lambda r: r.get("mean_tests_per_search"),
+                lambda r, pct: r.__setitem__("mean_tests_per_search_vs_baseline_pct", pct),
+            ),
+            (
+                lambda r: r.get("max_tests_per_search"),
+                lambda r, pct: r.__setitem__("max_tests_per_search_vs_baseline_pct", pct),
+            ),
+        ],
         get_total_tests=lambda r: r.get("total_tests", 0),
-        set_pct_vs_baseline=lambda r, pct: r.__setitem__("total_tests_vs_baseline_pct", pct),
     )
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
