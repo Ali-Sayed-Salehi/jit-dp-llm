@@ -48,14 +48,12 @@ ANDROID_WORKERS = 60
 WINDOWS_WORKERS = 120
 LINUX_WORKERS = 100
 MAC_WORKERS = 250
-IOS_WORKERS = 20
 
 DEFAULT_WORKER_POOLS = {
     "android": ANDROID_WORKERS,
     "windows": WINDOWS_WORKERS,
     "linux": LINUX_WORKERS,
     "mac": MAC_WORKERS,
-    "ios": IOS_WORKERS,
 }
 
 # Fallbacks and knobs (configured by the main simulation script).
@@ -74,7 +72,7 @@ _unknown_platform_pool = DEFAULT_UNKNOWN_PLATFORM_POOL
 SIG_TO_GROUP_ID = {}
 # signature_group_id -> list[int signature_id]
 SIG_GROUP_TO_SIG_IDS = {}
-# signature_id -> pool key (android/windows/linux/mac/ios)
+# signature_id -> pool key (android/windows/linux/mac). iOS signatures are routed to "mac".
 SIG_ID_TO_POOL = {}
 # signature_group_id -> pool key (cached)
 SIG_GROUP_ID_TO_POOL = {}
@@ -461,7 +459,7 @@ def _pool_from_machine_platform(machine_platform: str):
       - linux
       - android
       - osx (e.g. "macosx")
-      - ios
+      - ios (routed to mac pool)
       - windows
 
     """
@@ -473,7 +471,7 @@ def _pool_from_machine_platform(machine_platform: str):
     if "android" in s:
         return "android"
     if "ios" in s:
-        return "ios"
+        return "mac"
     if "osx" in s or "mac" in s or "darwin" in s:
         return "mac"
     if "win" in s or "windows" in s:

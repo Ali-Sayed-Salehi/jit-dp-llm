@@ -134,7 +134,7 @@ def _worker_pools_for_output(pools: dict) -> dict:
     Produce a stable, human-friendly worker pool mapping for JSON output.
 
     - In single-pool mode, emits {"default": N}
-    - In multi-pool mode, emits android/windows/linux/mac/ios first (when present),
+    - In multi-pool mode, emits android/windows/linux/mac first (when present),
       then any extra pools in sorted order.
     """
     if not isinstance(pools, dict):
@@ -143,7 +143,7 @@ def _worker_pools_for_output(pools: dict) -> dict:
     if set(pools.keys()) == {"default"}:
         return {"default": int(pools["default"])}
 
-    preferred = ["android", "windows", "linux", "mac", "ios"]
+    preferred = ["android", "windows", "linux", "mac"]
     out = {}
     for k in preferred:
         if k in pools:
@@ -287,13 +287,10 @@ def get_args():
         "--workers-mac",
         type=int,
         default=bisection_mod.MAC_WORKERS,
-        help="Mac worker pool size (signature-groups routed by machine_platform).",
-    )
-    parser.add_argument(
-        "--workers-ios",
-        type=int,
-        default=bisection_mod.IOS_WORKERS,
-        help="iOS worker pool size (signature-groups routed by machine_platform).",
+        help=(
+            "Mac worker pool size (signature-groups routed by machine_platform; "
+            "includes iOS jobs)."
+        ),
     )
     parser.add_argument(
         "--unknown-platform-pool",
@@ -1709,7 +1706,7 @@ def main():
     logger.info("Starting batch-testing simulation CLI")
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
-        "workers(android/windows/linux/mac/ios)=(%d/%d/%d/%d/%d), "
+        "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
@@ -1721,7 +1718,6 @@ def main():
         int(getattr(args, "workers_windows", 0)),
         int(getattr(args, "workers_linux", 0)),
         int(getattr(args, "workers_mac", 0)),
-        int(getattr(args, "workers_ios", 0)),
         str(getattr(args, "unknown_platform_pool", "")),
         str(args.full_suite_sigs_per_run),
         str(args.dont_use_all_tests_per_batch),
@@ -1744,7 +1740,6 @@ def main():
             "windows": int(getattr(args, "workers_windows", bisection_mod.WINDOWS_WORKERS)),
             "linux": int(getattr(args, "workers_linux", bisection_mod.LINUX_WORKERS)),
             "mac": int(getattr(args, "workers_mac", bisection_mod.MAC_WORKERS)),
-            "ios": int(getattr(args, "workers_ios", bisection_mod.IOS_WORKERS)),
         }
 
     unknown_platform_pool = str(getattr(args, "unknown_platform_pool", "")).strip().lower()
