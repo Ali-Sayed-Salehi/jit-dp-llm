@@ -28,6 +28,8 @@ Risk predictions define the commit window used for simulation:
 
 Outside this window, risk is treated as unavailable (`None`) and many bugs are skipped if their good/bad commit would fall outside the window.
 
+Lookback strategies are also constrained to return a `good_index` within the window; if a policy would otherwise need to test earlier history, it falls back to testing `window_start` as the earliest available commit.
+
 ### “Available regressor” selection
 Mozilla bugs can reference other bugs in `regressed_by`. For this simulation:
 

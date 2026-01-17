@@ -45,11 +45,14 @@ class FixedStrideLookback:
 
     name = "fixed_stride"
 
-    def __init__(self, stride: int = 20) -> None:
+    def __init__(self, stride: int = 20, *, window_start: int = 0) -> None:
         """Create a fixed-stride lookback strategy."""
         if stride <= 0:
             raise ValueError("stride must be positive")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
         self.stride = stride
+        self.window_start = int(window_start)
 
     def find_good_index(
         self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
@@ -60,28 +63,48 @@ class FixedStrideLookback:
         culprit_index = int(culprit_index)
         idx = int(start_index)
         steps = 0
-        while idx >= 0:
-            if idx < culprit_index:
+        while True:
+            candidate = idx - int(self.stride)
+            if candidate < self.window_start:
+                candidate = self.window_start
+
+            # No further progress possible: there is no commit < start_index within the window.
+            if candidate >= idx:
                 logger.debug(
-                    "Lookback found good_index=%d after steps=%d (start=%d culprit=%d stride=%d)",
-                    idx,
+                    "Lookback failed to find in-window good_index (start=%d culprit=%d stride=%d window_start=%d steps=%d)",
+                    start_index,
+                    culprit_index,
+                    self.stride,
+                    self.window_start,
+                    steps,
+                )
+                return LookbackOutcome(good_index=None, steps=steps)
+
+            steps += 1
+            if candidate < culprit_index:
+                logger.debug(
+                    "Lookback found good_index=%d after steps=%d (start=%d culprit=%d stride=%d window_start=%d)",
+                    candidate,
                     steps,
                     start_index,
                     culprit_index,
                     self.stride,
+                    self.window_start,
                 )
-                return LookbackOutcome(good_index=idx, steps=steps)
-            idx -= self.stride
-            steps += 1
+                return LookbackOutcome(good_index=candidate, steps=steps)
 
-        logger.debug(
-            "Lookback failed to find good_index (start=%d culprit=%d stride=%d steps=%d)",
-            start_index,
-            culprit_index,
-            self.stride,
-            steps,
-        )
-        return LookbackOutcome(good_index=None, steps=steps)
+            if candidate == self.window_start:
+                logger.debug(
+                    "Lookback failed to find in-window good_index (start=%d culprit=%d stride=%d window_start=%d steps=%d)",
+                    start_index,
+                    culprit_index,
+                    self.stride,
+                    self.window_start,
+                    steps,
+                )
+                return LookbackOutcome(good_index=None, steps=steps)
+
+            idx = candidate
 
 
 class NightlyBuildLookback:
@@ -104,13 +127,17 @@ class NightlyBuildLookback:
         *,
         sorted_times_utc: Sequence[datetime],
         sorted_time_indices: Sequence[int],
+        window_start: int = 0,
     ) -> None:
         if len(sorted_times_utc) != len(sorted_time_indices):
             raise ValueError("sorted_times_utc and sorted_time_indices must have the same length")
         if not sorted_times_utc:
             raise ValueError("sorted_times_utc must be non-empty")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
         self.sorted_times_utc = list(sorted_times_utc)
         self.sorted_time_indices = list(sorted_time_indices)
+        self.window_start = int(window_start)
 
     def _last_commit_strictly_before(self, t: datetime) -> Optional[int]:
         import bisect
@@ -130,6 +157,10 @@ class NightlyBuildLookback:
         culprit_index = int(culprit_index)
         start_index = int(start_index)
 
+        if start_index <= self.window_start:
+            # There is no commit < start_index within the simulation window.
+            return LookbackOutcome(good_index=None, steps=0)
+
         midnight_today = datetime(
             start_time_utc.year,
             start_time_utc.month,
@@ -146,6 +177,9 @@ class NightlyBuildLookback:
                     "Nightly lookback failed: no commits before "
                     f"cutoff={cutoff.isoformat()} (start_index={start_index}, culprit_index={culprit_index}, steps={steps})"
                 )
+
+            if nightly_idx < self.window_start:
+                nightly_idx = self.window_start
 
             # If the nightly build resolves to the already-known "bad" observation commit
             # (possible when the bug is observed soon after midnight with no intervening commits),
@@ -165,6 +199,10 @@ class NightlyBuildLookback:
                 )
                 return LookbackOutcome(good_index=nightly_idx, steps=steps)
 
+            if nightly_idx == self.window_start:
+                # No earlier in-window commit can be tested.
+                return LookbackOutcome(good_index=None, steps=steps)
+
             cutoff = cutoff - timedelta(days=1)
 
 
@@ -182,16 +220,22 @@ class RiskAwareTriggerLookback:
       - The scan through commits is free; `steps` counts only the number of
         tested commits.
       - `risk_by_index` values of None are treated as 0.0 risk.
-      - If no triggers are found, the strategy falls back to testing commit 0.
+      - If no triggers are found, the strategy falls back to testing the first
+        commit in the simulation window (`window_start`).
     """
 
     name = "risk_aware_trigger"
 
-    def __init__(self, *, risk_by_index: Sequence[Optional[float]], threshold: float = 0.5) -> None:
+    def __init__(
+        self, *, risk_by_index: Sequence[Optional[float]], threshold: float = 0.5, window_start: int = 0
+    ) -> None:
         if threshold < 0.0 or threshold > 1.0:
             raise ValueError("threshold must be in [0,1]")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
         self.risk_by_index = risk_by_index
         self.threshold = float(threshold)
+        self.window_start = int(window_start)
 
     def _risk(self, idx: int) -> float:
         v = self.risk_by_index[idx]
@@ -210,21 +254,23 @@ class RiskAwareTriggerLookback:
         search_idx = min(start_index, max_idx)
 
         steps = 0
+        min_trigger_idx = max(self.window_start + 1, 1)
 
         while True:
             trigger_idx: Optional[int] = None
             i = search_idx
-            # We need i-1 to exist, so only consider triggers at i >= 1.
-            while i >= 1:
+            # We need i-1 to exist and we do not test outside the simulation window,
+            # so only consider triggers at i >= window_start+1.
+            while i >= min_trigger_idx:
                 if self._risk(i) > self.threshold:
                     trigger_idx = i
                     break
                 i -= 1
 
             if trigger_idx is None:
-                # No triggers found: fall back to testing the first commit.
+                # No triggers found: fall back to testing the first commit in the window.
                 steps += 1
-                good = 0 if 0 < culprit_index else None
+                good = self.window_start if self.window_start < culprit_index else None
                 return LookbackOutcome(good_index=good, steps=steps)
 
             candidate = trigger_idx - 1
@@ -240,6 +286,10 @@ class RiskAwareTriggerLookback:
                     trigger_idx,
                 )
                 return LookbackOutcome(good_index=candidate, steps=steps)
+
+            if candidate <= self.window_start:
+                # No earlier in-window candidate can be tested.
+                return LookbackOutcome(good_index=None, steps=steps)
 
             # Candidate still contains the culprit; continue scanning earlier history.
             search_idx = candidate
@@ -269,6 +319,7 @@ class TimeWindowLookback:
         sorted_times_utc: Sequence[datetime],
         sorted_time_indices: Sequence[int],
         hours: float = 24.0,
+        window_start: int = 0,
     ) -> None:
         if len(sorted_times_utc) != len(sorted_time_indices):
             raise ValueError("sorted_times_utc and sorted_time_indices must have the same length")
@@ -276,10 +327,13 @@ class TimeWindowLookback:
             raise ValueError("sorted_times_utc must be non-empty")
         if hours <= 0.0:
             raise ValueError("hours must be positive")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
 
         self.sorted_times_utc = list(sorted_times_utc)
         self.sorted_time_indices = list(sorted_time_indices)
         self.hours = float(hours)
+        self.window_start = int(window_start)
 
         # Fast index->time mapping for repeated lookups.
         time_by_index: List[Optional[datetime]] = [None] * len(self.sorted_time_indices)
@@ -305,11 +359,15 @@ class TimeWindowLookback:
         start_index = int(start_index)
         culprit_index = int(culprit_index)
 
+        if start_index <= self.window_start:
+            # There is no commit < start_index within the simulation window.
+            return LookbackOutcome(good_index=None, steps=0)
+
         # Defensive clamp.
         cur_idx = min(start_index, len(self.time_by_index) - 1)
 
         steps = 0
-        while cur_idx > 0:
+        while cur_idx > self.window_start:
             cur_time = self.time_by_index[cur_idx]
             if cur_time is None:
                 raise RuntimeError(f"Missing commit time for index {cur_idx}")
@@ -320,6 +378,8 @@ class TimeWindowLookback:
                 break
             if candidate >= cur_idx:
                 candidate = cur_idx - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
 
             steps += 1
             if candidate < culprit_index:
@@ -333,11 +393,14 @@ class TimeWindowLookback:
                 )
                 return LookbackOutcome(good_index=candidate, steps=steps)
 
+            if candidate == self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps)
+
             cur_idx = candidate
 
-        # If we ran out of history/time-window targets, fall back to testing the first commit.
+        # If we ran out of history/time-window targets, fall back to testing the first commit in the window.
         steps += 1
-        good = 0 if 0 < culprit_index else None
+        good = self.window_start if self.window_start < culprit_index else None
         return LookbackOutcome(good_index=good, steps=steps)
 
 

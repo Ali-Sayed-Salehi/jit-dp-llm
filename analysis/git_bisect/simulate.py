@@ -412,10 +412,8 @@ def simulate_strategy_combo(
             start_index=bad_index, culprit_index=culprit_index, start_time_utc=bug_time
         )
         if lookback_outcome.good_index is None:
-            raise KeyError(
-                "lookback did not find a clean commit for "
-                f"bug_id={bug.get('bug_id')} start_index={_fmt(bad_index)} culprit_index={_fmt(culprit_index)}"
-            )
+            skipped["no_regressors_in_range"] += 1
+            continue
 
         good_index = lookback_outcome.good_index
         lookback_tests = lookback_outcome.steps
@@ -836,52 +834,58 @@ def main() -> int:
                 "If you use DVC, ensure datasets are pulled into `datasets/`."
             )
 
-    lookback_specs: List[StrategySpec] = [
-        StrategySpec(
-            code="NBLB",
-            name="nightly_builds",
-            default_params={},
-            build=lambda inputs, _p: NightlyBuildLookback(
-                sorted_times_utc=inputs.sorted_times_utc,
-                sorted_time_indices=inputs.sorted_time_indices,
+        lookback_specs: List[StrategySpec] = [
+            StrategySpec(
+                code="NBLB",
+                name="nightly_builds",
+                default_params={},
+                build=lambda inputs, _p: NightlyBuildLookback(
+                    sorted_times_utc=inputs.sorted_times_utc,
+                    sorted_time_indices=inputs.sorted_time_indices,
+                    window_start=inputs.window_start,
+                ),
+                suggest_params=None,
             ),
-            suggest_params=None,
-        ),
-        StrategySpec(
-            code="FSLB",
-            name="fixed_stride",
-            default_params={"stride": 20},
-            build=lambda _inputs, p: FixedStrideLookback(stride=int(p["stride"])),
-            suggest_params=lambda trial: {
-                "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
-            },
-        ),
-        StrategySpec(
-            code="RATLB",
-            name="risk_aware_trigger",
-            default_params={"threshold": 0.5},
-            build=lambda inputs, p: RiskAwareTriggerLookback(
-                risk_by_index=inputs.risk_by_index,
-                threshold=float(p["threshold"]),
+            StrategySpec(
+                code="FSLB",
+                name="fixed_stride",
+                default_params={"stride": 20},
+                build=lambda inputs, p: FixedStrideLookback(
+                    stride=int(p["stride"]),
+                    window_start=inputs.window_start,
+                ),
+                suggest_params=lambda trial: {
+                    "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
+                },
             ),
-            suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RATLB_threshold", 0.0, 1.0)
-            },
-        ),
-        StrategySpec(
-            code="TWLB",
-            name="time_window",
-            default_params={"hours": 24},
-            build=lambda inputs, p: TimeWindowLookback(
-                sorted_times_utc=inputs.sorted_times_utc,
-                sorted_time_indices=inputs.sorted_time_indices,
-                hours=float(p["hours"]),
+            StrategySpec(
+                code="RATLB",
+                name="risk_aware_trigger",
+                default_params={"threshold": 0.5},
+                build=lambda inputs, p: RiskAwareTriggerLookback(
+                    risk_by_index=inputs.risk_by_index,
+                    threshold=float(p["threshold"]),
+                    window_start=inputs.window_start,
+                ),
+                suggest_params=lambda trial: {
+                    "threshold": trial.suggest_float("RATLB_threshold", 0.0, 1.0)
+                },
             ),
-            suggest_params=lambda trial: {
-                "hours": trial.suggest_int("TWLB_hours", 1, 24 * 30, log=True)
-            },
-        ),
-    ]
+            StrategySpec(
+                code="TWLB",
+                name="time_window",
+                default_params={"hours": 24},
+                build=lambda inputs, p: TimeWindowLookback(
+                    sorted_times_utc=inputs.sorted_times_utc,
+                    sorted_time_indices=inputs.sorted_time_indices,
+                    hours=float(p["hours"]),
+                    window_start=inputs.window_start,
+                ),
+                suggest_params=lambda trial: {
+                    "hours": trial.suggest_int("TWLB_hours", 1, 24 * 30, log=True)
+                },
+            ),
+        ]
     bisection_specs: List[StrategySpec] = [
         StrategySpec(
             code="GB",
