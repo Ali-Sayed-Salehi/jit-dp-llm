@@ -91,9 +91,9 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py 
 --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
 --risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
 --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/simulation_optuna_eval.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/simulation_optuna_final_test.json \
---mopt-trials 1 \
+--output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
+--output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
+--mopt-trials 50 \
 --optuna-seed 42 \
 --lookback NBLB,NLB,FSLB,AFSLB,RATLB,RWLBS,RWLBLS,TWLB,ATWLB \
 --bisection GB,SWBB,SWFB,TKRB,RWBS,RWBLS \
