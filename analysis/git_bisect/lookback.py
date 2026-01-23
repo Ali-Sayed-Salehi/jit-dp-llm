@@ -43,8 +43,8 @@ class NoLookback:
     No Lookback (NLB).
 
     Do not search for a known-good commit via additional tests. Instead, use
-    the first commit in the simulation window as the known-good boundary and
-    let bisection search within (window_start, start_index].
+    a fixed clean baseline commit (`window_start`, index 0 by default) as the
+    known-good boundary and let bisection search within (window_start, start_index].
     """
 
     name = "no_lookback"

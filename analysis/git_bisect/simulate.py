@@ -432,6 +432,12 @@ def simulate_strategy_combo(
         if good_index < window_start:
             skipped["good_not_in_window"] += 1
             continue
+
+        # NLB uses the repo's first commit as the clean boundary (index 0), but we
+        # only run it on bugs where an in-window clean boundary exists (i.e., the
+        # lookback returned a valid `good_index` within the risk window).
+        if lookback_code == "NLB":
+            good_index = 0
         if good_index >= bad_index:
             raise RuntimeError(
                 f"Invalid good/bad ordering for bug_id={bug.get('bug_id')}: "
@@ -1117,6 +1123,33 @@ def main() -> int:
                 baseline_combo,
             )
         else:
+            try:
+                baseline_processed = int(
+                    (((baseline_row.get("metrics") or {}).get("bugs") or {}).get("processed") or 0)
+                )
+            except (TypeError, ValueError):
+                baseline_processed = None
+
+            if baseline_processed is not None:
+                mismatched = False
+                for row in results:
+                    try:
+                        processed = int(
+                            ((((row.get("metrics") or {}).get("bugs") or {}).get("processed") or 0))
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if processed != baseline_processed:
+                        mismatched = True
+                        break
+                if mismatched:
+                    logger.warning(
+                        "Some combos processed a different number of bugs than the baseline "
+                        "(baseline=%s processed=%d); comparisons may be unfair.",
+                        baseline_combo,
+                        baseline_processed,
+                    )
+
             for get_value, set_pct in metric_specs:
                 baseline_value = _as_float(get_value(baseline_row))
                 for row in results:
