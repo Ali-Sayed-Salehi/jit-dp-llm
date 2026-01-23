@@ -191,21 +191,21 @@ class GitBisectBaseline:
         return BisectionOutcome(tests=tests, found_index=high)
 
 
-class RiskWeightedAdaptiveBisectionSum:
+class RiskWeightedBisectionSum:
     """
-    Risk-Weighted Adaptive Bisection (RWAB-SUM).
+    Risk-Weighted Bisection (RWB-SUM).
 
     Like standard git bisect on a linear history, but chooses each probe index
     by approximately balancing the cumulative predicted risk mass in the two
     contiguous halves of the current search interval.
 
-    For a current interval (low, high], RWAB chooses a mid in (low, high) such
+    For a current interval (low, high], RWB chooses a mid in (low, high) such
     that:
       Σ p_i over (low, mid] ~= Σ p_i over (mid, high]
     preserving time order by only splitting into two contiguous sub-batches.
     """
 
-    name = "rwab-s"
+    name = "rwb-s"
 
     def _choose_mid(
         self,
@@ -227,7 +227,7 @@ class RiskWeightedAdaptiveBisectionSum:
         """
         if not isinstance(risk_by_index, RiskSeries):
             raise ValueError(
-                "RWAB-S requires risk_by_index to be a RiskSeries "
+                "RWB-S requires risk_by_index to be a RiskSeries "
                 f"(got {type(risk_by_index).__name__})"
             )
 
@@ -236,7 +236,7 @@ class RiskWeightedAdaptiveBisectionSum:
         total = risk_by_index.range_sum(left, right)
         if total < 0.0:
             raise RuntimeError(
-                "RWAB-S computed a negative total risk mass for the current interval "
+                "RWB-S computed a negative total risk mass for the current interval "
                 f"(left={left}, right={right}, total={total})"
             )
         if total == 0.0:
@@ -265,13 +265,13 @@ class RiskWeightedAdaptiveBisectionSum:
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
-            logger.debug("RWAB-SUM skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
+            logger.debug("RWB-SUM skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
             return BisectionOutcome(tests=0, found_index=None)
 
         culprit_index = int(culprit_index)
         if culprit_index <= good_index or culprit_index > bad_index:
             logger.debug(
-                "RWAB-SUM culprit out of range: good=%d bad=%d culprit=%d",
+                "RWB-SUM culprit out of range: good=%d bad=%d culprit=%d",
                 good_index,
                 bad_index,
                 culprit_index,
@@ -291,7 +291,7 @@ class RiskWeightedAdaptiveBisectionSum:
                 low = mid
 
         logger.debug(
-            "RWAB-SUM located culprit=%d in tests=%d (good=%d bad=%d)",
+            "RWB-SUM located culprit=%d in tests=%d (good=%d bad=%d)",
             high,
             tests,
             good_index,
@@ -300,16 +300,16 @@ class RiskWeightedAdaptiveBisectionSum:
         return BisectionOutcome(tests=tests, found_index=high)
 
 
-class RiskWeightedAdaptiveBisectionLogSurvival:
+class RiskWeightedBisectionLogSurvival:
     """
-    Risk-Weighted Adaptive Bisection (RWAB-LS).
+    Risk-Weighted Bisection (RWB-LS).
 
-    Same as RWAB-SUM, but uses a combined probability mass over an interval:
+    Same as RWB-SUM, but uses a combined probability mass over an interval:
       1 - ∏(1 - p_i)
     to balance the two time-ordered contiguous halves of the current search range.
     """
 
-    name = "rwab-ls"
+    name = "rwb-ls"
 
     def _choose_mid(
         self,
@@ -332,7 +332,7 @@ class RiskWeightedAdaptiveBisectionLogSurvival:
         """
         if not isinstance(risk_by_index, RiskSeries):
             raise ValueError(
-                "RWAB-LS requires risk_by_index to be a RiskSeries "
+                "RWB-LS requires risk_by_index to be a RiskSeries "
                 f"(got {type(risk_by_index).__name__})"
             )
 
@@ -341,7 +341,7 @@ class RiskWeightedAdaptiveBisectionLogSurvival:
         total = risk_by_index.range_combined_probability(left, right)
         if total < 0.0:
             raise RuntimeError(
-                "RWAB-LS computed a negative combined probability for the current interval "
+                "RWB-LS computed a negative combined probability for the current interval "
                 f"(left={left}, right={right}, total={total})"
             )
         if total == 0.0:
@@ -384,13 +384,13 @@ class RiskWeightedAdaptiveBisectionLogSurvival:
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
-            logger.debug("RWAB-LS skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
+            logger.debug("RWB-LS skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
             return BisectionOutcome(tests=0, found_index=None)
 
         culprit_index = int(culprit_index)
         if culprit_index <= good_index or culprit_index > bad_index:
             logger.debug(
-                "RWAB-LS culprit out of range: good=%d bad=%d culprit=%d",
+                "RWB-LS culprit out of range: good=%d bad=%d culprit=%d",
                 good_index,
                 bad_index,
                 culprit_index,
@@ -410,7 +410,7 @@ class RiskWeightedAdaptiveBisectionLogSurvival:
                 low = mid
 
         logger.debug(
-            "RWAB-LS located culprit=%d in tests=%d (good=%d bad=%d)",
+            "RWB-LS located culprit=%d in tests=%d (good=%d bad=%d)",
             high,
             tests,
             good_index,
@@ -693,8 +693,8 @@ class TopKRiskFirstBisection:
 
 BISECTION_STRATEGIES = {
     GitBisectBaseline.name: GitBisectBaseline,
-    RiskWeightedAdaptiveBisectionSum.name: RiskWeightedAdaptiveBisectionSum,
-    RiskWeightedAdaptiveBisectionLogSurvival.name: RiskWeightedAdaptiveBisectionLogSurvival,
+    RiskWeightedBisectionSum.name: RiskWeightedBisectionSum,
+    RiskWeightedBisectionLogSurvival.name: RiskWeightedBisectionLogSurvival,
     SequentialWalkBackwardBisection.name: SequentialWalkBackwardBisection,
     SequentialWalkForwardBisection.name: SequentialWalkForwardBisection,
     TopKRiskFirstBisection.name: TopKRiskFirstBisection,

@@ -48,10 +48,21 @@ from bisection import (
     SequentialWalkBackwardBisection,
     SequentialWalkForwardBisection,
     TopKRiskFirstBisection,
-    RiskWeightedAdaptiveBisectionLogSurvival,
-    RiskWeightedAdaptiveBisectionSum,
+    RiskWeightedBisectionLogSurvival,
+    RiskWeightedBisectionSum,
 )
-from lookback import FixedStrideLookback, LookbackStrategy, NightlyBuildLookback, RiskAwareTriggerLookback, TimeWindowLookback
+from lookback import (
+    AdaptiveTimeWindowLookback,
+    AdaptiveFixedStrideLookback,
+    FixedStrideLookback,
+    LookbackStrategy,
+    NightlyBuildLookback,
+    NoLookback,
+    RiskAwareTriggerLookback,
+    RiskWeightedLookbackLogSurvival,
+    RiskWeightedLookbackSum,
+    TimeWindowLookback,
+)
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -807,11 +818,78 @@ def get_args() -> argparse.Namespace:
         help="Random seed for Optuna samplers.",
     )
     parser.add_argument(
+        "--lookback",
+        default="all",
+        help=(
+            "Comma-separated lookback strategy codes or names to simulate (default: all). "
+            "Examples: 'NLB,FSLB,AFSLB' or 'no_lookback,fixed_stride'."
+        ),
+    )
+    parser.add_argument(
+        "--bisection",
+        default="all",
+        help=(
+            "Comma-separated bisection strategy codes or names to simulate (default: all). "
+            "Examples: 'GB,RWBS,RWBLS' or 'git_bisect,rwb-s'."
+        ),
+    )
+    parser.add_argument(
         "--final-only",
         action="store_true",
         help="Skip eval tuning; read best params from --output-eval and run FINAL replay only.",
     )
     return parser.parse_args()
+
+
+def _parse_csv_strategy_list(raw: str) -> List[str]:
+    if raw is None:
+        return []
+    raw = str(raw).strip()
+    if not raw:
+        return []
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+def _filter_strategy_specs(raw: str, *, specs: Sequence[StrategySpec], kind: str) -> List[StrategySpec]:
+    """
+    Filter a list of StrategySpec objects based on a user-provided CSV list.
+
+    - "all" (default) selects all specs.
+    - Tokens may be either `spec.code` or `spec.name`.
+    """
+    tokens = _parse_csv_strategy_list(raw)
+    if not tokens:
+        return list(specs)
+
+    lowered = [t.lower() for t in tokens]
+    if len(lowered) == 1 and lowered[0] == "all":
+        return list(specs)
+
+    by_code = {s.code: s for s in specs}
+    by_name = {s.name: s for s in specs}
+
+    selected_codes: List[str] = []
+    unknown: List[str] = []
+    for tok in tokens:
+        if tok in by_code:
+            selected_codes.append(tok)
+        elif tok in by_name:
+            selected_codes.append(by_name[tok].code)
+        else:
+            unknown.append(tok)
+
+    if unknown:
+        known_codes = ", ".join(s.code for s in specs)
+        known_names = ", ".join(s.name for s in specs)
+        bad = ", ".join(unknown)
+        raise ValueError(
+            f"Unknown {kind} strategy(s): {bad}. "
+            f"Known {kind} codes: {known_codes}. "
+            f"Known {kind} names: {known_names}."
+        )
+
+    selected = set(selected_codes)
+    return [s for s in specs if s.code in selected]
 
 
 def main() -> int:
@@ -834,58 +912,121 @@ def main() -> int:
                 "If you use DVC, ensure datasets are pulled into `datasets/`."
             )
 
-        lookback_specs: List[StrategySpec] = [
-            StrategySpec(
-                code="NBLB",
-                name="nightly_builds",
-                default_params={},
-                build=lambda inputs, _p: NightlyBuildLookback(
-                    sorted_times_utc=inputs.sorted_times_utc,
-                    sorted_time_indices=inputs.sorted_time_indices,
-                    window_start=inputs.window_start,
-                ),
-                suggest_params=None,
+    lookback_specs: List[StrategySpec] = [
+        StrategySpec(
+            code="NBLB",
+            name="nightly_builds",
+            default_params={},
+            build=lambda inputs, _p: NightlyBuildLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                window_start=inputs.window_start,
             ),
-            StrategySpec(
-                code="FSLB",
-                name="fixed_stride",
-                default_params={"stride": 20},
-                build=lambda inputs, p: FixedStrideLookback(
-                    stride=int(p["stride"]),
-                    window_start=inputs.window_start,
-                ),
-                suggest_params=lambda trial: {
-                    "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
-                },
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="NLB",
+            name="no_lookback",
+            default_params={},
+            build=lambda inputs, _p: NoLookback(window_start=inputs.window_start),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="FSLB",
+            name="fixed_stride",
+            default_params={"stride": 20},
+            build=lambda inputs, p: FixedStrideLookback(
+                stride=int(p["stride"]),
+                window_start=inputs.window_start,
             ),
-            StrategySpec(
-                code="RATLB",
-                name="risk_aware_trigger",
-                default_params={"threshold": 0.5},
-                build=lambda inputs, p: RiskAwareTriggerLookback(
-                    risk_by_index=inputs.risk_by_index,
-                    threshold=float(p["threshold"]),
-                    window_start=inputs.window_start,
-                ),
-                suggest_params=lambda trial: {
-                    "threshold": trial.suggest_float("RATLB_threshold", 0.0, 1.0)
-                },
+            suggest_params=lambda trial: {
+                "stride": trial.suggest_int("FSLB_stride", 1, 500, log=True)
+            },
+        ),
+        StrategySpec(
+            code="AFSLB",
+            name="adaptive_fixed_stride",
+            default_params={"stride": 20, "alpha": 0.5},
+            build=lambda inputs, p: AdaptiveFixedStrideLookback(
+                stride=int(p["stride"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
             ),
-            StrategySpec(
-                code="TWLB",
-                name="time_window",
-                default_params={"hours": 24},
-                build=lambda inputs, p: TimeWindowLookback(
-                    sorted_times_utc=inputs.sorted_times_utc,
-                    sorted_time_indices=inputs.sorted_time_indices,
-                    hours=float(p["hours"]),
-                    window_start=inputs.window_start,
-                ),
-                suggest_params=lambda trial: {
-                    "hours": trial.suggest_int("TWLB_hours", 1, 24 * 30, log=True)
-                },
+            suggest_params=lambda trial: {
+                "stride": trial.suggest_int("AFSLB_stride", 1, 500, log=True),
+                "alpha": trial.suggest_float("AFSLB_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="RATLB",
+            name="risk_aware_trigger",
+            default_params={"threshold": 0.5},
+            build=lambda inputs, p: RiskAwareTriggerLookback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
             ),
-        ]
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="RWLBS",
+            name="rwlb-s",
+            default_params={"threshold": 0.5},
+            build=lambda inputs, p: RiskWeightedLookbackSum(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS",
+            name="rwlb-ls",
+            default_params={"threshold": 0.5},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvival(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="TWLB",
+            name="time_window",
+            default_params={"hours": 24},
+            build=lambda inputs, p: TimeWindowLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                hours=float(p["hours"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "hours": trial.suggest_int("TWLB_hours", 1, 24 * 30, log=True)
+            },
+        ),
+        StrategySpec(
+            code="ATWLB",
+            name="adaptive_time_window",
+            default_params={"hours": 24, "alpha": 0.5},
+            build=lambda inputs, p: AdaptiveTimeWindowLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                hours=float(p["hours"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "hours": trial.suggest_int("ATWLB_hours", 1, 24 * 30, log=True),
+                "alpha": trial.suggest_float("ATWLB_alpha", 0.0, 1.0),
+            },
+        ),
+    ]
     bisection_specs: List[StrategySpec] = [
         StrategySpec(
             code="GB",
@@ -918,20 +1059,29 @@ def main() -> int:
             },
         ),
         StrategySpec(
-            code="RWABS",
-            name="rwab-s",
+            code="RWBS",
+            name="rwb-s",
             default_params={},
-            build=lambda _inputs, _p: RiskWeightedAdaptiveBisectionSum(),
+            build=lambda _inputs, _p: RiskWeightedBisectionSum(),
             suggest_params=None,
         ),
         StrategySpec(
-            code="RWABLS",
-            name="rwab-ls",
+            code="RWBLS",
+            name="rwb-ls",
             default_params={},
-            build=lambda _inputs, _p: RiskWeightedAdaptiveBisectionLogSurvival(),
+            build=lambda _inputs, _p: RiskWeightedBisectionLogSurvival(),
             suggest_params=None,
         ),
     ]
+
+    lookback_specs = _filter_strategy_specs(args.lookback, specs=lookback_specs, kind="lookback")
+    bisection_specs = _filter_strategy_specs(args.bisection, specs=bisection_specs, kind="bisection")
+    if not lookback_specs:
+        raise ValueError("No lookback strategies selected. Use --lookback all or provide at least one code/name.")
+    if not bisection_specs:
+        raise ValueError("No bisection strategies selected. Use --bisection all or provide at least one code/name.")
+    logger.info("Selected lookback strategies: %s", ",".join(s.code for s in lookback_specs))
+    logger.info("Selected bisection strategies: %s", ",".join(s.code for s in bisection_specs))
 
     tuned_params_by_combo: Dict[str, Dict[str, Dict[str, Any]]] = {}
     eval_summary: Optional[Dict[str, Any]] = None
@@ -962,13 +1112,16 @@ def main() -> int:
     ) -> Dict[str, Any]:
         baseline_row = next((r for r in results if str(r.get("combo")) == baseline_combo), None)
         if baseline_row is None:
-            raise RuntimeError(f"Baseline combo {baseline_combo!r} not found in results.")
-
-        for get_value, set_pct in metric_specs:
-            baseline_value = _as_float(get_value(baseline_row))
-            for row in results:
-                pct = _pct_vs_baseline(value=_as_float(get_value(row)), baseline_value=baseline_value)
-                set_pct(row, pct)
+            logger.warning(
+                "Baseline combo %r not found in results (likely filtered out); skipping baseline-relative metrics.",
+                baseline_combo,
+            )
+        else:
+            for get_value, set_pct in metric_specs:
+                baseline_value = _as_float(get_value(baseline_row))
+                for row in results:
+                    pct = _pct_vs_baseline(value=_as_float(get_value(row)), baseline_value=baseline_value)
+                    set_pct(row, pct)
 
         def _best_combo(get_value: Any) -> Optional[str]:
             best_combo: Optional[str] = None

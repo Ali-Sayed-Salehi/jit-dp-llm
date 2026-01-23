@@ -62,9 +62,14 @@ Each combo is `LOOKBACK_CODE + "+" + BISECTION_CODE` (e.g. `NBLB+GB`).
 ### Lookback strategies (`analysis/git_bisect/lookback.py`)
 
 - **NBLB** (`NightlyBuildLookback`): walks back by UTC days and tests the “nightly build” boundary commit for each day until it finds a passing commit.
+- **NLB** (`NoLookback`): does no lookback tests; uses `window_start` as the known-good boundary so bisection searches within `(window_start, bad]`.
 - **FSLB** (`FixedStrideLookback`, Optuna: `FSLB_stride`): steps back by a fixed number of commits each time.
+- **AFSLB** (`AdaptiveFixedStrideLookback`, Optuna: `AFSLB_stride`, `AFSLB_alpha`): like FSLB, but shrinks the stride after each failed iteration by a factor `alpha` (i.e., steps use `stride`, then `stride*alpha`, then `stride*alpha^2`, …).
 - **RATLB** (`RiskAwareTriggerLookback`, Optuna: `RATLB_threshold`): scans backward; whenever a commit’s risk exceeds threshold `T`, it tests the *previous* commit (`i-1`). The first passing candidate is returned.
+- **RWLBS** (`RiskWeightedLookbackSum`, Optuna: `RWLBS_threshold`): scans backward until the cumulative **summed** risk mass reaches threshold `T`, tests that commit, and repeats from the last failing boundary.
+- **RWLBLS** (`RiskWeightedLookbackLogSurvival`, Optuna: `RWLBLS_threshold`): like RWLBS, but uses cumulative combined probability `1 - ∏(1 - p)` instead of a sum.
 - **TWLB** (`TimeWindowLookback`, Optuna: `TWLB_hours`): steps back by a fixed time window of `N` hours (in commit time), tests the commit at/before that timestamp, and repeats until it finds a passing commit.
+- **ATWLB** (`AdaptiveTimeWindowLookback`, Optuna: `ATWLB_hours`, `ATWLB_alpha`): like TWLB, but shrinks the time window each failed iteration by a factor `alpha` (i.e., tests use `hours`, then `hours*alpha`, then `hours*alpha^2`, …).
 
 `LookbackOutcome.steps` is treated as the number of lookback tests executed for that bug.
 
@@ -74,8 +79,8 @@ Each combo is `LOOKBACK_CODE + "+" + BISECTION_CODE` (e.g. `NBLB+GB`).
 - **SWBB** (`SequentialWalkBackwardBisection`): tests `bad-1, bad-2, ...` until it finds a pass; the culprit is the next known-bad boundary.
 - **SWFB** (`SequentialWalkForwardBisection`): tests `good+1, good+2, ...` until it finds a fail; that first failing index is the culprit.
 - **TKRB** (`TopKRiskFirstBisection`, Optuna: `TKRB_k`): tests the top-K riskiest commits (and their predecessors) first, caching results; if not found, falls back to binary search while reusing cached test outcomes.
-- **RWABS** (`RiskWeightedAdaptiveBisectionSum`): chooses midpoints that balance summed risk mass across the two halves of the current search interval.
-- **RWABLS** (`RiskWeightedAdaptiveBisectionLogSurvival`): like RWABS, but balances combined probability `1 - ∏(1 - p)` over each half.
+- **RWBS** (`RiskWeightedBisectionSum`): chooses midpoints that balance summed risk mass across the two halves of the current search interval.
+- **RWBLS** (`RiskWeightedBisectionLogSurvival`): like RWBS, but balances combined probability `1 - ∏(1 - p)` over each half.
 
 ## Running
 
@@ -98,6 +103,13 @@ For fast iteration, simulate only the first 1000 bug rows:
 
 ```bash
 python analysis/git_bisect/simulate.py --dry-run --final-only
+```
+
+### Selecting strategies
+By default, the simulator evaluates **all** lookback and bisection strategies. To restrict the run, pass comma-separated lists of strategy **codes** (or internal names):
+
+```bash
+python analysis/git_bisect/simulate.py --lookback NLB,FSLB,AFSLB --bisection GB,RWBS --mopt-trials 200
 ```
 
 ## Outputs and metrics
