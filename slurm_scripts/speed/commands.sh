@@ -93,6 +93,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py 
 --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
 --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
 --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
+-- build-time-minutes 60 \
 --mopt-trials 50 \
 --optuna-seed 42 \
 --lookback NBLB,NLB,FSLB,AFSLB,RATLB,RWLBS,RWLBLS,TWLB,ATWLB \

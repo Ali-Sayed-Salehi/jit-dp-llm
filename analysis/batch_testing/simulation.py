@@ -190,8 +190,8 @@ def _load_batch_signature_durations(path):
     return suite
 
 
-# Used by run_exhaustive_testing
-BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(SIG_GROUP_JOB_DURATIONS_CSV)
+# Used by run_exhaustive_testing (loaded lazily so `--help` works without datasets present).
+BATCH_SIGNATURE_DURATIONS_ET = None
 
 
 def get_args():
@@ -263,6 +263,15 @@ def get_args():
             "(Deprecated) If set, use a single shared worker pool with this many "
             "workers (ignores per-platform pools). If omitted, uses per-platform "
             "worker pools."
+        ),
+    )
+    parser.add_argument(
+        "--build-time-minutes",
+        type=float,
+        default=BUILD_TIME_MINUTES,
+        help=(
+            "Build-time overhead (minutes) added once per suite run "
+            f"(default: {BUILD_TIME_MINUTES:.1f})."
         ),
     )
     parser.add_argument(
@@ -699,6 +708,10 @@ def run_exhaustive_testing(commits):
             "max_time_to_culprit_hr": 0.0,
             "total_cpu_time_hr": 0.0,
         }
+
+    global BATCH_SIGNATURE_DURATIONS_ET
+    if BATCH_SIGNATURE_DURATIONS_ET is None:
+        BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(SIG_GROUP_JOB_DURATIONS_CSV)
 
     total_tests_run = 0
     culprit_times = []
@@ -1708,6 +1721,7 @@ def main():
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
+        "build_time_minutes=%s, "
         "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
@@ -1719,6 +1733,7 @@ def main():
         int(getattr(args, "workers_linux", 0)),
         int(getattr(args, "workers_mac", 0)),
         str(getattr(args, "unknown_platform_pool", "")),
+        str(getattr(args, "build_time_minutes", None)),
         str(args.full_suite_sigs_per_run),
         str(args.dont_use_all_tests_per_batch),
         str(getattr(args, "batching", "all")),
@@ -1778,11 +1793,14 @@ def main():
 
     DRY_RUN = bool(getattr(args, "dry_run", False))
 
+    # Resolve build-time overhead (minutes) from CLI.
+    build_time_minutes = float(getattr(args, "build_time_minutes", BUILD_TIME_MINUTES))
+
     # Propagate defaults/knobs to bisection_strats
     configure_bisection_defaults(
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
         full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
-        build_time_minutes=BUILD_TIME_MINUTES,
+        build_time_minutes=build_time_minutes,
         unknown_platform_pool=unknown_platform_pool,
     )
     global INPUT_JSON_EVAL, INPUT_JSON_FINAL, OUTPUT_PATH_EVAL, OUTPUT_PATH_FINAL
