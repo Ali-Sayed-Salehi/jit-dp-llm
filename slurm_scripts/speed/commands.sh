@@ -46,7 +46,7 @@ echo "Running script ..."
 # --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
 # --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_eval_mopt.json \
 # --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_test_mopt.json \
-# -- build-time-minutes 60 \
+# --build-time-minutes 60 \
 # --mopt-trials 1 \
 # --num-test-workers 4000 \
 # --skip-exhaustive-testing \
