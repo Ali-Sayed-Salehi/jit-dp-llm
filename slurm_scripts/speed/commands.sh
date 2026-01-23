@@ -46,6 +46,7 @@ echo "Running script ..."
 # --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_mbert_final_test.json \
 # --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_eval_mopt.json \
 # --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/4k_1t/batch_test_mopt.json \
+# -- build-time-minutes 60 \
 # --mopt-trials 1 \
 # --num-test-workers 4000 \
 # --skip-exhaustive-testing \
@@ -86,21 +87,20 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
---bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
---commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
---risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
---risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
--- build-time-minutes 60 \
---mopt-trials 50 \
---optuna-seed 42 \
---lookback NBLB,NLB,FSLB,AFSLB,RATLB,RWLBS,RWLBLS,TWLB,ATWLB \
---bisection GB,SWBB,SWFB,TKRB,RWBS,RWBLS \
-# --log-level INFO \
-# --final-only \
-# --dry-run
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
+# --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
+# --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
+# --risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
+# --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
+# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
+# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
+# --mopt-trials 50 \
+# --optuna-seed 42 \
+# --lookback NBLB,NLB,FSLB,AFSLB,RATLB,RWLBS,RWLBLS,TWLB,ATWLB \
+# --bisection GB,SWBB,SWFB,TKRB,RWBS,RWBLS \
+# # --log-level INFO \
+# # --final-only \
+# # --dry-run
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
