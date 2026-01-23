@@ -86,14 +86,6 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
-# --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
-# --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
-# --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
-# --mopt-trials 2 \
-# --log-level INFO
-# # --dry-run
-
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
 --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
 --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
@@ -108,7 +100,6 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py 
 # --log-level INFO \
 # --final-only \
 # --dry-run
-
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
