@@ -337,8 +337,10 @@ python analysis/git_bisect/simulate.py --lookback NLB,FSLB,AFSLB --bisection GB,
 ### Eval output (`--output-eval`)
 Includes:
 - Dataset metadata (commit window, risk file path, bug counts)
-- Per-combo Optuna details (best trial params, best value)
+- Per-combo Optuna details (selected Pareto-optimal trial params, selected objective values)
 - Per-combo metrics (including a `bugs` breakdown of processed/skipped)
+
+Optuna tuning is multi-objective: it minimizes `(max_tests_per_search, mean_tests_per_search)`.
 
 ### Final output (`--output-final`)
 Includes:

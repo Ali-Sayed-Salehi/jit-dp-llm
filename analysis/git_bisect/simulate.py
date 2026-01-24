@@ -674,9 +674,10 @@ def optimize_combo_params(
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
 
     Objective:
-      - Minimize `total_tests`.
+      - Minimize `max_tests_per_search`.
+      - Minimize `mean_tests_per_search`.
       - Treat trials as infeasible if any processed bug fails to identify a culprit
-        (i.e., `total_culprits_found < processed`), returning `inf`.
+        (i.e., `total_culprits_found < processed`), returning `(inf, inf)`.
 
     Returns (best_lookback_params, best_bisection_params, payload) where payload
     includes `metrics` (re-run at best params) and `optuna` metadata.
@@ -705,10 +706,14 @@ def optimize_combo_params(
     except ImportError as exc:
         raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
 
-    sampler = optuna.samplers.TPESampler(seed=int(seed))
-    study = optuna.create_study(direction="minimize", sampler=sampler)
+    try:
+        sampler = optuna.samplers.NSGAIISampler(seed=int(seed))
+    except AttributeError:
+        # Fallback for older Optuna versions where NSGAIISampler may not exist.
+        sampler = optuna.samplers.RandomSampler(seed=int(seed))
+    study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler)
 
-    def objective(trial: Any) -> float:
+    def objective(trial: Any) -> Tuple[float, float]:
         lookback_params = (
             lookback_spec.suggest_params(trial)
             if lookback_spec.suggest_params is not None
@@ -731,12 +736,22 @@ def optimize_combo_params(
         processed = int(res["bugs"]["processed"])
         found = int(res["total_culprits_found"])
         if processed <= 0 or found < processed:
-            return float("inf")
-        return float(res["total_tests"])
+            return (float("inf"), float("inf"))
+
+        max_tests_per_search = res.get("max_tests_per_search")
+        mean_tests_per_search = res.get("mean_tests_per_search")
+        if max_tests_per_search is None or mean_tests_per_search is None:
+            return (float("inf"), float("inf"))
+        return (float(max_tests_per_search), float(mean_tests_per_search))
 
     study.optimize(objective, n_trials=int(n_trials), show_progress_bar=False)
 
-    best_trial_params_raw = dict(study.best_trial.params)
+    # Select a single point from the Pareto front. We primarily minimize the
+    # worst-case search cost, and break ties by mean cost.
+    if not study.best_trials:
+        raise RuntimeError("Optuna produced no Pareto-optimal trials.")
+    selected_trial = min(study.best_trials, key=lambda t: (float(t.values[0]), float(t.values[1])))
+    best_trial_params_raw = dict(selected_trial.params)
     for key in best_trial_params_raw.keys():
         if not (
             key.startswith(f"{lookback_spec.code}_")
@@ -768,8 +783,13 @@ def optimize_combo_params(
     optuna_meta = {
         "n_trials": int(n_trials),
         "seed": int(seed),
-        "best_trial_number": int(study.best_trial.number),
-        "best_value_total_tests": float(study.best_value),
+        "pareto_best_trial_count": int(len(study.best_trials)),
+        "selected_trial_number": int(selected_trial.number),
+        "selection": "lexicographic (min max_tests_per_search, then min mean_tests_per_search)",
+        "selected_values": {
+            "max_tests_per_search": float(selected_trial.values[0]),
+            "mean_tests_per_search": float(selected_trial.values[1]),
+        },
         "best_trial_params_raw": best_trial_params_raw,
     }
     return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
@@ -1269,7 +1289,10 @@ def main() -> int:
             "optimization": {
                 "mopt_trials_per_combo": int(args.mopt_trials),
                 "optuna_seed": int(args.optuna_seed),
-                "objective": "minimize total_tests; infeasible if culprits_found < processed",
+                "objective": (
+                    "minimize max_tests_per_search and mean_tests_per_search; "
+                    "infeasible if culprits_found < processed"
+                ),
             },
             "results": eval_results,
         }
