@@ -356,7 +356,7 @@ Per-combo metrics fields:
 - `mean_tests_per_search`, `max_tests_per_search`
 - `total_culprits_found`
 
-Baseline for comparisons is `NBLB+GB` (nightly builds + standard git bisect). Percent values are computed as:
+Baseline for comparisons is `NLB+GB` (no lookback + standard git bisect). Percent values are computed as:
 `100 * (baseline - value) / baseline` (positive is better / fewer tests).
 
 ## Adding a new strategy

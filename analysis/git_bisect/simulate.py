@@ -1106,7 +1106,7 @@ def main() -> int:
 
     tuned_params_by_combo: Dict[str, Dict[str, Dict[str, Any]]] = {}
     eval_summary: Optional[Dict[str, Any]] = None
-    baseline_combo = "NBLB+GB"
+    baseline_combo = "NLB+GB"
 
     def _as_float(value: Any) -> Optional[float]:
         if value is None:
