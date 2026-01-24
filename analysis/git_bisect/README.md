@@ -61,7 +61,7 @@ Some strategies use a per-commit **risk score**:
 
 - Let `p_i ∈ [0, 1]` be the model’s score for commit `i`, interpreted as `P(POSITIVE)` / “how likely this commit is a regressor”.
 - Inside `[window_start, window_end]`, missing predictions are treated as `p_i = 0.0`.
-- Outside the window the simulator sets risk to “unavailable” (`None`). Most strategies are constrained to probe no earlier than `window_start`; NLB uses the first commit in history as its known-good boundary but treats out-of-window risk as 0.0.
+- Outside the window the simulator sets risk to “unavailable” (`None`). Strategies are constrained to probe no earlier than `window_start`; NLB uses `window_start` as its known-good boundary.
 
 Two common ways to aggregate risk over a contiguous range of commits `[a, b)`:
 
@@ -140,13 +140,13 @@ Walk backward by **UTC days** and test one “nightly boundary” commit per day
 This is meant to approximate “bisecting by nightly builds”: cheap to try one build per day, but potentially coarse.
 
 #### NLB: No lookback
-Do **no additional tests** to find a good boundary; use the first commit in history:
+Do **no additional tests** to find a good boundary; use the simulation window start commit:
 
 $$
-g = 0
+g = \text{window\_start}
 $$
 
-To keep comparisons fair under the risk-window constraint, the simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`). When applicable, it forces bisection to search over the widest possible interval (from the first commit up to the observed bad commit).
+The simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`), since there is no known-good commit available strictly before the culprit within the window. When applicable, bisection searches over `(window_start, b]`.
 
 #### FSLB: Fixed-stride lookback (Optuna: `FSLB_stride`)
 Choose a stride length `s` in commits and repeatedly jump back by exactly `s`:

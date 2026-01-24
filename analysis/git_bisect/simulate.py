@@ -433,11 +433,6 @@ def simulate_strategy_combo(
             skipped["good_not_in_window"] += 1
             continue
 
-        # NLB uses the repo's first commit as the clean boundary (index 0), but we
-        # only run it on bugs where an in-window clean boundary exists (i.e., the
-        # lookback returned a valid `good_index` within the risk window).
-        if lookback_code == "NLB":
-            good_index = 0
         if good_index >= bad_index:
             raise RuntimeError(
                 f"Invalid good/bad ordering for bug_id={bug.get('bug_id')}: "
