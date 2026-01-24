@@ -20,6 +20,10 @@ from bisection import RiskSeries
 
 logger = logging.getLogger(__name__)
 
+def _forced_fallback_outcome(*, steps: int, window_start: int, culprit_index: int) -> LookbackOutcome:
+    good = int(window_start) if int(window_start) < int(culprit_index) else None
+    return LookbackOutcome(good_index=good, steps=int(steps))
+
 
 @dataclass(frozen=True)
 class LookbackOutcome:
@@ -82,14 +86,17 @@ class FixedStrideLookback:
 
     name = "fixed_stride"
 
-    def __init__(self, stride: int = 20, *, window_start: int = 0) -> None:
+    def __init__(self, stride: int = 20, *, window_start: int = 0, max_trials: Optional[int] = None) -> None:
         """Create a fixed-stride lookback strategy."""
         if stride <= 0:
             raise ValueError("stride must be positive")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
         self.stride = stride
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
     def find_good_index(
         self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
@@ -101,6 +108,9 @@ class FixedStrideLookback:
         idx = int(start_index)
         steps = 0
         while True:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             candidate = idx - int(self.stride)
             if candidate < self.window_start:
                 candidate = self.window_start
@@ -163,16 +173,21 @@ class AdaptiveFixedStrideLookback:
 
     name = "adaptive_fixed_stride"
 
-    def __init__(self, stride: int = 20, *, alpha: float = 0.5, window_start: int = 0) -> None:
+    def __init__(
+        self, stride: int = 20, *, alpha: float = 0.5, window_start: int = 0, max_trials: Optional[int] = None
+    ) -> None:
         if stride <= 0:
             raise ValueError("stride must be positive")
         if alpha < 0.0 or alpha > 1.0:
             raise ValueError("alpha must be in [0,1]")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
         self.stride = int(stride)
         self.alpha = float(alpha)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
     def _stride_for_step(self, steps_executed: int) -> int:
         # Use ceil so the stride never drops to 0, which would stall progress.
@@ -193,6 +208,9 @@ class AdaptiveFixedStrideLookback:
         idx = int(start_index)
         steps = 0
         while idx > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             stride = self._stride_for_step(steps)
             candidate = idx - int(stride)
             if candidate < self.window_start:
@@ -342,15 +360,23 @@ class RiskAwareTriggerLookback:
     name = "risk_aware_trigger"
 
     def __init__(
-        self, *, risk_by_index: Sequence[Optional[float]], threshold: float = 0.5, window_start: int = 0
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
     ) -> None:
         if threshold < 0.0 or threshold > 1.0:
             raise ValueError("threshold must be in [0,1]")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
         self.risk_by_index = risk_by_index
         self.threshold = float(threshold)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
     def _risk(self, idx: int) -> float:
         v = self.risk_by_index[idx]
@@ -372,6 +398,9 @@ class RiskAwareTriggerLookback:
         min_trigger_idx = max(self.window_start + 1, 1)
 
         while True:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             trigger_idx: Optional[int] = None
             i = search_idx
             # We need i-1 to exist and we do not test outside the simulation window,
@@ -437,14 +466,18 @@ class RiskWeightedLookbackSum:
         risk_by_index: Sequence[Optional[float]],
         threshold: float = 0.5,
         window_start: int = 0,
+        max_trials: Optional[int] = None,
     ) -> None:
         if threshold < 0.0:
             raise ValueError("threshold must be non-negative")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
         self.risk_by_index = risk_by_index if isinstance(risk_by_index, RiskSeries) else RiskSeries(risk_by_index)
         self.threshold = float(threshold)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
     def _choose_candidate(self, *, bad_index: int) -> int:
         """
@@ -490,6 +523,9 @@ class RiskWeightedLookbackSum:
 
         steps = 0
         while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             candidate = self._choose_candidate(bad_index=bad)
             if candidate >= bad:
                 candidate = bad - 1
@@ -538,14 +574,18 @@ class RiskWeightedLookbackLogSurvival:
         risk_by_index: Sequence[Optional[float]],
         threshold: float = 0.5,
         window_start: int = 0,
+        max_trials: Optional[int] = None,
     ) -> None:
         if threshold < 0.0 or threshold > 1.0:
             raise ValueError("threshold must be in [0,1]")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
         self.risk_by_index = risk_by_index if isinstance(risk_by_index, RiskSeries) else RiskSeries(risk_by_index)
         self.threshold = float(threshold)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
     def _range_combined_probability(self, *, start: int, end: int) -> float:
         # Inline a fast range query to avoid additional indirection in tight loops.
@@ -614,6 +654,9 @@ class RiskWeightedLookbackLogSurvival:
 
         steps = 0
         while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             candidate = self._choose_candidate(bad_index=bad)
             if candidate >= bad:
                 candidate = bad - 1
@@ -667,6 +710,7 @@ class AdaptiveTimeWindowLookback:
         hours: float = 24.0,
         alpha: float = 0.5,
         window_start: int = 0,
+        max_trials: Optional[int] = None,
     ) -> None:
         if len(sorted_times_utc) != len(sorted_time_indices):
             raise ValueError("sorted_times_utc and sorted_time_indices must have the same length")
@@ -678,12 +722,15 @@ class AdaptiveTimeWindowLookback:
             raise ValueError("alpha must be in [0,1]")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
 
         self.sorted_times_utc = list(sorted_times_utc)
         self.sorted_time_indices = list(sorted_time_indices)
         self.hours = float(hours)
         self.alpha = float(alpha)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
         # Fast index->time mapping for repeated lookups.
         time_by_index: List[Optional[datetime]] = [None] * len(self.sorted_time_indices)
@@ -716,6 +763,9 @@ class AdaptiveTimeWindowLookback:
 
         steps = 0
         while cur_idx > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             cur_time = self.time_by_index[cur_idx]
             if cur_time is None:
                 raise RuntimeError(f"Missing commit time for index {cur_idx}")
@@ -781,6 +831,7 @@ class TimeWindowLookback:
         sorted_time_indices: Sequence[int],
         hours: float = 24.0,
         window_start: int = 0,
+        max_trials: Optional[int] = None,
     ) -> None:
         if len(sorted_times_utc) != len(sorted_time_indices):
             raise ValueError("sorted_times_utc and sorted_time_indices must have the same length")
@@ -790,11 +841,14 @@ class TimeWindowLookback:
             raise ValueError("hours must be positive")
         if window_start < 0:
             raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
 
         self.sorted_times_utc = list(sorted_times_utc)
         self.sorted_time_indices = list(sorted_time_indices)
         self.hours = float(hours)
         self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
 
         # Fast index->time mapping for repeated lookups.
         time_by_index: List[Optional[datetime]] = [None] * len(self.sorted_time_indices)
@@ -829,6 +883,9 @@ class TimeWindowLookback:
 
         steps = 0
         while cur_idx > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(steps=steps, window_start=self.window_start, culprit_index=culprit_index)
+
             cur_time = self.time_by_index[cur_idx]
             if cur_time is None:
                 raise RuntimeError(f"Missing commit time for index {cur_idx}")
@@ -865,14 +922,63 @@ class TimeWindowLookback:
         return LookbackOutcome(good_index=good, steps=steps)
 
 
+class FixedStrideLookbackForcedFallback(FixedStrideLookback):
+    """Fixed stride lookback with forced fallback after `max_trials` tests."""
+
+    name = "fixed_stride-ff"
+
+
+class AdaptiveFixedStrideLookbackForcedFallback(AdaptiveFixedStrideLookback):
+    """Adaptive fixed stride lookback with forced fallback after `max_trials` tests."""
+
+    name = "adaptive_fixed_stride-ff"
+
+
+class RiskAwareTriggerLookbackForcedFallback(RiskAwareTriggerLookback):
+    """Risk-aware trigger lookback with forced fallback after `max_trials` tests."""
+
+    name = "risk_aware_trigger-ff"
+
+
+class RiskWeightedLookbackSumForcedFallback(RiskWeightedLookbackSum):
+    """Risk-weighted (sum) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-s-ff"
+
+
+class RiskWeightedLookbackLogSurvivalForcedFallback(RiskWeightedLookbackLogSurvival):
+    """Risk-weighted (log-survival) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-ls-ff"
+
+
+class TimeWindowLookbackForcedFallback(TimeWindowLookback):
+    """Time-window lookback with forced fallback after `max_trials` tests."""
+
+    name = "time_window-ff"
+
+
+class AdaptiveTimeWindowLookbackForcedFallback(AdaptiveTimeWindowLookback):
+    """Adaptive time-window lookback with forced fallback after `max_trials` tests."""
+
+    name = "adaptive_time_window-ff"
+
+
 LOOKBACK_STRATEGIES = {
     NoLookback.name: NoLookback,
     FixedStrideLookback.name: FixedStrideLookback,
+    FixedStrideLookbackForcedFallback.name: FixedStrideLookbackForcedFallback,
     AdaptiveFixedStrideLookback.name: AdaptiveFixedStrideLookback,
+    AdaptiveFixedStrideLookbackForcedFallback.name: AdaptiveFixedStrideLookbackForcedFallback,
     NightlyBuildLookback.name: NightlyBuildLookback,
     RiskAwareTriggerLookback.name: RiskAwareTriggerLookback,
+    RiskAwareTriggerLookbackForcedFallback.name: RiskAwareTriggerLookbackForcedFallback,
     RiskWeightedLookbackSum.name: RiskWeightedLookbackSum,
+    RiskWeightedLookbackSumForcedFallback.name: RiskWeightedLookbackSumForcedFallback,
     RiskWeightedLookbackLogSurvival.name: RiskWeightedLookbackLogSurvival,
+    RiskWeightedLookbackLogSurvivalForcedFallback.name: RiskWeightedLookbackLogSurvivalForcedFallback,
     AdaptiveTimeWindowLookback.name: AdaptiveTimeWindowLookback,
+    AdaptiveTimeWindowLookbackForcedFallback.name: AdaptiveTimeWindowLookbackForcedFallback,
     TimeWindowLookback.name: TimeWindowLookback,
+    TimeWindowLookbackForcedFallback.name: TimeWindowLookbackForcedFallback,
 }

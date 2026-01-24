@@ -53,15 +53,22 @@ from bisection import (
 )
 from lookback import (
     AdaptiveTimeWindowLookback,
+    AdaptiveTimeWindowLookbackForcedFallback,
     AdaptiveFixedStrideLookback,
+    AdaptiveFixedStrideLookbackForcedFallback,
     FixedStrideLookback,
+    FixedStrideLookbackForcedFallback,
     LookbackStrategy,
     NightlyBuildLookback,
     NoLookback,
     RiskAwareTriggerLookback,
+    RiskAwareTriggerLookbackForcedFallback,
     RiskWeightedLookbackLogSurvival,
+    RiskWeightedLookbackLogSurvivalForcedFallback,
     RiskWeightedLookbackSum,
+    RiskWeightedLookbackSumForcedFallback,
     TimeWindowLookback,
+    TimeWindowLookbackForcedFallback,
 )
 
 
@@ -965,6 +972,20 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="FSLB-FF",
+            name=FixedStrideLookbackForcedFallback.name,
+            default_params={"stride": 20, "max_trials": 20},
+            build=lambda inputs, p: FixedStrideLookbackForcedFallback(
+                stride=int(p["stride"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "stride": trial.suggest_int("FSLB-FF_stride", 1, 500, log=True),
+                "max_trials": trial.suggest_int("FSLB-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="AFSLB",
             name="adaptive_fixed_stride",
             default_params={"stride": 20, "alpha": 0.5},
@@ -976,6 +997,22 @@ def main() -> int:
             suggest_params=lambda trial: {
                 "stride": trial.suggest_int("AFSLB_stride", 1, 500, log=True),
                 "alpha": trial.suggest_float("AFSLB_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="AFSLB-FF",
+            name=AdaptiveFixedStrideLookbackForcedFallback.name,
+            default_params={"stride": 20, "alpha": 0.5, "max_trials": 20},
+            build=lambda inputs, p: AdaptiveFixedStrideLookbackForcedFallback(
+                stride=int(p["stride"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "stride": trial.suggest_int("AFSLB-FF_stride", 1, 500, log=True),
+                "alpha": trial.suggest_float("AFSLB-FF_alpha", 0.0, 1.0),
+                "max_trials": trial.suggest_int("AFSLB-FF_max_trials", 1, 500, log=True),
             },
         ),
         StrategySpec(
@@ -992,6 +1029,21 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="RATLB-FF",
+            name=RiskAwareTriggerLookbackForcedFallback.name,
+            default_params={"threshold": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskAwareTriggerLookbackForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB-FF_threshold", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RATLB-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="RWLBS",
             name="rwlb-s",
             default_params={"threshold": 0.5},
@@ -1005,6 +1057,21 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="RWLBS-FF",
+            name=RiskWeightedLookbackSumForcedFallback.name,
+            default_params={"threshold": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackSumForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS-FF_threshold", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RWLBS-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="RWLBLS",
             name="rwlb-ls",
             default_params={"threshold": 0.5},
@@ -1015,6 +1082,21 @@ def main() -> int:
             ),
             suggest_params=lambda trial: {
                 "threshold": trial.suggest_float("RWLBLS_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS-FF",
+            name=RiskWeightedLookbackLogSurvivalForcedFallback.name,
+            default_params={"threshold": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvivalForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS-FF_threshold", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RWLBLS-FF_max_trials", 1, 500, log=True),
             },
         ),
         StrategySpec(
@@ -1032,6 +1114,22 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="TWLB-FF",
+            name=TimeWindowLookbackForcedFallback.name,
+            default_params={"hours": 24, "max_trials": 20},
+            build=lambda inputs, p: TimeWindowLookbackForcedFallback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                hours=float(p["hours"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "hours": trial.suggest_int("TWLB-FF_hours", 1, 24 * 30, log=True),
+                "max_trials": trial.suggest_int("TWLB-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="ATWLB",
             name="adaptive_time_window",
             default_params={"hours": 24, "alpha": 0.5},
@@ -1045,6 +1143,24 @@ def main() -> int:
             suggest_params=lambda trial: {
                 "hours": trial.suggest_int("ATWLB_hours", 1, 24 * 30, log=True),
                 "alpha": trial.suggest_float("ATWLB_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="ATWLB-FF",
+            name=AdaptiveTimeWindowLookbackForcedFallback.name,
+            default_params={"hours": 24, "alpha": 0.5, "max_trials": 20},
+            build=lambda inputs, p: AdaptiveTimeWindowLookbackForcedFallback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                hours=float(p["hours"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "hours": trial.suggest_int("ATWLB-FF_hours", 1, 24 * 30, log=True),
+                "alpha": trial.suggest_float("ATWLB-FF_alpha", 0.0, 1.0),
+                "max_trials": trial.suggest_int("ATWLB-FF_max_trials", 1, 500, log=True),
             },
         ),
     ]

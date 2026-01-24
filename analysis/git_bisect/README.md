@@ -148,6 +148,11 @@ $$
 
 The simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`), since there is no known-good commit available strictly before the culprit within the window. When applicable, bisection searches over `(window_start, b]`.
 
+#### Forced-fallback variants (-ff)
+For every lookback strategy **except** NLB and NBLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
+
+If the strategy would execute more than `max_trials` lookback tests while searching backward, it stops early and falls back to using `window_start` as the known-good boundary (instead of continuing to search for a closer passing commit).
+
 #### FSLB: Fixed-stride lookback (Optuna: `FSLB_stride`)
 Choose a stride length `s` in commits and repeatedly jump back by exactly `s`:
 
