@@ -45,6 +45,13 @@ $$
 
 Important modeling choice: the simulator treats `b` as an *already-observed* failing commit (e.g., the regression was first noticed there), so it is **not** counted as a test. Lookback/bisection only count *additional* probes.
 
+### Optional: window-start lookback penalty
+Some lookback policies may end up using the **simulation window start** commit as the known-good boundary (`g = window_start`)—either because the strategy is NLB (no lookback), or because it clamps/falls back to the earliest available commit in the window.
+
+To model an additional fixed overhead in that situation, you can enable `--penalize-window-start-lookback`. When enabled, the simulator adds `--window-start-lookback-penalty-tests` (default: `4`) to `bisection_tests` **per processed bug** whenever `good_index == window_start`.
+
+Bugs whose regression predates the risk window (i.e., there is no in-window known-good commit strictly before the culprit) are still skipped as before; enabling this penalty does not change which bugs are processed vs. skipped.
+
 ### Commit window from risk predictions
 Risk predictions define the commit window used for simulation:
 
@@ -335,6 +342,13 @@ By default, the simulator evaluates **all** lookback and bisection strategies. T
 
 ```bash
 python analysis/git_bisect/simulate.py --lookback NLB,FSLB,AFSLB --bisection GB,RWBS --mopt-trials 200
+```
+
+### Window-start penalty
+Enable (or disable) the “window-start lookback” penalty and set its magnitude:
+
+```bash
+python analysis/git_bisect/simulate.py --penalize-window-start-lookback --window-start-lookback-penalty-tests 4
 ```
 
 ## Outputs and metrics

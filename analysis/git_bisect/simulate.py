@@ -28,6 +28,8 @@ Simulation outline for each regression bug:
 Run:
   - Evaluation (Optuna tuning): `python analysis/git_bisect/simulate.py --mopt-trials 200`
   - Replay tuned params on final test: `python analysis/git_bisect/simulate.py --final-only`
+  - Optional: penalize runs where lookback uses the simulation window start commit:
+    `python analysis/git_bisect/simulate.py --penalize-window-start-lookback --window-start-lookback-penalty-tests 4`
 """
 
 from __future__ import annotations
@@ -355,8 +357,13 @@ def simulate_strategy_combo(
     lookback: LookbackStrategy,
     bisection_code: str,
     bisection: BisectionStrategy,
+    penalize_window_start_lookback: bool = False,
+    window_start_lookback_penalty_tests: int = 4,
 ) -> Dict[str, Any]:
     """Run simulation for a single (lookback, bisection) strategy pair."""
+    if int(window_start_lookback_penalty_tests) < 0:
+        raise ValueError("window_start_lookback_penalty_tests must be >= 0")
+
     def _fmt(idx: int) -> str:
         node = nodes_by_index[idx] if 0 <= idx < len(nodes_by_index) else None
         return f"{idx} ({node})" if node else str(idx)
@@ -459,14 +466,19 @@ def simulate_strategy_combo(
             risk_by_index=risk_by_index,
         )
 
-        tests_per_search = int(lookback_tests) + int(bisect_outcome.tests)
+        window_start_penalty = 0
+        if bool(penalize_window_start_lookback) and good_index == int(window_start):
+            window_start_penalty = int(window_start_lookback_penalty_tests)
+
+        bisection_tests = int(bisect_outcome.tests) + int(window_start_penalty)
+        tests_per_search = int(lookback_tests) + int(bisection_tests)
         if tests_per_search > max_tests_per_search:
             max_tests_per_search = tests_per_search
 
         total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
         total_lookback_tests += lookback_tests
-        total_bisection_tests += bisect_outcome.tests
-        total_tests += lookback_tests + bisect_outcome.tests
+        total_bisection_tests += bisection_tests
+        total_tests += lookback_tests + bisection_tests
         processed += 1
 
     mean_tests_per_search: Optional[float]
@@ -618,6 +630,8 @@ def run_combo(
     lookback_params: Dict[str, Any],
     bisection_spec: StrategySpec,
     bisection_params: Dict[str, Any],
+    penalize_window_start_lookback: bool = False,
+    window_start_lookback_penalty_tests: int = 4,
 ) -> Dict[str, Any]:
     """
     Build concrete strategy instances and run a single simulation combo.
@@ -641,6 +655,8 @@ def run_combo(
         lookback=lookback,
         bisection_code=bisection_spec.code,
         bisection=bisection,
+        penalize_window_start_lookback=bool(penalize_window_start_lookback),
+        window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
     )
     res["params"] = {
         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
@@ -671,6 +687,8 @@ def optimize_combo_params(
     bisection_spec: StrategySpec,
     n_trials: int,
     seed: int,
+    penalize_window_start_lookback: bool = False,
+    window_start_lookback_penalty_tests: int = 4,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
@@ -694,6 +712,8 @@ def optimize_combo_params(
             lookback_params=best_lookback_params,
             bisection_spec=bisection_spec,
             bisection_params=best_bisection_params,
+            penalize_window_start_lookback=bool(penalize_window_start_lookback),
+            window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
         )
         optuna_meta = {
             "skipped": True,
@@ -733,6 +753,8 @@ def optimize_combo_params(
             lookback_params=lookback_params,
             bisection_spec=bisection_spec,
             bisection_params=bisection_params,
+            penalize_window_start_lookback=bool(penalize_window_start_lookback),
+            window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
         )
 
         processed = int(res["bugs"]["processed"])
@@ -781,6 +803,8 @@ def optimize_combo_params(
         lookback_params=best_lookback_params,
         bisection_spec=bisection_spec,
         bisection_params=best_bisection_params,
+        penalize_window_start_lookback=bool(penalize_window_start_lookback),
+        window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
     )
     optuna_meta = {
         "n_trials": int(n_trials),
@@ -866,6 +890,25 @@ def get_args() -> argparse.Namespace:
         action="store_true",
         help="Skip eval tuning; read best params from --output-eval and run FINAL replay only.",
     )
+    parser.add_argument(
+        "--penalize-window-start-lookback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "When enabled, add extra bisection tests (see --window-start-lookback-penalty-tests) "
+            "for any processed bug where the lookback strategy selects the simulation window start "
+            "commit as the known-good boundary."
+        ),
+    )
+    parser.add_argument(
+        "--window-start-lookback-penalty-tests",
+        type=int,
+        default=4,
+        help=(
+            "Number of extra bisection tests to add per bug when --penalize-window-start-lookback "
+            "is enabled and the chosen good boundary is window_start (default: 4)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -928,6 +971,8 @@ def main() -> int:
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if int(args.window_start_lookback_penalty_tests) < 0:
+        raise ValueError("--window-start-lookback-penalty-tests must be >= 0")
     logger.info("Using bugs_path=%s", args.bugs_path)
     logger.info("Using commits_path=%s", args.commits_path)
     logger.info("Using risk_eval=%s", args.risk_eval)
@@ -1344,6 +1389,8 @@ def main() -> int:
                     bisection_spec=bisection_spec,
                     n_trials=int(args.mopt_trials),
                     seed=int(args.optuna_seed),
+                    penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
+                    window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                 )
                 tuned_params_by_combo[combo_key] = {
                     "lookback": lookback_params,
@@ -1463,6 +1510,8 @@ def main() -> int:
                     lookback_params=lookback_params,
                     bisection_spec=bisection_spec,
                     bisection_params=bisection_params,
+                    penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
+                    window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                 )
             )
             final_results[-1].pop("bugs", None)
