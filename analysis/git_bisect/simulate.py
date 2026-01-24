@@ -34,13 +34,11 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import hashlib
 import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from bisection import (
@@ -75,12 +73,6 @@ COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_jit", "all_commits.j
 RISK_EVAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_eval.json")
 RISK_FINAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_final_test.json")
 
-# Used to generate synthetic risk scores for commits that fall *before* the risk
-# prediction window when running NLB over full history (good_index=0).
-SYNTHETIC_RISK_SOURCE_PATH = os.path.join(
-    REPO_ROOT, "analysis", "batch_testing", "final_test_results_perf_mbert_final_test.json"
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -97,15 +89,6 @@ class StrategySpec:
     default_params: Dict[str, Any]
     build: Callable[["PreparedInputs", Dict[str, Any]], Any]
     suggest_params: Optional[Callable[[Any], Dict[str, Any]]] = None  # optuna.Trial -> params
-
-
-@dataclass(frozen=True)
-class RiskScoreDistribution:
-    source_path: str
-    roc_auc: float
-    positive_rate: float
-    negative_scores: Tuple[float, ...]
-    positive_scores: Tuple[float, ...]
 
 
 def _read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -298,157 +281,6 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
         )
 
     return risk_by_commit
-
-
-@lru_cache(maxsize=8)
-def load_risk_score_distribution(path: str) -> RiskScoreDistribution:
-    """
-    Load a predictions JSON and return a class-conditional distribution over P(POSITIVE).
-
-    Expected format:
-      - `metrics.roc_auc`
-      - `samples` or `results` with fields: true_label, prediction, confidence
-      - Optional `label_order` (defaults to ["NEGATIVE", "POSITIVE"])
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        blob = json.load(f)
-
-    metrics = blob.get("metrics") or {}
-    roc_auc = metrics.get("roc_auc")
-    if roc_auc is None:
-        raise ValueError(f"Missing `metrics.roc_auc` in {path}")
-    roc_auc_f = float(roc_auc)
-    if roc_auc_f < 0.0 or roc_auc_f > 1.0:
-        raise ValueError(f"Invalid roc_auc={roc_auc_f} in {path}: expected in [0,1]")
-
-    samples = blob.get("samples")
-    if not samples:
-        samples = blob.get("results")
-    if not isinstance(samples, list) or not samples:
-        raise ValueError(f"No `samples`/`results` list found in {path}")
-
-    label_order = blob.get("label_order") or ["NEGATIVE", "POSITIVE"]
-    if not isinstance(label_order, list) or len(label_order) != 2:
-        raise ValueError(f"Expected binary `label_order` list in {path}, got {label_order!r}")
-
-    neg: List[float] = []
-    pos: List[float] = []
-    auc_pairs: List[Tuple[float, int]] = []
-    for i, sample in enumerate(samples):
-        if not isinstance(sample, dict):
-            raise ValueError(
-                f"Invalid sample at index {i} in {path}: expected object, got {type(sample).__name__}"
-            )
-        y = sample.get("true_label")
-        prediction = sample.get("prediction")
-        confidence = sample.get("confidence")
-        if y is None or prediction is None or confidence is None:
-            raise ValueError(
-                f"Invalid sample at index {i} in {path}: missing `true_label`, `prediction` and/or `confidence`"
-            )
-        p_pos = _positive_probability_from_predicted_class(int(prediction), float(confidence), label_order)
-        if p_pos < 0.0 or p_pos > 1.0:
-            raise ValueError(f"Computed P(POSITIVE) out of range at index {i} in {path}: {p_pos}")
-        if int(y) == 1:
-            pos.append(float(p_pos))
-            auc_pairs.append((float(p_pos), 1))
-        else:
-            neg.append(float(p_pos))
-            auc_pairs.append((float(p_pos), 0))
-
-    if not neg:
-        raise ValueError(f"No negative samples found in {path}")
-    if not pos:
-        raise ValueError(f"No positive samples found in {path}")
-
-    total = len(neg) + len(pos)
-    positive_rate = float(len(pos)) / float(total)
-
-    # Optional integrity check: recompute AUC from (score,label) pairs and compare
-    # to the recorded metric.
-    try:
-        auc_pairs.sort(key=lambda t: t[0])
-        n = len(auc_pairs)
-        n_pos = len(pos)
-        n_neg = n - n_pos
-        if n_pos > 0 and n_neg > 0:
-            i = 0
-            rank = 1
-            sum_ranks_pos = 0.0
-            while i < n:
-                j = i + 1
-                while j < n and auc_pairs[j][0] == auc_pairs[i][0]:
-                    j += 1
-                avg_rank = (rank + (rank + (j - i) - 1)) / 2.0
-                for k in range(i, j):
-                    if auc_pairs[k][1] == 1:
-                        sum_ranks_pos += avg_rank
-                rank += (j - i)
-                i = j
-            auc_check = (sum_ranks_pos - n_pos * (n_pos + 1) / 2.0) / float(n_pos * n_neg)
-            if abs(float(auc_check) - roc_auc_f) > 1e-9:
-                logger.warning(
-                    "AUC mismatch for %s: metrics.roc_auc=%.12f recomputed_auc=%.12f",
-                    path,
-                    roc_auc_f,
-                    float(auc_check),
-                )
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Failed to recompute AUC for %s: %s", path, exc)
-
-    return RiskScoreDistribution(
-        source_path=path,
-        roc_auc=roc_auc_f,
-        positive_rate=positive_rate,
-        negative_scores=tuple(neg),
-        positive_scores=tuple(pos),
-    )
-
-
-def _stable_uniform01(seed: str) -> float:
-    """
-    Deterministic U[0,1) from an arbitrary string seed.
-
-    We avoid Python's built-in `hash()` because it is salted per-process.
-    """
-    digest = hashlib.sha256(seed.encode("utf-8")).digest()
-    # Use 64 bits for the mantissa.
-    x = int.from_bytes(digest[:8], byteorder="big", signed=False)
-    return float(x) / float(2**64)
-
-
-def generate_synthetic_risk_score(commit_id: str, dist: RiskScoreDistribution) -> float:
-    """
-    Generate a deterministic synthetic risk score (P(POSITIVE)) for a commit id.
-
-    The score is sampled (with replacement) from the empirical distribution in `dist`,
-    first sampling a latent label with rate `dist.positive_rate`.
-    """
-    if not commit_id:
-        raise ValueError("commit_id must be non-empty")
-
-    # Step 1: latent class.
-    u_label = _stable_uniform01(f"{commit_id}|synthetic_risk|label|v1")
-    is_positive = u_label < dist.positive_rate
-
-    # Step 2: sample a score from the corresponding empirical score list.
-    if is_positive:
-        scores = dist.positive_scores
-        u_score = _stable_uniform01(f"{commit_id}|synthetic_risk|pos_score|v1")
-    else:
-        scores = dist.negative_scores
-        u_score = _stable_uniform01(f"{commit_id}|synthetic_risk|neg_score|v1")
-
-    idx = int(u_score * float(len(scores)))
-    if idx >= len(scores):
-        idx = len(scores) - 1
-    p = float(scores[idx])
-    # Defensive clamp in case the source distribution has minor numerical drift.
-    if p < 0.0:
-        p = 0.0
-    if p > 1.0:
-        p = 1.0
-    return float(p)
 
 
 def _risk_window_from_predictions(
@@ -747,36 +579,6 @@ def prepare_inputs(
         window_start=window_start,
         window_end=window_end,
     )
-
-    # Fill commits *before* the prediction window with deterministic synthetic risks.
-    # This primarily affects NLB, which expands the known-good boundary to index 0.
-    if window_start > 0:
-        try:
-            dist = load_risk_score_distribution(SYNTHETIC_RISK_SOURCE_PATH)
-        except (FileNotFoundError, ValueError) as exc:
-            logger.warning(
-                "Synthetic risk source unavailable (%s); falling back to %s. Error: %s",
-                SYNTHETIC_RISK_SOURCE_PATH,
-                risk_path,
-                exc,
-            )
-            dist = load_risk_score_distribution(risk_path)
-
-        for i in range(0, window_start):
-            node = nodes_by_index[i]
-            if not node:
-                continue
-            risk_by_index[i] = generate_synthetic_risk_score(str(node), dist)
-
-        logger.info(
-            "Generated synthetic risk scores for %d commits before window_start=%d using %s (roc_auc=%.6f, pos_rate=%.6f).",
-            window_start,
-            window_start,
-            os.path.relpath(dist.source_path, REPO_ROOT),
-            dist.roc_auc,
-            dist.positive_rate,
-        )
-
     risk_by_index = RiskSeries(risk_by_index)
 
     all_bugs = load_bugs_with_available_regressors(

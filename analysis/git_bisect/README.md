@@ -61,7 +61,7 @@ Some strategies use a per-commit **risk score**:
 
 - Let `p_i ∈ [0, 1]` be the model’s score for commit `i`, interpreted as `P(POSITIVE)` / “how likely this commit is a regressor”.
 - Inside `[window_start, window_end]`, missing predictions are treated as `p_i = 0.0`.
-- Outside the window the simulator sets risk to “unavailable” (`None`). Most strategies are constrained to probe no earlier than `window_start`; for NLB, commits *before* `window_start` are assigned deterministic synthetic risk scores (derived from a held-out model prediction distribution) so that risk-aware bisection can operate over full history. Commits after `window_end` remain `None` because they are never probed in-window.
+- Outside the window the simulator sets risk to “unavailable” (`None`). Most strategies are constrained to probe no earlier than `window_start`; NLB uses the first commit in history as its known-good boundary but treats out-of-window risk as 0.0.
 
 Two common ways to aggregate risk over a contiguous range of commits `[a, b)`:
 
