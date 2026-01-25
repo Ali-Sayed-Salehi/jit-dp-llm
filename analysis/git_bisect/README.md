@@ -50,6 +50,25 @@ Some lookback policies may end up using the **simulation window start** commit a
 
 To model an additional fixed overhead in that situation, you can enable `--penalize-window-start-lookback`. When enabled, the simulator adds `--window-start-lookback-penalty-tests` (default: `4`) to `bisection_tests` **per processed bug** whenever `good_index == window_start`.
 
+Concretely, for each processed bug:
+
+$$
+\text{tests\_per\_bug} =
+\text{lookback\_tests} + \text{bisection\_tests} + \text{window\_start\_penalty}
+$$
+
+where:
+
+$$
+\text{window\_start\_penalty} =
+\begin{cases}
+\text{window\_start\_lookback\_penalty\_tests} & \text{if penalize is enabled and } g=\text{window\_start} \\\\
+0 & \text{otherwise}
+\end{cases}
+$$
+
+Implementation detail: the penalty is accounted under **bisection tests** (so it affects `total_bisection_tests` and `total_tests`, and therefore `mean_tests_per_search` / `max_tests_per_search`).
+
 Bugs whose regression predates the risk window (i.e., there is no in-window known-good commit strictly before the culprit) are still skipped as before; enabling this penalty does not change which bugs are processed vs. skipped.
 
 ### Commit window from risk predictions
@@ -101,6 +120,34 @@ Defaults in `analysis/git_bisect/simulate.py`:
 - Risk predictions:
   - Eval: `analysis/git_bisect/risk_predictions_eval.json`
   - Final: `analysis/git_bisect/risk_predictions_final_test.json`
+
+### Bugs file (`mozilla_jit.jsonl`)
+`mozilla_jit.jsonl` is JSONL (one JSON object per line). The simulator expects at least:
+
+- `bug_id`: bug identifier (string or int)
+- `regression`: boolean (only rows with `true` are simulated)
+- `bug_creation_time`: ISO datetime string (used to select the known-bad commit)
+- `regressed_by`: list of regressor bug ids (optional, can be empty/missing)
+
+To map a regressor bug id to a commit, the simulator looks up the referenced bug row and reads:
+
+- `revision`: commit identifier (must match a `node` in `all_commits.jsonl`)
+
+Because bugs can list multiple regressors, the simulator computes an `available_regressor` field during preprocessing:
+
+- A regressor is “available” if its `revision` exists in the commit list *and* its commit index is inside the current risk window.
+- If multiple regressors are available, the simulator uses the **latest** one (highest commit index) as the single culprit for that bug.
+
+### Commits file (`all_commits.jsonl`)
+`all_commits.jsonl` is JSONL ordered by history (index `0..N-1`). Each row is treated as a Mercurial commit and must include:
+
+- `node`: commit hash / id (string; used as the commit key everywhere)
+- `date`: list whose first element is a UNIX timestamp in seconds (used to build commit-time search)
+
+The simulator uses this file to:
+
+- Build `node_to_index` (commit id → linear index)
+- Convert `bug_creation_time` into a known-bad index (`bad_index`) by selecting the latest commit with timestamp `≤ bug_creation_time`
 
 ### Risk prediction file format
 `simulate.py` expects a JSON file with either `results` or `samples` containing rows like:
@@ -159,6 +206,26 @@ The simulator skips bugs where the regression predates the risk window (i.e., `c
 For every lookback strategy **except** NLB and NBLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
 
 If the strategy would execute more than `max_trials` lookback tests while searching backward, it stops early and falls back to using `window_start` as the known-good boundary (instead of continuing to search for a closer passing commit).
+
+Why this exists:
+- Some lookback policies can be arbitrarily expensive on long histories (many probes before finding a pass).
+- `-ff` turns those into “bounded lookback cost” policies: you cap the lookback probes and accept a larger bisection interval.
+
+How it is represented in the code:
+- The “forced fallback” is implemented by passing `max_trials` into the same lookback class (the `-ff` variants in `lookback.py` are name-only subclasses).
+- In `simulate.py` these show up as separate strategy specs with their own `code` (e.g. `FSLB-FF`) and their own tunable `max_trials`.
+- `LookbackOutcome.steps` counts only the probes that were actually executed before stopping; the fallback boundary selection itself does not add an extra lookback step beyond those probes.
+- You can select these variants via `--lookback` using either the strategy codes (e.g. `FSLB-FF`) or the internal names from `lookback.py` (e.g. `fixed_stride-ff`).
+- If you enable the optional window-start penalty (`--penalize-window-start-lookback`), then any case where the forced fallback produces `g = window_start` will also incur that penalty (because the penalty is keyed on `good_index == window_start`).
+
+Example mapping of base strategies → forced-fallback variants:
+- `FSLB` → `FSLB-FF` (Optuna tunes `stride` and `max_trials`)
+- `AFSLB` → `AFSLB-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
+- `RATLB` → `RATLB-FF` (Optuna tunes `threshold` and `max_trials`)
+- `RWLBS` → `RWLBS-FF` (Optuna tunes `threshold` and `max_trials`)
+- `RWLBLS` → `RWLBLS-FF` (Optuna tunes `threshold` and `max_trials`)
+- `TWLB` → `TWLB-FF` (Optuna tunes `hours` and `max_trials`)
+- `ATWLB` → `ATWLB-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
 
 #### FSLB: Fixed-stride lookback (Optuna: `FSLB_stride`)
 Choose a stride length `s` in commits and repeatedly jump back by exactly `s`:
@@ -323,6 +390,39 @@ This tunes each combo on the eval predictions, writes `--output-eval`, then repl
 python analysis/git_bisect/simulate.py --mopt-trials 200
 ```
 
+### Optuna optimization details
+When `--final-only` is **not** set, the script runs a full tuning pass on the **eval** risk predictions before the final replay.
+
+For each selected `(lookback, bisection)` combo:
+
+1) A single Optuna study is created with two objectives:
+   - **Minimize** `max_tests_per_search`
+   - **Minimize** `mean_tests_per_search`
+
+2) The simulator is executed for each trial and the objective values are computed from the resulting metrics.
+
+3) Trials are treated as **infeasible** (returning `(inf, inf)`) when:
+   - No bugs were processed (`processed == 0`), or
+   - Any processed bug failed to locate a culprit (`total_culprits_found < processed`)
+
+4) Optuna uses `NSGAIISampler` when available (multi-objective evolutionary search). If that sampler is not available in your Optuna version, the script falls back to `RandomSampler`.
+
+5) After optimization, the script selects a single point from the Pareto front by a simple rule:
+   - Choose the Pareto-optimal trial with the smallest `max_tests_per_search`
+   - Break ties by the smallest `mean_tests_per_search`
+
+What gets written to `--output-eval`:
+- `results[].best_params`: the selected best parameter values for the combo (stored without the Optuna prefix, e.g. `{"stride": 100}` rather than `{"FSLB_stride": 100}`).
+- `results[].optuna`: metadata about the run (trial counts, chosen trial number, selected objective values, and the raw Optuna param dict).
+- `results[].metrics`: the metrics from a re-run at the selected params (not from an arbitrary trial).
+
+Parameter naming convention:
+- Suggested parameters must be prefixed with the strategy `code` to avoid collisions across combos (e.g. `FSLB_stride`, `TWLB-FF_max_trials`, `TKRB_k`).
+- `simulate.py` validates that every Optuna parameter name starts with either the selected lookback code or the selected bisection code.
+
+Combos without tunable parameters:
+- If both strategies in the combo have no `suggest_params`, Optuna is skipped for that combo and the default parameters are used.
+
 ### Final-only replay
 Load tuned params from the eval output JSON and run only the final predictions:
 
@@ -353,6 +453,48 @@ python analysis/git_bisect/simulate.py --penalize-window-start-lookback --window
 
 ## Outputs and metrics
 
+### Per-bug cost accounting
+For a processed bug, the simulator counts:
+
+- `lookback_tests`: probes performed while trying to find a known-good boundary `g`
+- `bisection_tests`: probes performed after having bounds `(g,b]` to locate the culprit
+- Optional `window_start` penalty: an extra fixed cost (default `4`) when `g = window_start` and `--penalize-window-start-lookback` is enabled
+
+The per-bug cost is:
+
+$$
+\text{tests\_per\_bug} = \text{lookback\_tests} + \text{bisection\_tests}
+$$
+
+where `bisection_tests` may already include the optional window-start penalty.
+
+### Per-combo metric definitions
+Let `processed` be the number of bugs successfully simulated for a combo. For each processed bug `j`, let:
+
+- `L_j`: lookback tests
+- `B_j`: bisection tests (including the optional window-start penalty, if enabled)
+
+Then:
+
+$$
+\text{total\_tests} = \sum_{j=1}^{processed} (L_j + B_j)
+$$
+
+$$
+\text{total\_lookback\_tests} = \sum_{j=1}^{processed} L_j,\;\;\;\;
+\text{total\_bisection\_tests} = \sum_{j=1}^{processed} B_j
+$$
+
+$$
+\text{mean\_tests\_per\_search} = \frac{\text{total\_tests}}{processed}
+$$
+
+$$
+\text{max\_tests\_per\_search} = \max_{j \in [1,processed]} (L_j + B_j)
+$$
+
+If `processed == 0`, `mean_tests_per_search` and `max_tests_per_search` are reported as `null` in the JSON output.
+
 ### Eval output (`--output-eval`)
 Includes:
 - Dataset metadata (commit window, risk file path, bug counts)
@@ -360,6 +502,32 @@ Includes:
 - Per-combo metrics (including a `bugs` breakdown of processed/skipped)
 
 Optuna tuning is multi-objective: it minimizes `(max_tests_per_search, mean_tests_per_search)`.
+
+Eval output structure (high level):
+
+```json
+{
+  "dataset": "eval",
+  "dry_run": false,
+  "best_combo_by_total_tests": "...",
+  "best_combo_by_mean_tests_per_search": "...",
+  "best_combo_by_max_tests_per_search": "...",
+  "commit_window": { "...": "..." },
+  "bugs": { "loaded": 0, "simulated": 0 },
+  "risk_predictions": { "...": "..." },
+  "optimization": { "...": "..." },
+  "results": [
+    {
+      "combo": "FSLB+GB",
+      "lookback": { "code": "FSLB", "name": "fixed_stride" },
+      "bisection": { "code": "GB", "name": "git_bisect" },
+      "best_params": { "lookback": { "...": "..." }, "bisection": { "...": "..." } },
+      "metrics": { "...": "..." },
+      "optuna": { "...": "..." }
+    }
+  ]
+}
+```
 
 ### Final output (`--output-final`)
 Includes:
@@ -369,14 +537,65 @@ Includes:
   - `total_tests_saved_vs_baseline_pct`, `mean_tests_per_search_saved_vs_baseline_pct`, etc.
   - `params`: flattened “used params” like `{"Lookback_stride": 350, "Bisection_k": 20}`
 
+Final output structure (high level):
+
+```json
+{
+  "dataset": "final_test",
+  "dry_run": false,
+  "best_combo_by_total_tests": "...",
+  "best_combo_by_mean_tests_per_search": "...",
+  "best_combo_by_max_tests_per_search": "...",
+  "commit_window": { "...": "..." },
+  "bugs": { "loaded": 0, "simulated": 0 },
+  "risk_predictions": { "...": "..." },
+  "tuned_from_eval": { "path": "...", "present": true },
+  "results": [
+    {
+      "combo": "FSLB+GB",
+      "total_tests": 0,
+      "total_lookback_tests": 0,
+      "total_bisection_tests": 0,
+      "mean_tests_per_search": 0.0,
+      "max_tests_per_search": 0,
+      "total_culprits_found": 0,
+      "total_tests_saved_vs_baseline_pct": 0.0,
+      "mean_tests_per_search_saved_vs_baseline_pct": 0.0,
+      "max_tests_per_search_saved_vs_baseline_pct": 0.0,
+      "params": { "Lookback_stride": 20 }
+    }
+  ]
+}
+```
+
 Per-combo metrics fields:
 - `total_tests`: lookback tests + bisection tests summed over all processed bugs
 - `total_lookback_tests`, `total_bisection_tests`
 - `mean_tests_per_search`, `max_tests_per_search`
 - `total_culprits_found`
 
-Baseline for comparisons is `NLB+GB` (no lookback + standard git bisect). Percent values are computed as:
-`100 * (baseline - value) / baseline` (positive is better / fewer tests).
+In eval output, per-combo metrics are nested under `row["metrics"]` (because the row also includes Optuna metadata). In final output, per-combo metrics are top-level fields in each `results[]` row.
+
+### Baselines and comparability
+The baseline for comparisons is `NLB+GB` (no lookback + standard git bisect).
+
+The script also checks whether different combos processed different numbers of bugs (e.g., due to different lookback behaviors leading to different skip patterns). If the processed counts differ from the baseline, the script logs a warning because “tests saved vs baseline” may not be directly comparable.
+
+### Skip reasons (eval output only)
+The eval output includes a detailed `bugs` breakdown per combo:
+
+- `bugs.processed`: number of regression bugs successfully simulated for that combo
+- `bugs.skipped`: counters explaining why a bug was excluded
+
+Skip keys and meanings:
+- `not_regression`: bug row has `regression=false`
+- `no_available_regressors`: no regressor bug inside the risk window could be mapped to a commit
+- `bad_not_in_window`: the known-bad commit at/just before `bug_creation_time` falls after `window_end`
+- `good_not_in_window`: the chosen known-good commit falls before `window_start`
+- `culprit_after_bad`: inconsistent timestamps/labels where the regressor commit is after the known-bad commit (`culprit_index > bad_index`)
+- `no_regressors_in_range`: lookback could not find an in-window passing commit strictly before the culprit (often meaning the regression predates the risk window)
+
+Percent values are computed as: `100 * (baseline - value) / baseline` (positive is better / fewer tests). In eval output these percent fields are stored under `metrics` (e.g. `metrics.total_tests_saved_vs_baseline_pct`), while in final output they are stored at the top level of each result row (e.g. `total_tests_saved_vs_baseline_pct`).
 
 ## Adding a new strategy
 
