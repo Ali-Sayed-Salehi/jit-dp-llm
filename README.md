@@ -16,7 +16,10 @@ Create `<jit-dp-llm>/secrets/.env` and fill out the secrets.
 
 The scripts are desgined to run completely offline. Download the LLM models you want using `<jit-dp-llm>/llama/download_model.py`.
 
-Contact the authors to provide the datsets for you, alternatively, you can use the data_extraction directory to extract them yourself. If using Hugging Face datasets, use `<jit-dp-llm>/llama/fetch_dataset.py` to first download to your local system.
+You can download the datasets here:
+https://drive.google.com/drive/folders/1QsMAn7yboltMN7gJmXDu-qKIplsjJyKq?usp=sharing
+
+Alternatively, you can use the data_extraction directory to extract them yourself. If using Hugging Face datasets, use `<jit-dp-llm>/llama/fetch_dataset.py` to first download to your local system.
 
 Create a `<jit-dp-llm>/llama/configs/train_config_local.yaml` from `<jit-dp-llm>/llama/configs/train_config.yaml` and change the training configs as you want.
 
