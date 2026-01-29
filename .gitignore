@@ -9,8 +9,10 @@ __pychache__/
 .vscode/
 .idea/
 
-# datasets
-/datasets/*
+# datasets (large; tracked via DVC/externally). Keep READMEs versioned.
+/datasets/**
+!/datasets/**/
+!/datasets/**/README.md
 
 # LLMs
 LLMs/**/*
