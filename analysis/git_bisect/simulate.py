@@ -67,10 +67,22 @@ from lookback import (
     NoLookback,
     RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback,
+    RiskAwareTriggerLookbackAdaptiveDecrease,
+    RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback,
+    RiskAwareTriggerLookbackAdaptiveIncrease,
+    RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback,
     RiskWeightedLookbackLogSurvival,
     RiskWeightedLookbackLogSurvivalForcedFallback,
+    RiskWeightedLookbackLogSurvivalAdaptiveDecrease,
+    RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback,
+    RiskWeightedLookbackLogSurvivalAdaptiveIncrease,
+    RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback,
     RiskWeightedLookbackSum,
     RiskWeightedLookbackSumForcedFallback,
+    RiskWeightedLookbackSumAdaptiveDecrease,
+    RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback,
+    RiskWeightedLookbackSumAdaptiveIncrease,
+    RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback,
     TimeWindowLookback,
     TimeWindowLookbackForcedFallback,
 )
@@ -1107,6 +1119,36 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="RATLB-AD",
+            name=RiskAwareTriggerLookbackAdaptiveDecrease.name,
+            default_params={"threshold": 0.5, "alpha": 0.5},
+            build=lambda inputs, p: RiskAwareTriggerLookbackAdaptiveDecrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB-AD_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RATLB-AD_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="RATLB-AI",
+            name=RiskAwareTriggerLookbackAdaptiveIncrease.name,
+            default_params={"threshold": 0.5, "alpha": 2.0},
+            build=lambda inputs, p: RiskAwareTriggerLookbackAdaptiveIncrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB-AI_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RATLB-AI_alpha", 1.000001, 10.0),
+            },
+        ),
+        StrategySpec(
             code="RATLB-FF",
             name=RiskAwareTriggerLookbackForcedFallback.name,
             default_params={"threshold": 0.5, "max_trials": 20},
@@ -1122,6 +1164,40 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="RATLB-AD-FF",
+            name=RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB-AD-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RATLB-AD-FF_alpha", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RATLB-AD-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
+            code="RATLB-AI-FF",
+            name=RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 2.0, "max_trials": 20},
+            build=lambda inputs, p: RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RATLB-AI-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RATLB-AI-FF_alpha", 1.000001, 10.0),
+                "max_trials": trial.suggest_int("RATLB-AI-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="RWLBS",
             name="rwlb-s",
             default_params={"threshold": 0.5},
@@ -1132,6 +1208,36 @@ def main() -> int:
             ),
             suggest_params=lambda trial: {
                 "threshold": trial.suggest_float("RWLBS_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="RWLBS-AD",
+            name=RiskWeightedLookbackSumAdaptiveDecrease.name,
+            default_params={"threshold": 0.5, "alpha": 0.5},
+            build=lambda inputs, p: RiskWeightedLookbackSumAdaptiveDecrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS-AD_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBS-AD_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="RWLBS-AI",
+            name=RiskWeightedLookbackSumAdaptiveIncrease.name,
+            default_params={"threshold": 0.5, "alpha": 2.0},
+            build=lambda inputs, p: RiskWeightedLookbackSumAdaptiveIncrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS-AI_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBS-AI_alpha", 1.000001, 10.0),
             },
         ),
         StrategySpec(
@@ -1150,6 +1256,40 @@ def main() -> int:
             },
         ),
         StrategySpec(
+            code="RWLBS-AD-FF",
+            name=RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS-AD-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBS-AD-FF_alpha", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RWLBS-AD-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
+            code="RWLBS-AI-FF",
+            name=RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 2.0, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBS-AI-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBS-AI-FF_alpha", 1.000001, 10.0),
+                "max_trials": trial.suggest_int("RWLBS-AI-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
             code="RWLBLS",
             name="rwlb-ls",
             default_params={"threshold": 0.5},
@@ -1160,6 +1300,36 @@ def main() -> int:
             ),
             suggest_params=lambda trial: {
                 "threshold": trial.suggest_float("RWLBLS_threshold", 0.0, 1.0)
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS-AD",
+            name=RiskWeightedLookbackLogSurvivalAdaptiveDecrease.name,
+            default_params={"threshold": 0.5, "alpha": 0.5},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvivalAdaptiveDecrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS-AD_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBLS-AD_alpha", 0.0, 1.0),
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS-AI",
+            name=RiskWeightedLookbackLogSurvivalAdaptiveIncrease.name,
+            default_params={"threshold": 0.5, "alpha": 2.0},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvivalAdaptiveIncrease(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS-AI_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBLS-AI_alpha", 1.000001, 10.0),
             },
         ),
         StrategySpec(
@@ -1175,6 +1345,40 @@ def main() -> int:
             suggest_params=lambda trial: {
                 "threshold": trial.suggest_float("RWLBLS-FF_threshold", 0.0, 1.0),
                 "max_trials": trial.suggest_int("RWLBLS-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS-AD-FF",
+            name=RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 0.5, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS-AD-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBLS-AD-FF_alpha", 0.0, 1.0),
+                "max_trials": trial.suggest_int("RWLBLS-AD-FF_max_trials", 1, 500, log=True),
+            },
+        ),
+        StrategySpec(
+            code="RWLBLS-AI-FF",
+            name=RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback.name,
+            default_params={"threshold": 0.5, "alpha": 2.0, "max_trials": 20},
+            build=lambda inputs, p: RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback(
+                risk_by_index=inputs.risk_by_index,
+                threshold=float(p["threshold"]),
+                alpha=float(p["alpha"]),
+                window_start=inputs.window_start,
+                max_trials=int(p["max_trials"]),
+            ),
+            suggest_params=lambda trial: {
+                "threshold": trial.suggest_float("RWLBLS-AI-FF_threshold", 0.0, 1.0),
+                "alpha": trial.suggest_float("RWLBLS-AI-FF_alpha", 1.000001, 10.0),
+                "max_trials": trial.suggest_int("RWLBLS-AI-FF_max_trials", 1, 500, log=True),
             },
         ),
         StrategySpec(

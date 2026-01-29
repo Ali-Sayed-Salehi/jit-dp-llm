@@ -577,6 +577,202 @@ class RiskAwareTriggerLookback:
             search_idx = candidate
 
 
+class RiskAwareTriggerLookbackAdaptiveDecrease(RiskAwareTriggerLookback):
+    """
+    Risk-Aware Trigger Lookback with adaptive threshold decrease (RATLB-AD).
+
+    Same as RATLB, but uses a threshold that decays geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha ∈ [0,1].
+    """
+
+    name = "risk_aware_trigger-ad"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 0.5,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("alpha must be in [0,1]")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        max_idx = len(self.risk_by_index) - 1
+        search_idx = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        min_trigger_idx = max(self.window_start + 1, 1)
+
+        while True:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+
+            trigger_idx: Optional[int] = None
+            i = search_idx
+            while i >= min_trigger_idx:
+                if self._risk(i) > threshold:
+                    trigger_idx = i
+                    break
+                i -= 1
+
+            if trigger_idx is None:
+                steps += 1
+                known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
+                good = self.window_start if self.window_start < culprit_index else None
+                return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
+
+            candidate = int(trigger_idx - 1)
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RATLB-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s trigger=%d)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
+                    trigger_idx,
+                )
+                return LookbackOutcome(good_index=candidate, steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            search_idx = candidate
+
+
+class RiskAwareTriggerLookbackAdaptiveIncrease(RiskAwareTriggerLookback):
+    """
+    Risk-Aware Trigger Lookback with adaptive threshold increase (RATLB-AI).
+
+    Same as RATLB, but uses a threshold that grows geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha > 1.
+    """
+
+    name = "risk_aware_trigger-ai"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 2.0,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha <= 1.0:
+            raise ValueError("alpha must be > 1")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        max_idx = len(self.risk_by_index) - 1
+        search_idx = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        min_trigger_idx = max(self.window_start + 1, 1)
+
+        while True:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+
+            trigger_idx: Optional[int] = None
+            i = search_idx
+            while i >= min_trigger_idx:
+                if self._risk(i) > threshold:
+                    trigger_idx = i
+                    break
+                i -= 1
+
+            if trigger_idx is None:
+                steps += 1
+                known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
+                good = self.window_start if self.window_start < culprit_index else None
+                return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
+
+            candidate = int(trigger_idx - 1)
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RATLB-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s trigger=%d)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
+                    trigger_idx,
+                )
+                return LookbackOutcome(good_index=candidate, steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            search_idx = candidate
+
+
 class RiskWeightedLookbackSum:
     """
     Risk-Weighted Lookback (RWLB-S).
@@ -695,6 +891,218 @@ class RiskWeightedLookbackSum:
                 return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
 
             # Still failing; move the known-bad boundary backward and try again.
+            bad = int(candidate)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
+class RiskWeightedLookbackSumAdaptiveDecrease(RiskWeightedLookbackSum):
+    """
+    Risk-Weighted Lookback (sum mass) with adaptive threshold decrease (RWLBS-AD).
+
+    Same as RWLB-S, but uses a threshold that decays geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha ∈ [0,1].
+    """
+
+    name = "rwlb-s-ad"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 0.5,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("alpha must be in [0,1]")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def _choose_candidate_with_threshold(self, *, bad_index: int, threshold: float) -> int:
+        bad_index = int(bad_index)
+        if bad_index <= self.window_start:
+            return int(self.window_start)
+
+        prefix = self.risk_by_index.prefix_sums
+        needed = float(prefix[bad_index] - float(threshold))
+        pos = bisect.bisect_right(prefix, needed, lo=self.window_start, hi=bad_index)
+        candidate = int(pos - 1)
+        if candidate < self.window_start:
+            candidate = int(self.window_start)
+        if candidate >= bad_index:
+            candidate = int(bad_index - 1)
+        return int(candidate)
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        max_idx = len(self.risk_by_index) - 1
+        bad = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+            candidate = self._choose_candidate_with_threshold(bad_index=bad, threshold=threshold)
+            if candidate >= bad:
+                candidate = bad - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RWLBS-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            bad = int(candidate)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
+class RiskWeightedLookbackSumAdaptiveIncrease(RiskWeightedLookbackSum):
+    """
+    Risk-Weighted Lookback (sum mass) with adaptive threshold increase (RWLBS-AI).
+
+    Same as RWLB-S, but uses a threshold that grows geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha > 1.
+    """
+
+    name = "rwlb-s-ai"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 2.0,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha <= 1.0:
+            raise ValueError("alpha must be > 1")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def _choose_candidate_with_threshold(self, *, bad_index: int, threshold: float) -> int:
+        bad_index = int(bad_index)
+        if bad_index <= self.window_start:
+            return int(self.window_start)
+
+        prefix = self.risk_by_index.prefix_sums
+        needed = float(prefix[bad_index] - float(threshold))
+        pos = bisect.bisect_right(prefix, needed, lo=self.window_start, hi=bad_index)
+        candidate = int(pos - 1)
+        if candidate < self.window_start:
+            candidate = int(self.window_start)
+        if candidate >= bad_index:
+            candidate = int(bad_index - 1)
+        return int(candidate)
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        max_idx = len(self.risk_by_index) - 1
+        bad = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+            candidate = self._choose_candidate_with_threshold(bad_index=bad, threshold=threshold)
+            if candidate >= bad:
+                candidate = bad - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RWLBS-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
             bad = int(candidate)
 
         return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
@@ -826,6 +1234,250 @@ class RiskWeightedLookbackLogSurvival:
                     start_index,
                     culprit_index,
                     self.threshold,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            bad = int(candidate)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
+class RiskWeightedLookbackLogSurvivalAdaptiveDecrease(RiskWeightedLookbackLogSurvival):
+    """
+    Risk-Weighted Lookback (log-survival mass) with adaptive threshold decrease (RWLBLS-AD).
+
+    Same as RWLB-LS, but uses a threshold that decays geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha ∈ [0,1].
+    """
+
+    name = "rwlb-ls-ad"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 0.5,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("alpha must be in [0,1]")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def _choose_candidate_with_threshold(self, *, bad_index: int, threshold: float) -> int:
+        bad_index = int(bad_index)
+        if bad_index <= self.window_start:
+            return int(self.window_start)
+
+        threshold = float(threshold)
+        if threshold <= 0.0:
+            return int(max(self.window_start, bad_index - 1))
+
+        if self._range_combined_probability(start=self.window_start, end=bad_index) < threshold:
+            return int(self.window_start)
+
+        lo = int(self.window_start)
+        hi = int(bad_index - 1)
+        best = int(self.window_start)
+
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            mass = self._range_combined_probability(start=mid, end=bad_index)
+            if mass >= threshold:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        if best >= bad_index:
+            best = int(bad_index - 1)
+        if best < self.window_start:
+            best = int(self.window_start)
+        return int(best)
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        max_idx = len(self.risk_by_index) - 1
+        bad = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+            candidate = self._choose_candidate_with_threshold(bad_index=bad, threshold=threshold)
+            if candidate >= bad:
+                candidate = bad - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RWLBLS-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate <= self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            bad = int(candidate)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
+class RiskWeightedLookbackLogSurvivalAdaptiveIncrease(RiskWeightedLookbackLogSurvival):
+    """
+    Risk-Weighted Lookback (log-survival mass) with adaptive threshold increase (RWLBLS-AI).
+
+    Same as RWLB-LS, but uses a threshold that grows geometrically with the
+    number of failed lookback probes:
+
+      T_k = T * (alpha ** (k-1))
+
+    where k is the 1-indexed lookback probe count and alpha > 1.
+    """
+
+    name = "rwlb-ls-ai"
+
+    def __init__(
+        self,
+        *,
+        risk_by_index: Sequence[Optional[float]],
+        threshold: float = 0.5,
+        alpha: float = 2.0,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            risk_by_index=risk_by_index,
+            threshold=float(threshold),
+            window_start=int(window_start),
+            max_trials=None if max_trials is None else int(max_trials),
+        )
+        if alpha <= 1.0:
+            raise ValueError("alpha must be > 1")
+        self.alpha = float(alpha)
+
+    def _threshold_for_step(self, steps_executed: int) -> float:
+        return float(self.threshold) * float(self.alpha ** int(steps_executed))
+
+    def _choose_candidate_with_threshold(self, *, bad_index: int, threshold: float) -> int:
+        bad_index = int(bad_index)
+        if bad_index <= self.window_start:
+            return int(self.window_start)
+
+        threshold = float(threshold)
+        if threshold <= 0.0:
+            return int(max(self.window_start, bad_index - 1))
+
+        if self._range_combined_probability(start=self.window_start, end=bad_index) < threshold:
+            return int(self.window_start)
+
+        lo = int(self.window_start)
+        hi = int(bad_index - 1)
+        best = int(self.window_start)
+
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            mass = self._range_combined_probability(start=mid, end=bad_index)
+            if mass >= threshold:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        if best >= bad_index:
+            best = int(bad_index - 1)
+        if best < self.window_start:
+            best = int(self.window_start)
+        return int(best)
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        max_idx = len(self.risk_by_index) - 1
+        bad = min(start_index, max_idx)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while bad > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            threshold = self._threshold_for_step(steps)
+            candidate = self._choose_candidate_with_threshold(bad_index=bad, threshold=threshold)
+            if candidate >= bad:
+                candidate = bad - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "RWLBLS-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    threshold,
+                    self.alpha,
                 )
                 return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
 
@@ -1248,16 +1900,52 @@ class RiskAwareTriggerLookbackForcedFallback(RiskAwareTriggerLookback):
     name = "risk_aware_trigger-ff"
 
 
+class RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback(RiskAwareTriggerLookbackAdaptiveDecrease):
+    """Risk-aware trigger lookback (adaptive-decrease threshold) with forced fallback after `max_trials` tests."""
+
+    name = "risk_aware_trigger-ad-ff"
+
+
+class RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback(RiskAwareTriggerLookbackAdaptiveIncrease):
+    """Risk-aware trigger lookback (adaptive-increase threshold) with forced fallback after `max_trials` tests."""
+
+    name = "risk_aware_trigger-ai-ff"
+
+
 class RiskWeightedLookbackSumForcedFallback(RiskWeightedLookbackSum):
     """Risk-weighted (sum) lookback with forced fallback after `max_trials` tests."""
 
     name = "rwlb-s-ff"
 
 
+class RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback(RiskWeightedLookbackSumAdaptiveDecrease):
+    """Risk-weighted (sum, adaptive-decrease threshold) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-s-ad-ff"
+
+
+class RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback(RiskWeightedLookbackSumAdaptiveIncrease):
+    """Risk-weighted (sum, adaptive-increase threshold) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-s-ai-ff"
+
+
 class RiskWeightedLookbackLogSurvivalForcedFallback(RiskWeightedLookbackLogSurvival):
     """Risk-weighted (log-survival) lookback with forced fallback after `max_trials` tests."""
 
     name = "rwlb-ls-ff"
+
+
+class RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback(RiskWeightedLookbackLogSurvivalAdaptiveDecrease):
+    """Risk-weighted (log-survival, adaptive-decrease threshold) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-ls-ad-ff"
+
+
+class RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback(RiskWeightedLookbackLogSurvivalAdaptiveIncrease):
+    """Risk-weighted (log-survival, adaptive-increase threshold) lookback with forced fallback after `max_trials` tests."""
+
+    name = "rwlb-ls-ai-ff"
 
 
 class TimeWindowLookbackForcedFallback(TimeWindowLookback):
@@ -1289,10 +1977,22 @@ LOOKBACK_STRATEGIES = {
     NightlyBuildLookback.name: NightlyBuildLookback,
     RiskAwareTriggerLookback.name: RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback.name: RiskAwareTriggerLookbackForcedFallback,
+    RiskAwareTriggerLookbackAdaptiveDecrease.name: RiskAwareTriggerLookbackAdaptiveDecrease,
+    RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback.name: RiskAwareTriggerLookbackAdaptiveDecreaseForcedFallback,
+    RiskAwareTriggerLookbackAdaptiveIncrease.name: RiskAwareTriggerLookbackAdaptiveIncrease,
+    RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback.name: RiskAwareTriggerLookbackAdaptiveIncreaseForcedFallback,
     RiskWeightedLookbackSum.name: RiskWeightedLookbackSum,
     RiskWeightedLookbackSumForcedFallback.name: RiskWeightedLookbackSumForcedFallback,
+    RiskWeightedLookbackSumAdaptiveDecrease.name: RiskWeightedLookbackSumAdaptiveDecrease,
+    RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback.name: RiskWeightedLookbackSumAdaptiveDecreaseForcedFallback,
+    RiskWeightedLookbackSumAdaptiveIncrease.name: RiskWeightedLookbackSumAdaptiveIncrease,
+    RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback.name: RiskWeightedLookbackSumAdaptiveIncreaseForcedFallback,
     RiskWeightedLookbackLogSurvival.name: RiskWeightedLookbackLogSurvival,
     RiskWeightedLookbackLogSurvivalForcedFallback.name: RiskWeightedLookbackLogSurvivalForcedFallback,
+    RiskWeightedLookbackLogSurvivalAdaptiveDecrease.name: RiskWeightedLookbackLogSurvivalAdaptiveDecrease,
+    RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback.name: RiskWeightedLookbackLogSurvivalAdaptiveDecreaseForcedFallback,
+    RiskWeightedLookbackLogSurvivalAdaptiveIncrease.name: RiskWeightedLookbackLogSurvivalAdaptiveIncrease,
+    RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback.name: RiskWeightedLookbackLogSurvivalAdaptiveIncreaseForcedFallback,
     TimeWindowLookbackAdaptiveDecrease.name: TimeWindowLookbackAdaptiveDecrease,
     TimeWindowLookbackAdaptiveDecreaseForcedFallback.name: TimeWindowLookbackAdaptiveDecreaseForcedFallback,
     TimeWindowLookbackAdaptiveIncrease.name: TimeWindowLookbackAdaptiveIncrease,

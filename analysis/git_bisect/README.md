@@ -223,8 +223,14 @@ Example mapping of base strategies → forced-fallback variants:
 - `FSLB-AD` → `FSLB-AD-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
 - `FSLB-AI` → `FSLB-AI-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
 - `RATLB` → `RATLB-FF` (Optuna tunes `threshold` and `max_trials`)
+- `RATLB-AD` → `RATLB-AD-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
+- `RATLB-AI` → `RATLB-AI-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
 - `RWLBS` → `RWLBS-FF` (Optuna tunes `threshold` and `max_trials`)
+- `RWLBS-AD` → `RWLBS-AD-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
+- `RWLBS-AI` → `RWLBS-AI-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
 - `RWLBLS` → `RWLBLS-FF` (Optuna tunes `threshold` and `max_trials`)
+- `RWLBLS-AD` → `RWLBLS-AD-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
+- `RWLBLS-AI` → `RWLBLS-AI-FF` (Optuna tunes `threshold`, `alpha`, and `max_trials`)
 - `TWLB` → `TWLB-FF` (Optuna tunes `hours` and `max_trials`)
 - `TWLB-AD` → `TWLB-AD-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
 - `TWLB-AI` → `TWLB-AI-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
@@ -279,6 +285,16 @@ $$
 
 Intuition: “when the model says a commit looks suspicious, check just before it to try to bracket the regression.”
 
+#### RATLB-AD: Adaptive-decrease risk-aware trigger lookback (Optuna: `RATLB-AD_threshold`, `RATLB-AD_alpha`)
+Like RATLB, but change the trigger threshold after each failed probe:
+
+$$
+T_k = T \cdot \alpha^{k-1},\;\;\alpha \in [0,1]
+$$
+
+#### RATLB-AI: Adaptive-increase risk-aware trigger lookback (Optuna: `RATLB-AI_threshold`, `RATLB-AI_alpha`)
+Same as RATLB-AD, but with `α > 1` so the threshold increases after each failed probe.
+
 #### RWLBS: Risk-weighted lookback (sum mass) (Optuna: `RWLBS_threshold`)
 Let `T ≥ 0` be a threshold. From the current known-bad boundary `b`, pick the **closest** earlier commit `x < b` such that the summed risk between `x` and `b` reaches the threshold:
 
@@ -290,6 +306,16 @@ Test `x`; on failure set `b ← x` and repeat. If even the full in-window interv
 
 This makes lookback steps “smaller” when the region just before `b` already contains a lot of predicted risk.
 
+#### RWLBS-AD: Adaptive-decrease risk-weighted lookback (sum mass) (Optuna: `RWLBS-AD_threshold`, `RWLBS-AD_alpha`)
+Like RWLBS, but decay the risk-mass threshold after each failed probe:
+
+$$
+T_k = T \cdot \alpha^{k-1},\;\;\alpha \in [0,1]
+$$
+
+#### RWLBS-AI: Adaptive-increase risk-weighted lookback (sum mass) (Optuna: `RWLBS-AI_threshold`, `RWLBS-AI_alpha`)
+Same as RWLBS-AD, but with `α > 1` so the threshold increases after each failed probe.
+
 #### RWLBLS: Risk-weighted lookback (log-survival mass) (Optuna: `RWLBLS_threshold`)
 Same policy as RWLBS, but threshold the noisy-OR mass instead of the sum:
 
@@ -298,6 +324,16 @@ x = \arg\max_{j < b} \left\{ j \;:\; R_{\text{ls}}([j, b)) \ge T \right\}
 $$
 
 Here `T ∈ [0,1]`. This treats many small-risk commits differently from one large-risk commit.
+
+#### RWLBLS-AD: Adaptive-decrease risk-weighted lookback (log-survival mass) (Optuna: `RWLBLS-AD_threshold`, `RWLBLS-AD_alpha`)
+Like RWLBLS, but decay the threshold after each failed probe:
+
+$$
+T_k = T \cdot \alpha^{k-1},\;\;\alpha \in [0,1]
+$$
+
+#### RWLBLS-AI: Adaptive-increase risk-weighted lookback (log-survival mass) (Optuna: `RWLBLS-AI_threshold`, `RWLBLS-AI_alpha`)
+Same as RWLBLS-AD, but with `α > 1` so the threshold increases after each failed probe.
 
 #### TWLB: Time-window lookback (Optuna: `TWLB_hours`)
 Let commit `i` have timestamp `t_i` (UTC). Choose a fixed time window `H` hours. From the current boundary `b`, jump back by time and test the nearest commit at-or-before the target time:
