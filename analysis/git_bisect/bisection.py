@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 import math
 import heapq
-from typing import Optional, Protocol, Sequence, overload
+from typing import Mapping, Optional, Protocol, Sequence, overload
 
 import bisect
 
@@ -37,9 +37,88 @@ class BisectionStrategy(Protocol):
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         """Run a bisection procedure and return test count plus found culprit."""
         ...
+
+
+def _init_cache(
+    *,
+    good_index: int,
+    bad_index: int,
+    known_results: Optional[Mapping[int, bool]],
+) -> dict[int, bool]:
+    """Initialize a pass/fail cache from (optional) prior known results."""
+    cache: dict[int, bool] = {}
+    if known_results:
+        for idx, failed in known_results.items():
+            cache[int(idx)] = bool(failed)
+
+    cache[int(good_index)] = False
+    cache[int(bad_index)] = True
+    return cache
+
+
+def _tighten_bounds(
+    *,
+    good_index: int,
+    bad_index: int,
+    cache: Mapping[int, bool],
+) -> tuple[int, int]:
+    """
+    Tighten (good,bad] bounds using any known pass/fail results.
+
+    Returns (low, high) where:
+      - low is a known-good index (pass)
+      - high is a known-bad index (fail)
+    """
+    good_index = int(good_index)
+    bad_index = int(bad_index)
+    low = good_index
+    high = bad_index
+
+    best_good: Optional[int] = None
+    best_bad: Optional[int] = None
+    for idx, failed in cache.items():
+        if idx < good_index or idx > bad_index:
+            continue
+        if failed:
+            if best_bad is None or idx < best_bad:
+                best_bad = int(idx)
+        else:
+            if best_good is None or idx > best_good:
+                best_good = int(idx)
+
+    if best_good is not None:
+        low = max(low, int(best_good))
+    if best_bad is not None:
+        high = min(high, int(best_bad))
+
+    # If known results are inconsistent, fall back to the original bounds.
+    if low >= high:
+        return good_index, bad_index
+    return low, high
+
+
+@dataclass
+class _BisectionTester:
+    """Monotone test simulator with memoization and a cache-miss test counter."""
+
+    cache: dict[int, bool]
+    culprit_index: int
+    tests: int = 0
+
+    def test(self, idx: int) -> bool:
+        """Return True if commit idx fails; increments `tests` when uncached."""
+        idx = int(idx)
+        if idx in self.cache:
+            return self.cache[idx]
+        self.tests += 1
+        out = bool(idx >= int(self.culprit_index))
+        self.cache[idx] = out
+        return out
+
 
 class RiskSeries(Sequence[Optional[float]]):
     """
@@ -151,6 +230,7 @@ class GitBisectBaseline:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         """Simulate standard git bisect to find a single culprit and count tests."""
         _ = risk_by_index  # reserved for future strategies
@@ -169,14 +249,14 @@ class GitBisectBaseline:
             )
             return BisectionOutcome(tests=0, found_index=None)
 
-        low = int(good_index)
-        high = int(bad_index)
-        tests = 0
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         while high - low > 1:
             mid = (low + high) // 2
-            tests += 1
-            if mid >= culprit_index:
+            mid_failed = tester.test(mid)
+            if mid_failed:
                 high = mid
             else:
                 low = mid
@@ -184,11 +264,11 @@ class GitBisectBaseline:
         logger.debug(
             "Bisect located culprit=%d in tests=%d (good=%d bad=%d)",
             high,
-            tests,
+            tester.tests,
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tests, found_index=high)
+        return BisectionOutcome(tests=tester.tests, found_index=high)
 
 
 class RiskWeightedBisectionSum:
@@ -263,6 +343,7 @@ class RiskWeightedBisectionSum:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
             logger.debug("RWB-SUM skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
@@ -278,14 +359,14 @@ class RiskWeightedBisectionSum:
             )
             return BisectionOutcome(tests=0, found_index=None)
 
-        low = int(good_index)
-        high = int(bad_index)
-        tests = 0
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         while high - low > 1:
             mid = self._choose_mid(low=low, high=high, risk_by_index=risk_by_index)
-            tests += 1
-            if mid >= culprit_index:
+            mid_failed = tester.test(mid)
+            if mid_failed:
                 high = mid
             else:
                 low = mid
@@ -293,11 +374,11 @@ class RiskWeightedBisectionSum:
         logger.debug(
             "RWB-SUM located culprit=%d in tests=%d (good=%d bad=%d)",
             high,
-            tests,
+            tester.tests,
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tests, found_index=high)
+        return BisectionOutcome(tests=tester.tests, found_index=high)
 
 
 class RiskWeightedBisectionLogSurvival:
@@ -382,6 +463,7 @@ class RiskWeightedBisectionLogSurvival:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
             logger.debug("RWB-LS skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
@@ -397,14 +479,14 @@ class RiskWeightedBisectionLogSurvival:
             )
             return BisectionOutcome(tests=0, found_index=None)
 
-        low = int(good_index)
-        high = int(bad_index)
-        tests = 0
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         while high - low > 1:
             mid = self._choose_mid(low=low, high=high, risk_by_index=risk_by_index)
-            tests += 1
-            if mid >= culprit_index:
+            mid_failed = tester.test(mid)
+            if mid_failed:
                 high = mid
             else:
                 low = mid
@@ -412,11 +494,11 @@ class RiskWeightedBisectionLogSurvival:
         logger.debug(
             "RWB-LS located culprit=%d in tests=%d (good=%d bad=%d)",
             high,
-            tests,
+            tester.tests,
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tests, found_index=high)
+        return BisectionOutcome(tests=tester.tests, found_index=high)
 
 
 class SequentialWalkBackwardBisection:
@@ -445,6 +527,7 @@ class SequentialWalkBackwardBisection:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         _ = risk_by_index  # not used by this strategy
 
@@ -462,14 +545,16 @@ class SequentialWalkBackwardBisection:
             )
             return BisectionOutcome(tests=0, found_index=None)
 
-        good_index = int(good_index)
-        hi = int(bad_index)  # known-bad boundary
-        tests = 0
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        good_index = int(low)
+        hi = int(high)  # known-bad boundary
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         # Probe from (bad-1) down to (good+1).
-        for probe in range(int(bad_index) - 1, good_index, -1):
-            tests += 1
-            if probe >= culprit_index:
+        for probe in range(int(high) - 1, good_index, -1):
+            probe_failed = tester.test(probe)
+            if probe_failed:
                 # Still failing; move the known-bad boundary backward.
                 hi = probe
                 continue
@@ -478,21 +563,21 @@ class SequentialWalkBackwardBisection:
             logger.debug(
                 "SWBB located culprit=%d in tests=%d (good=%d bad=%d)",
                 hi,
-                tests,
+                tester.tests,
                 good_index,
                 bad_index,
             )
-            return BisectionOutcome(tests=tests, found_index=hi)
+            return BisectionOutcome(tests=tester.tests, found_index=hi)
 
         # Never observed a pass within (good, bad); culprit must be good+1.
         logger.debug(
             "SWBB located culprit=%d in tests=%d (good=%d bad=%d)",
             hi,
-            tests,
+            tester.tests,
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tests, found_index=hi)
+        return BisectionOutcome(tests=tester.tests, found_index=hi)
 
 
 class SequentialWalkForwardBisection:
@@ -517,6 +602,7 @@ class SequentialWalkForwardBisection:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         _ = risk_by_index  # not used by this strategy
 
@@ -534,24 +620,26 @@ class SequentialWalkForwardBisection:
             )
             return BisectionOutcome(tests=0, found_index=None)
 
-        good_index = int(good_index)
-        bad_index = int(bad_index)
-        tests = 0
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        good_index = int(low)
+        bad_index = int(high)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         for probe in range(good_index + 1, bad_index + 1):
-            tests += 1
-            if probe >= culprit_index:
+            probe_failed = tester.test(probe)
+            if probe_failed:
                 logger.debug(
                     "SWFB located culprit=%d in tests=%d (good=%d bad=%d)",
                     probe,
-                    tests,
+                    tester.tests,
                     good_index,
                     bad_index,
                 )
-                return BisectionOutcome(tests=tests, found_index=int(probe))
+                return BisectionOutcome(tests=tester.tests, found_index=int(probe))
 
         # Should be unreachable due to the culprit range check above.
-        return BisectionOutcome(tests=tests, found_index=None)
+        return BisectionOutcome(tests=tester.tests, found_index=None)
 
 
 class TopKRiskFirstBisection:
@@ -577,6 +665,7 @@ class TopKRiskFirstBisection:
         self.k = int(k)
 
     def _risk(self, idx: int, risk_by_index: Sequence[Optional[float]]) -> float:
+        """Return the (possibly missing) per-commit risk score as a float."""
         v = risk_by_index[idx]
         return 0.0 if v is None else float(v)
 
@@ -587,6 +676,7 @@ class TopKRiskFirstBisection:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
+        known_results: Optional[Mapping[int, bool]] = None,
     ) -> BisectionOutcome:
         if risk_by_index is None:
             raise ValueError("TKRB-K requires risk_by_index to be provided")
@@ -608,27 +698,11 @@ class TopKRiskFirstBisection:
         good_index = int(good_index)
         bad_index = int(bad_index)
 
-        cache: dict[int, bool] = {
-            good_index: False,  # known good
-            bad_index: True,  # known bad
-        }
-
-        def test(idx: int) -> bool:
-            """Return True if commit idx fails; counts as a test when uncached."""
-            if idx in cache:
-                return cache[idx]
-            out = bool(int(idx) >= culprit_index)
-            cache[int(idx)] = out
-            return out
-
-        tests = 0
-
-        def test_and_count(idx: int) -> bool:
-            nonlocal tests
-            if idx in cache:
-                return cache[idx]
-            tests += 1
-            return test(idx)
+        cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
+        good_index = int(low)
+        bad_index = int(high)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
 
         # ---- Phase 1: risk-first scan over top-K commits. ----
         start = good_index + 1
@@ -647,34 +721,27 @@ class TopKRiskFirstBisection:
                     prev_failed = False
                     cache[prev] = False
                 else:
-                    prev_failed = test_and_count(prev)
+                    prev_failed = tester.test(prev)
 
-                idx_failed = test_and_count(idx)
+                idx_failed = tester.test(idx)
                 if idx_failed and not prev_failed:
                     logger.debug(
                         "TKRB-K found culprit=%d during risk-first phase (tests=%d good=%d bad=%d k=%d)",
                         idx,
-                        tests,
+                        tester.tests,
                         good_index,
                         bad_index,
                         self.k,
                     )
-                    return BisectionOutcome(tests=tests, found_index=int(idx))
+                    return BisectionOutcome(tests=tester.tests, found_index=int(idx))
 
-        # Use any newly discovered pass/fail results to tighten the search interval.
-        best_good = max(i for i, failed in cache.items() if not failed)
-        best_bad = min(i for i, failed in cache.items() if failed)
-        low = max(good_index, int(best_good))
-        high = min(bad_index, int(best_bad))
-        if low >= high:
-            # Should not happen under a consistent monotone model; fall back to original bounds.
-            low = good_index
-            high = bad_index
+        # Tighten the search interval using any newly discovered pass/fail results.
+        low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
 
         # ---- Phase 2: standard git-bisect with memoization. ----
         while high - low > 1:
             mid = (low + high) // 2
-            mid_failed = test_and_count(mid)
+            mid_failed = tester.test(mid)
             if mid_failed:
                 high = mid
             else:
@@ -683,12 +750,12 @@ class TopKRiskFirstBisection:
         logger.debug(
             "TKRB-K located culprit=%d in tests=%d (good=%d bad=%d k=%d)",
             high,
-            tests,
+            tester.tests,
             good_index,
             bad_index,
             self.k,
         )
-        return BisectionOutcome(tests=tests, found_index=int(high))
+        return BisectionOutcome(tests=tester.tests, found_index=int(high))
 
 
 BISECTION_STRATEGIES = {

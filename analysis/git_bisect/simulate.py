@@ -464,6 +464,7 @@ def simulate_strategy_combo(
             bad_index=bad_index,
             culprit_index=culprit_index,
             risk_by_index=risk_by_index,
+            known_results=lookback_outcome.known_results,
         )
 
         window_start_penalty = 0
