@@ -373,6 +373,7 @@ def simulate_strategy_combo(
     bisection: BisectionStrategy,
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
+    collect_tests_per_search: bool = False,
 ) -> Dict[str, Any]:
     """Run simulation for a single (lookback, bisection) strategy pair."""
     if int(window_start_lookback_penalty_tests) < 0:
@@ -387,6 +388,7 @@ def simulate_strategy_combo(
     total_bisection_tests = 0
     total_culprits_found = 0
     max_tests_per_search = 0
+    tests_per_search_samples: Optional[List[int]] = [] if bool(collect_tests_per_search) else None
 
     skipped = {
         "not_regression": 0,
@@ -490,6 +492,9 @@ def simulate_strategy_combo(
         if tests_per_search > max_tests_per_search:
             max_tests_per_search = tests_per_search
 
+        if tests_per_search_samples is not None:
+            tests_per_search_samples.append(int(tests_per_search))
+
         total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
         total_lookback_tests += lookback_tests
         total_bisection_tests += bisection_tests
@@ -514,7 +519,7 @@ def simulate_strategy_combo(
         total_culprits_found,
         skipped,
     )
-    return {
+    out: Dict[str, Any] = {
         "combo": f"{lookback_code}+{bisection_code}",
         "total_tests": total_tests,
         "total_lookback_tests": total_lookback_tests,
@@ -524,6 +529,9 @@ def simulate_strategy_combo(
         "total_culprits_found": total_culprits_found,
         "bugs": {"processed": processed, "skipped": skipped},
     }
+    if tests_per_search_samples is not None:
+        out["tests_per_search_samples"] = tests_per_search_samples
+    return out
 
 
 def _parse_bug_time(value: Any) -> datetime:
@@ -647,6 +655,7 @@ def run_combo(
     bisection_params: Dict[str, Any],
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
+    collect_tests_per_search: bool = False,
 ) -> Dict[str, Any]:
     """
     Build concrete strategy instances and run a single simulation combo.
@@ -672,6 +681,7 @@ def run_combo(
         bisection=bisection,
         penalize_window_start_lookback=bool(penalize_window_start_lookback),
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
+        collect_tests_per_search=bool(collect_tests_per_search),
     )
     res["params"] = {
         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
@@ -868,6 +878,22 @@ def get_args() -> argparse.Namespace:
         help="Where to write the FINAL replay output JSON.",
     )
     parser.add_argument(
+        "--pareto-front-plot-path",
+        default=None,
+        help=(
+            "Where to write the combined Pareto-front distribution plot image. "
+            "Default: alongside --output-final as `pareto_front_distributions.png`."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-front-stats-path",
+        default=None,
+        help=(
+            "Where to write the Pareto-front percentile stats JSON. "
+            "Default: alongside --output-final as `pareto_front_stats.json`."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only simulate the first 1k bug rows (for quick iteration).",
@@ -976,6 +1002,172 @@ def _filter_strategy_specs(raw: str, *, specs: Sequence[StrategySpec], kind: str
 
     selected = set(selected_codes)
     return [s for s in specs if s.code in selected]
+
+
+def _resolve_pareto_front_artifact_paths(
+    *,
+    output_final: str,
+    pareto_front_plot_path: Optional[str],
+    pareto_front_stats_path: Optional[str],
+) -> tuple[str, str]:
+    output_dir = os.path.dirname(os.path.abspath(str(output_final)))
+    plot_path = (
+        str(pareto_front_plot_path)
+        if pareto_front_plot_path is not None
+        else os.path.join(output_dir, "pareto_front_distributions.png")
+    )
+    stats_path = (
+        str(pareto_front_stats_path)
+        if pareto_front_stats_path is not None
+        else os.path.join(output_dir, "pareto_front_stats.json")
+    )
+    return plot_path, stats_path
+
+
+def _pareto_front_rows_by_total_and_max(
+    *,
+    results: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Return Pareto-efficient combos under minimization of:
+      - total_tests
+      - max_tests_per_search
+    """
+    eligible: List[Dict[str, Any]] = []
+    for row in results:
+        combo = row.get("combo")
+        total_tests = row.get("total_tests")
+        max_tests_per_search = row.get("max_tests_per_search")
+        mean_tests_per_search = row.get("mean_tests_per_search")
+        if combo is None or total_tests is None or max_tests_per_search is None:
+            continue
+        # Exclude degenerate runs where no bugs were processed (mean is None).
+        if mean_tests_per_search is None:
+            continue
+        try:
+            eligible.append(
+                {
+                    "combo": str(combo),
+                    "total_tests": int(total_tests),
+                    "max_tests_per_search": int(max_tests_per_search),
+                    "mean_tests_per_search": float(mean_tests_per_search),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+
+    pareto: List[Dict[str, Any]] = []
+    for i, a in enumerate(eligible):
+        dominated = False
+        for j, b in enumerate(eligible):
+            if i == j:
+                continue
+            if (
+                int(b["total_tests"]) <= int(a["total_tests"])
+                and int(b["max_tests_per_search"]) <= int(a["max_tests_per_search"])
+                and (
+                    int(b["total_tests"]) < int(a["total_tests"])
+                    or int(b["max_tests_per_search"]) < int(a["max_tests_per_search"])
+                )
+            ):
+                dominated = True
+                break
+        if not dominated:
+            pareto.append(a)
+
+    pareto.sort(key=lambda r: (int(r["total_tests"]), int(r["max_tests_per_search"]), str(r["combo"])))
+    return pareto
+
+
+def _percentiles_int(samples: Sequence[int], percentiles: Sequence[int]) -> Dict[str, int]:
+    if not samples:
+        return {f"p{int(p)}": 0 for p in percentiles}
+
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("NumPy is required for percentile computation. Install with `pip install numpy`.") from exc
+
+    arr = np.asarray(list(samples), dtype=float)
+    qs = np.asarray(list(percentiles), dtype=float)
+    try:
+        values = np.percentile(arr, qs, method="higher")
+    except TypeError:
+        # NumPy<1.22 uses `interpolation=...` instead of `method=...`.
+        values = np.percentile(arr, qs, interpolation="higher")
+
+    out: Dict[str, int] = {}
+    for q, v in zip(percentiles, values):
+        out[f"p{int(q)}"] = int(v)
+    return out
+
+
+def _write_pareto_front_percentile_stats(
+    *,
+    rows: Sequence[Dict[str, Any]],
+    output_path: str,
+) -> None:
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(list(rows), f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def _plot_pareto_front_test_distributions(
+    *,
+    rows: Sequence[Dict[str, Any]],
+    output_path: str,
+) -> None:
+    if not rows:
+        return
+
+    try:
+        import matplotlib
+    except ImportError as exc:
+        raise RuntimeError("Matplotlib is required for plotting. Install with `pip install matplotlib`.") from exc
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+
+    import math
+    from collections import Counter
+
+    n = len(rows)
+    ncols = min(4, max(1, int(math.ceil(math.sqrt(n)))))
+    nrows = int(math.ceil(n / ncols))
+
+    fig_w = 6.0 * float(ncols)
+    fig_h = 3.2 * float(nrows)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(fig_w, fig_h), squeeze=False)
+
+    fig.supxlabel("Tests run per search")
+    fig.supylabel("Population")
+
+    for ax, row in zip(axes.flat, rows):
+        samples = row.get("tests_per_search_samples") or []
+        counts = Counter(int(x) for x in samples)
+        xs = sorted(counts.keys())
+        ys = [int(counts[x]) for x in xs]
+
+        if xs:
+            ax.bar(xs, ys, width=0.9)
+        ax.set_title(str(row.get("combo")), fontsize=9)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    for ax in axes.flat[len(rows) :]:
+        ax.axis("off")
+
+    fig.tight_layout()
+
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 
 def main() -> int:
@@ -1713,7 +1905,9 @@ def main() -> int:
         }
 
         logger.info("Writing EVAL summary to %s", args.output_eval)
-        os.makedirs(os.path.dirname(args.output_eval), exist_ok=True)
+        out_dir = os.path.dirname(str(args.output_eval))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         with open(args.output_eval, "w", encoding="utf-8") as f:
             json.dump(eval_summary, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -1750,6 +1944,7 @@ def main() -> int:
         bool(args.dry_run),
     )
 
+    combo_specs_by_key: Dict[str, Dict[str, Any]] = {}
     final_results: List[Dict[str, Any]] = []
     for lookback_spec in lookback_specs:
         for bisection_spec in bisection_specs:
@@ -1760,6 +1955,12 @@ def main() -> int:
             }
             lookback_params = dict(params.get("lookback") or {})
             bisection_params = dict(params.get("bisection") or {})
+            combo_specs_by_key[combo_key] = {
+                "lookback_spec": lookback_spec,
+                "bisection_spec": bisection_spec,
+                "lookback_params": dict(lookback_params),
+                "bisection_params": dict(bisection_params),
+            }
             final_results.append(
                 run_combo(
                     inputs=final_inputs,
@@ -1821,10 +2022,51 @@ def main() -> int:
     }
 
     logger.info("Writing FINAL summary to %s", args.output_final)
-    os.makedirs(os.path.dirname(args.output_final), exist_ok=True)
+    out_dir = os.path.dirname(str(args.output_final))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(args.output_final, "w", encoding="utf-8") as f:
         json.dump(final_summary, f, indent=2, sort_keys=True)
         f.write("\n")
+
+    plot_path, stats_path = _resolve_pareto_front_artifact_paths(
+        output_final=str(args.output_final),
+        pareto_front_plot_path=args.pareto_front_plot_path,
+        pareto_front_stats_path=args.pareto_front_stats_path,
+    )
+    pareto_rows = _pareto_front_rows_by_total_and_max(results=final_results)
+    if not pareto_rows:
+        logger.warning("No eligible FINAL combos found for Pareto-front stats/plots.")
+    else:
+        percentile_qs = [25, 75, 90, 95, 99]
+        pareto_plot_rows: List[Dict[str, Any]] = []
+        pareto_stats_rows: List[Dict[str, Any]] = []
+        for pareto_row in pareto_rows:
+            combo_key = str(pareto_row.get("combo"))
+            spec = combo_specs_by_key.get(combo_key)
+            if not spec:
+                continue
+            dist_res = run_combo(
+                inputs=final_inputs,
+                lookback_spec=spec["lookback_spec"],
+                lookback_params=dict(spec["lookback_params"]),
+                bisection_spec=spec["bisection_spec"],
+                bisection_params=dict(spec["bisection_params"]),
+                penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
+                window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
+                collect_tests_per_search=True,
+            )
+            samples = list(dist_res.get("tests_per_search_samples") or [])
+            pareto_plot_rows.append({"combo": combo_key, "tests_per_search_samples": samples})
+            pareto_stats_rows.append({**pareto_row, **_percentiles_int(samples, percentile_qs)})
+
+        if pareto_stats_rows:
+            logger.info("Writing Pareto-front percentile stats to %s", stats_path)
+            _write_pareto_front_percentile_stats(rows=pareto_stats_rows, output_path=stats_path)
+
+        if pareto_plot_rows:
+            logger.info("Writing Pareto-front distribution plot to %s", plot_path)
+            _plot_pareto_front_test_distributions(rows=pareto_plot_rows, output_path=plot_path)
 
     print(args.output_final)
     return 0
