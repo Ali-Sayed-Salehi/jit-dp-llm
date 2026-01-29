@@ -98,8 +98,8 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py 
 --window-start-lookback-penalty-tests 4 \
 --mopt-trials 50 \
 --optuna-seed 42 \
---lookback NBLB,NLB,FSLB,AFSLB,RATLB,RWLBS,RWLBLS,TWLB,ATWLB,FSLB-FF,AFSLB-FF,RATLB-FF,RWLBS-FF,RWLBLS-FF,TWLB-FF,ATWLB-FF \
---bisection GB,SWBB,SWFB,TKRB,RWBS,RWBLS \
+--lookback NBLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RWLBS,RWLBLS,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RWLBS-FF,RWLBLS-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \
+--bisection GB,TKRB,RWBS,RWBLS \
 # --log-level INFO \
 # --final-only \
 # --dry-run

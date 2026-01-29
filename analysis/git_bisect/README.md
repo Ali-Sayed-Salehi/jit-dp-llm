@@ -220,12 +220,14 @@ How it is represented in the code:
 
 Example mapping of base strategies → forced-fallback variants:
 - `FSLB` → `FSLB-FF` (Optuna tunes `stride` and `max_trials`)
-- `AFSLB` → `AFSLB-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
+- `FSLB-AD` → `FSLB-AD-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
+- `FSLB-AI` → `FSLB-AI-FF` (Optuna tunes `stride`, `alpha`, and `max_trials`)
 - `RATLB` → `RATLB-FF` (Optuna tunes `threshold` and `max_trials`)
 - `RWLBS` → `RWLBS-FF` (Optuna tunes `threshold` and `max_trials`)
 - `RWLBLS` → `RWLBLS-FF` (Optuna tunes `threshold` and `max_trials`)
 - `TWLB` → `TWLB-FF` (Optuna tunes `hours` and `max_trials`)
-- `ATWLB` → `ATWLB-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
+- `TWLB-AD` → `TWLB-AD-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
+- `TWLB-AI` → `TWLB-AI-FF` (Optuna tunes `hours`, `alpha`, and `max_trials`)
 
 #### FSLB: Fixed-stride lookback (Optuna: `FSLB_stride`)
 Choose a stride length `s` in commits and repeatedly jump back by exactly `s`:
@@ -240,7 +242,7 @@ $$
 k^\* = \left\lceil \frac{b_0 - (c-1)}{s} \right\rceil
 $$
 
-#### AFSLB: Adaptive fixed-stride lookback (Optuna: `AFSLB_stride`, `AFSLB_alpha`)
+#### FSLB-AD: Adaptive-decrease fixed-stride lookback (Optuna: `FSLB-AD_stride`, `FSLB-AD_alpha`)
 Like FSLB, but shrink the stride geometrically after each failed test.
 
 - Step `k` uses stride `s_k = ceil(s · α^{k-1})`, with `α ∈ [0,1]`.
@@ -250,6 +252,18 @@ The total distance moved back after `K` failed steps (ignoring clamps/ceiling) i
 
 $$
 \sum_{k=1}^{K} s\,\alpha^{k-1} = s\,\frac{1-\alpha^K}{1-\alpha}
+$$
+
+#### FSLB-AI: Adaptive-increase fixed-stride lookback (Optuna: `FSLB-AI_stride`, `FSLB-AI_alpha`)
+Like FSLB, but grow the stride geometrically after each failed test.
+
+- Step `k` uses stride `s_k = ceil(s · α^{k-1})`, with `α > 1`.
+- Candidate is `x_k = b_{k-1} - s_k` (clamped to `window_start`).
+
+The total distance moved back after `K` failed steps (ignoring clamps/ceiling) is:
+
+$$
+\sum_{k=1}^{K} s\,\alpha^{k-1} = s\,\frac{\alpha^K - 1}{\alpha - 1}
 $$
 
 #### RATLB: Risk-aware trigger lookback (Optuna: `RATLB_threshold`)
@@ -294,7 +308,7 @@ $$
 
 Test the commit `x` with the largest `x < b` such that `t_x ≤ target_time`. On failure, set `b ← x` and repeat. If the target time predates all in-window history, fall back to testing `window_start`.
 
-#### ATWLB: Adaptive time-window lookback (Optuna: `ATWLB_hours`, `ATWLB_alpha`)
+#### TWLB-AD: Adaptive-decrease time-window lookback (Optuna: `TWLB-AD_hours`, `TWLB-AD_alpha`)
 Like TWLB, but shrink the window geometrically after each failure:
 
 $$
@@ -305,6 +319,19 @@ So the total time you jump back after `K` failed steps (ignoring discretization 
 
 $$
 \sum_{k=1}^{K} H\,\alpha^{k-1} = H\,\frac{1-\alpha^K}{1-\alpha}
+$$
+
+#### TWLB-AI: Adaptive-increase time-window lookback (Optuna: `TWLB-AI_hours`, `TWLB-AI_alpha`)
+Like TWLB, but grow the window geometrically after each failure:
+
+$$
+H_k = H \cdot \alpha^{k-1}
+$$
+
+So the total time you jump back after `K` failed steps (ignoring discretization to commits) is:
+
+$$
+\sum_{k=1}^{K} H\,\alpha^{k-1} = H\,\frac{\alpha^K - 1}{\alpha - 1}
 $$
 
 `LookbackOutcome.steps` is treated as the number of lookback tests executed for that bug.
@@ -330,28 +357,6 @@ This ignores risk predictions. In the worst case, the number of probes is:
 
 $$
 \left\lceil \log_2(b-g) \right\rceil
-$$
-
-#### SWBB: Sequential walk backward
-Start near the known-bad boundary and walk back one commit at a time:
-
-$$
-m = b-1,\; b-2,\; b-3,\; \dots
-$$
-
-Stop on the first passing probe; the culprit is the next known-bad boundary. Under the monotone test model, the cost is linear in how far the culprit is from `b` (best when `c` is very recent).
-
-#### SWFB: Sequential walk forward
-Start just after the known-good boundary and walk forward:
-
-$$
-m = g+1,\; g+2,\; g+3,\; \dots
-$$
-
-Stop on the first failing probe; that failing commit is the culprit. Under the monotone test model:
-
-$$
-\text{bisection\_tests} = c - g
 $$
 
 #### TKRB: Top-K risk-first bisection (Optuna: `TKRB_k`)
@@ -441,7 +446,7 @@ python analysis/git_bisect/simulate.py --dry-run --final-only
 By default, the simulator evaluates **all** lookback and bisection strategies. To restrict the run, pass comma-separated lists of strategy **codes** (or internal names):
 
 ```bash
-python analysis/git_bisect/simulate.py --lookback NLB,FSLB,AFSLB --bisection GB,RWBS --mopt-trials 200
+python analysis/git_bisect/simulate.py --lookback NLB,FSLB,FSLB-AD --bisection GB,RWBS --mopt-trials 200
 ```
 
 ### Window-start penalty

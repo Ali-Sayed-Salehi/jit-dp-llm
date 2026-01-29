@@ -180,9 +180,9 @@ class FixedStrideLookback:
             idx = candidate
 
 
-class AdaptiveFixedStrideLookback:
+class FixedStrideLookbackAdaptiveDecrease:
     """
-    Adaptive Fixed Stride Lookback (AFSLB).
+    Fixed-stride lookback with adaptive decrease (FSLB-AD).
 
     Like FixedStrideLookback (FSLB), but reduces the stride after each failed
     test.
@@ -197,7 +197,7 @@ class AdaptiveFixedStrideLookback:
     re-tested).
     """
 
-    name = "adaptive_fixed_stride"
+    name = "fixed_stride-ad"
 
     def __init__(
         self, stride: int = 20, *, alpha: float = 0.5, window_start: int = 0, max_trials: Optional[int] = None
@@ -255,7 +255,101 @@ class AdaptiveFixedStrideLookback:
             known_results[candidate] = bool(candidate >= culprit_index)
             if candidate < culprit_index:
                 logger.debug(
-                    "AFSLB found good_index=%d after steps=%d (start=%d culprit=%d stride=%d alpha=%s window_start=%d)",
+                    "FSLB-AD found good_index=%d after steps=%d (start=%d culprit=%d stride=%d alpha=%s window_start=%d)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    self.stride,
+                    self.alpha,
+                    self.window_start,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate == self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            idx = int(candidate)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
+class FixedStrideLookbackAdaptiveIncrease:
+    """
+    Fixed-stride lookback with adaptive increase (FSLB-AI).
+
+    Like FixedStrideLookback (FSLB), but increases the stride after each failed
+    test.
+
+    Policy:
+      - Iteration 1: step back by `stride` commits and test that commit.
+      - Iteration k: step back by `stride * (alpha ** (k-1))` commits and test,
+        with `alpha > 1`.
+      - On failure, the tested commit becomes the new known-bad boundary.
+      - Return the first tested commit that passes.
+
+    `steps` counts only tested commits (the known-bad `start_index` is not
+    re-tested).
+    """
+
+    name = "fixed_stride-ai"
+
+    def __init__(
+        self, stride: int = 20, *, alpha: float = 2.0, window_start: int = 0, max_trials: Optional[int] = None
+    ) -> None:
+        if stride <= 0:
+            raise ValueError("stride must be positive")
+        if alpha <= 1.0:
+            raise ValueError("alpha must be > 1")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
+        self.stride = int(stride)
+        self.alpha = float(alpha)
+        self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
+
+    def _stride_for_step(self, steps_executed: int) -> int:
+        return max(1, int(math.ceil(float(self.stride) * float(self.alpha ** int(steps_executed)))))
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            # There is no commit < start_index within the simulation window.
+            return LookbackOutcome(good_index=None, steps=0)
+
+        idx = int(start_index)
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while idx > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            stride = self._stride_for_step(steps)
+            candidate = idx - int(stride)
+            if candidate < self.window_start:
+                candidate = self.window_start
+            if candidate >= idx:
+                candidate = idx - 1
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "FSLB-AI found good_index=%d after steps=%d (start=%d culprit=%d stride=%d alpha=%s window_start=%d)",
                     candidate,
                     steps,
                     start_index,
@@ -743,9 +837,9 @@ class RiskWeightedLookbackLogSurvival:
         return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
 
 
-class AdaptiveTimeWindowLookback:
+class TimeWindowLookbackAdaptiveDecrease:
     """
-    Adaptive Time-Window Lookback (ATWLB).
+    Time-window lookback with adaptive decrease (TWLB-AD).
 
     Like Time-Window Lookback (TWLB), but reduces the time window after each
     failed test.
@@ -760,7 +854,7 @@ class AdaptiveTimeWindowLookback:
     re-tested).
     """
 
-    name = "adaptive_time_window"
+    name = "time_window-ad"
 
     def __init__(
         self,
@@ -853,7 +947,137 @@ class AdaptiveTimeWindowLookback:
             known_results[candidate] = bool(candidate >= culprit_index)
             if candidate < culprit_index:
                 logger.debug(
-                    "ATWLB found good_index=%d after steps=%d (start=%d culprit=%d hours=%s alpha=%s)",
+                    "TWLB-AD found good_index=%d after steps=%d (start=%d culprit=%d hours=%s alpha=%s)",
+                    candidate,
+                    steps,
+                    start_index,
+                    culprit_index,
+                    self.hours,
+                    self.alpha,
+                )
+                return LookbackOutcome(good_index=int(candidate), steps=steps, known_results=known_results)
+
+            if candidate == self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            cur_idx = int(candidate)
+
+        # If we ran out of history/time-window targets, fall back to testing the first commit in the window.
+        steps += 1
+        known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
+        good = self.window_start if self.window_start < culprit_index else None
+        return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
+
+
+class TimeWindowLookbackAdaptiveIncrease:
+    """
+    Time-window lookback with adaptive increase (TWLB-AI).
+
+    Like Time-Window Lookback (TWLB), but increases the time window after each
+    failed test.
+
+    Policy:
+      - Iteration 1: jump back by `hours` in time and test that commit.
+      - Iteration k: jump back by `hours * (alpha ** (k-1))` in time and test,
+        with `alpha > 1`.
+      - On failure, the tested commit becomes the new known-bad boundary.
+      - Return the first tested commit that passes.
+
+    `steps` counts only tested commits (the known-bad `start_index` is not
+    re-tested).
+    """
+
+    name = "time_window-ai"
+
+    def __init__(
+        self,
+        *,
+        sorted_times_utc: Sequence[datetime],
+        sorted_time_indices: Sequence[int],
+        hours: float = 24.0,
+        alpha: float = 2.0,
+        window_start: int = 0,
+        max_trials: Optional[int] = None,
+    ) -> None:
+        if len(sorted_times_utc) != len(sorted_time_indices):
+            raise ValueError("sorted_times_utc and sorted_time_indices must have the same length")
+        if not sorted_times_utc:
+            raise ValueError("sorted_times_utc must be non-empty")
+        if hours <= 0.0:
+            raise ValueError("hours must be positive")
+        if alpha <= 1.0:
+            raise ValueError("alpha must be > 1")
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
+        if max_trials is not None and int(max_trials) <= 0:
+            raise ValueError("max_trials must be positive")
+
+        self.sorted_times_utc = list(sorted_times_utc)
+        self.sorted_time_indices = list(sorted_time_indices)
+        self.hours = float(hours)
+        self.alpha = float(alpha)
+        self.window_start = int(window_start)
+        self.max_trials = int(max_trials) if max_trials is not None else None
+
+        # Fast index->time mapping for repeated lookups.
+        time_by_index: List[Optional[datetime]] = [None] * len(self.sorted_time_indices)
+        for t, idx in zip(self.sorted_times_utc, self.sorted_time_indices):
+            if idx < 0 or idx >= len(time_by_index):
+                raise ValueError(f"Invalid commit index {idx} in sorted_time_indices")
+            time_by_index[idx] = t
+        if any(t is None for t in time_by_index):
+            raise ValueError("sorted_time_indices must contain every commit index exactly once")
+        self.time_by_index = time_by_index
+
+    def _last_commit_at_or_before(self, t: datetime) -> Optional[int]:
+        pos = bisect.bisect_right(self.sorted_times_utc, t) - 1
+        return self.sorted_time_indices[pos] if pos >= 0 else None
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # not used by this strategy
+
+        start_index = int(start_index)
+        culprit_index = int(culprit_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        cur_idx = min(start_index, len(self.time_by_index) - 1)
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        while cur_idx > self.window_start:
+            if self.max_trials is not None and steps >= self.max_trials:
+                return _forced_fallback_outcome(
+                    steps=steps,
+                    window_start=self.window_start,
+                    culprit_index=culprit_index,
+                    known_results=known_results,
+                )
+
+            cur_time = self.time_by_index[cur_idx]
+            if cur_time is None:
+                raise RuntimeError(f"Missing commit time for index {cur_idx}")
+
+            cur_hours = float(self.hours) * float(self.alpha ** steps)
+            target = cur_time - timedelta(hours=cur_hours)
+
+            candidate = self._last_commit_at_or_before(target)
+            if candidate is None:
+                break
+            if candidate >= cur_idx:
+                candidate = cur_idx - 1
+            if candidate < self.window_start:
+                candidate = self.window_start
+            candidate = int(candidate)
+
+            steps += 1
+            known_results[candidate] = bool(candidate >= culprit_index)
+            if candidate < culprit_index:
+                logger.debug(
+                    "TWLB-AI found good_index=%d after steps=%d (start=%d culprit=%d hours=%s alpha=%s)",
                     candidate,
                     steps,
                     start_index,
@@ -1006,10 +1230,16 @@ class FixedStrideLookbackForcedFallback(FixedStrideLookback):
     name = "fixed_stride-ff"
 
 
-class AdaptiveFixedStrideLookbackForcedFallback(AdaptiveFixedStrideLookback):
+class FixedStrideLookbackAdaptiveDecreaseForcedFallback(FixedStrideLookbackAdaptiveDecrease):
     """Adaptive fixed stride lookback with forced fallback after `max_trials` tests."""
 
-    name = "adaptive_fixed_stride-ff"
+    name = "fixed_stride-ad-ff"
+
+
+class FixedStrideLookbackAdaptiveIncreaseForcedFallback(FixedStrideLookbackAdaptiveIncrease):
+    """Adaptive-increase fixed stride lookback with forced fallback after `max_trials` tests."""
+
+    name = "fixed_stride-ai-ff"
 
 
 class RiskAwareTriggerLookbackForcedFallback(RiskAwareTriggerLookback):
@@ -1036,18 +1266,26 @@ class TimeWindowLookbackForcedFallback(TimeWindowLookback):
     name = "time_window-ff"
 
 
-class AdaptiveTimeWindowLookbackForcedFallback(AdaptiveTimeWindowLookback):
+class TimeWindowLookbackAdaptiveDecreaseForcedFallback(TimeWindowLookbackAdaptiveDecrease):
     """Adaptive time-window lookback with forced fallback after `max_trials` tests."""
 
-    name = "adaptive_time_window-ff"
+    name = "time_window-ad-ff"
+
+
+class TimeWindowLookbackAdaptiveIncreaseForcedFallback(TimeWindowLookbackAdaptiveIncrease):
+    """Adaptive-increase time-window lookback with forced fallback after `max_trials` tests."""
+
+    name = "time_window-ai-ff"
 
 
 LOOKBACK_STRATEGIES = {
     NoLookback.name: NoLookback,
     FixedStrideLookback.name: FixedStrideLookback,
     FixedStrideLookbackForcedFallback.name: FixedStrideLookbackForcedFallback,
-    AdaptiveFixedStrideLookback.name: AdaptiveFixedStrideLookback,
-    AdaptiveFixedStrideLookbackForcedFallback.name: AdaptiveFixedStrideLookbackForcedFallback,
+    FixedStrideLookbackAdaptiveDecrease.name: FixedStrideLookbackAdaptiveDecrease,
+    FixedStrideLookbackAdaptiveDecreaseForcedFallback.name: FixedStrideLookbackAdaptiveDecreaseForcedFallback,
+    FixedStrideLookbackAdaptiveIncrease.name: FixedStrideLookbackAdaptiveIncrease,
+    FixedStrideLookbackAdaptiveIncreaseForcedFallback.name: FixedStrideLookbackAdaptiveIncreaseForcedFallback,
     NightlyBuildLookback.name: NightlyBuildLookback,
     RiskAwareTriggerLookback.name: RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback.name: RiskAwareTriggerLookbackForcedFallback,
@@ -1055,8 +1293,10 @@ LOOKBACK_STRATEGIES = {
     RiskWeightedLookbackSumForcedFallback.name: RiskWeightedLookbackSumForcedFallback,
     RiskWeightedLookbackLogSurvival.name: RiskWeightedLookbackLogSurvival,
     RiskWeightedLookbackLogSurvivalForcedFallback.name: RiskWeightedLookbackLogSurvivalForcedFallback,
-    AdaptiveTimeWindowLookback.name: AdaptiveTimeWindowLookback,
-    AdaptiveTimeWindowLookbackForcedFallback.name: AdaptiveTimeWindowLookbackForcedFallback,
+    TimeWindowLookbackAdaptiveDecrease.name: TimeWindowLookbackAdaptiveDecrease,
+    TimeWindowLookbackAdaptiveDecreaseForcedFallback.name: TimeWindowLookbackAdaptiveDecreaseForcedFallback,
+    TimeWindowLookbackAdaptiveIncrease.name: TimeWindowLookbackAdaptiveIncrease,
+    TimeWindowLookbackAdaptiveIncreaseForcedFallback.name: TimeWindowLookbackAdaptiveIncreaseForcedFallback,
     TimeWindowLookback.name: TimeWindowLookback,
     TimeWindowLookbackForcedFallback.name: TimeWindowLookbackForcedFallback,
 }
