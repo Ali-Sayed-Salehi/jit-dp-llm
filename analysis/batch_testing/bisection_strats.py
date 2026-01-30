@@ -85,9 +85,16 @@ REVISION_TESTED_SIG_GROUP_IDS = {}
 # list[int] of signature_group_ids for the "full" batch test suite
 BATCH_SIG_GROUP_IDS = []
 
+# Cached union of signature_group_ids that appear anywhere in
+# perf_jobs_per_revision_details_rectified.jsonl. This defines the authoritative
+# universe of signature-groups for the simulator (anything outside is ignored).
+_ALL_TESTED_SIG_GROUP_IDS = None
+
 _warned_missing_sig_group_duration_ids = set()
 _warned_missing_sig_group_pool_ids = set()
 _warned_unknown_machine_platform_values = set()
+_warned_disallowed_failing_sig_groups_by_revision = set()
+_warned_full_suite_disallowed_sig_groups = False
 
 TKRB_TOP_K = 1
 
@@ -372,6 +379,76 @@ def _load_perf_jobs_per_revision():
         len(REVISION_TESTED_SIG_GROUP_IDS),
     )
 
+
+def get_allowed_signature_group_ids():
+    """
+    Return the authoritative universe of signature-group IDs for the simulator.
+
+    This is the union of all `signature_group_ids` that appear anywhere in
+    perf_jobs_per_revision_details_rectified.jsonl.
+    """
+    global _ALL_TESTED_SIG_GROUP_IDS
+
+    if _ALL_TESTED_SIG_GROUP_IDS is not None:
+        return _ALL_TESTED_SIG_GROUP_IDS
+
+    _load_perf_jobs_per_revision()
+    allowed = set()
+    for group_ids in REVISION_TESTED_SIG_GROUP_IDS.values():
+        for gid in group_ids:
+            try:
+                allowed.add(int(gid))
+            except (TypeError, ValueError):
+                continue
+
+    _ALL_TESTED_SIG_GROUP_IDS = frozenset(allowed)
+    if not _ALL_TESTED_SIG_GROUP_IDS:
+        logger.warning(
+            "get_allowed_signature_group_ids: no signature-group IDs found in %s",
+            PERF_JOBS_PER_REV_JSON,
+        )
+    return _ALL_TESTED_SIG_GROUP_IDS
+
+
+def get_full_suite_signature_group_ids():
+    """
+    Return the configured "full suite" signature-group IDs, filtered to the
+    allowed signature-groups present in perf_jobs_per_revision_details_rectified.jsonl.
+    """
+    global _warned_full_suite_disallowed_sig_groups
+
+    _load_perf_metadata()
+    if not BATCH_SIG_GROUP_IDS:
+        return []
+
+    allowed = get_allowed_signature_group_ids()
+    filtered = []
+    disallowed = []
+    for gid in BATCH_SIG_GROUP_IDS:
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        if gid_int in allowed:
+            filtered.append(gid_int)
+        else:
+            disallowed.append(gid_int)
+
+    if disallowed and not _warned_full_suite_disallowed_sig_groups:
+        _warned_full_suite_disallowed_sig_groups = True
+        sample = ", ".join(str(g) for g in sorted(set(disallowed))[:20])
+        extra = "" if len(disallowed) <= 20 else f" (and {len(disallowed) - 20} more...)"
+        logger.warning(
+            "Full-suite signature-groups include %d ids that do not appear in %s; "
+            "they will be ignored. First disallowed ids: %s%s",
+            len(disallowed),
+            PERF_JOBS_PER_REV_JSON,
+            sample,
+            extra,
+        )
+
+    return filtered
+
 def _load_sig_groups_mapping():
     """
     Load:
@@ -643,9 +720,15 @@ def _get_sig_group_duration_minutes(sig_group_id: int) -> float:
 
 def validate_failing_signatures_coverage(failing_revisions=None):
     """
-    Ensure that failing perf signature-groups are covered by the
-    perf_jobs_per_revision_details_rectified.jsonl dataset, restricted to a
-    specific set of failing revisions.
+    Validate that failing signatures can be mapped to signature-groups, and
+    report any failing signature-groups that are outside the simulator's
+    authoritative signature-group universe.
+
+    The simulator's authoritative universe is the union of all
+    `signature_group_ids` that appear in
+    perf_jobs_per_revision_details_rectified.jsonl. Any failing signatures that
+    map to signature-groups outside that universe will be ignored by
+    signature-group based simulation.
 
     Args:
         failing_revisions: iterable of revision ids that are considered
@@ -658,8 +741,8 @@ def validate_failing_signatures_coverage(failing_revisions=None):
               alert_summary_fail_perf_sigs.csv,
             - if any failing signature cannot be mapped to a signature-group
               via sig_groups.jsonl,
-            - or if any relevant failing signature-group is not covered by
-              the perf_jobs_per_revision_details_rectified.jsonl dataset.
+            - or if perf_jobs_per_revision_details_rectified.jsonl has no tested
+              signature-group data at all.
     """
     _load_perf_metadata()
     _load_sig_groups_mapping()
@@ -712,18 +795,6 @@ def validate_failing_signatures_coverage(failing_revisions=None):
             f"Alert CSV: {ALERT_FAIL_SIGS_CSV}"
         )
 
-    # At this point all failing_revisions are present in the alert CSV.
-    relevant_revisions = failing_revisions
-
-    # Collect the set of failing signature IDs for the selected revisions.
-    failing_sig_ids = set()
-    for rev in relevant_revisions:
-        for sig in REVISION_FAIL_SIG_IDS.get(rev, []):
-            try:
-                failing_sig_ids.add(int(sig))
-            except (TypeError, ValueError):
-                continue
-
     # Map failing signatures -> failing signature-groups (must be possible).
     failing_sig_ids = set()
     for rev in failing_revisions:
@@ -750,31 +821,19 @@ def validate_failing_signatures_coverage(failing_revisions=None):
     for sig in failing_sig_ids:
         failing_sig_group_ids.add(SIG_TO_GROUP_ID[int(sig)])
 
-    # Collect the set of all signature-group IDs that appear anywhere in the
-    # perf_jobs_per_revision_details_rectified.jsonl dataset.
-    tested_sig_group_ids = set()
-    for group_ids in REVISION_TESTED_SIG_GROUP_IDS.values():
-        for gid in group_ids:
-            try:
-                tested_sig_group_ids.add(int(gid))
-            except (TypeError, ValueError):
-                continue
-
-    missing_groups = sorted(failing_sig_group_ids - tested_sig_group_ids)
+    allowed_sig_group_ids = get_allowed_signature_group_ids()
+    missing_groups = sorted(set(failing_sig_group_ids) - set(allowed_sig_group_ids))
     if missing_groups:
         sample = ", ".join(str(gid) for gid in missing_groups[:20])
         extra = "" if len(missing_groups) <= 20 else f" (and {len(missing_groups) - 20} more...)"
-        raise RuntimeError(
-            "Found failing perf signature-groups that are not covered by "
-            "perf_jobs_per_revision_details_rectified.jsonl at all. "
-            "Each relevant failing signature-group (for the revisions under "
-            "consideration) should appear at least once somewhere in the "
-            "perf jobs dataset. This means the simulation cannot "
-            "exercise all required failing signature-groups.\n"
-            f"First missing signature_group_ids: {sample}{extra}\n"
-            f"Alert CSV: {ALERT_FAIL_SIGS_CSV}\n"
-            f"sig_groups JSONL: {SIG_GROUPS_JSONL}\n"
-            f"Perf jobs JSONL: {PERF_JOBS_PER_REV_JSON}"
+        logger.warning(
+            "Found %d failing perf signature-groups that do not appear in %s. "
+            "They will be ignored for signature-group based simulation. "
+            "First missing signature_group_ids: %s%s",
+            len(missing_groups),
+            PERF_JOBS_PER_REV_JSON,
+            sample,
+            extra,
         )
 
 
@@ -789,18 +848,17 @@ def get_batch_signature_durations():
     This suite is used for the *first* run of a batch when bisection strategies
     are invoked with `is_batch_root=True`.
     """
-    _load_perf_metadata()
-
-    if not BATCH_SIG_GROUP_IDS:
+    sig_group_ids_all = get_full_suite_signature_group_ids()
+    if not sig_group_ids_all:
         return [(None, float(_default_test_duration_min))]
 
     limit = _full_suite_signatures_per_run
     # Non-negative limit => cap via random subset when smaller than the
     # available suite size. Negative (e.g., -1) means "use all".
-    if isinstance(limit, int) and limit >= 0 and len(BATCH_SIG_GROUP_IDS) > limit:
-        sig_group_ids = random.sample(BATCH_SIG_GROUP_IDS, limit)
+    if isinstance(limit, int) and limit >= 0 and len(sig_group_ids_all) > limit:
+        sig_group_ids = random.sample(sig_group_ids_all, limit)
     else:
-        sig_group_ids = BATCH_SIG_GROUP_IDS
+        sig_group_ids = sig_group_ids_all
 
     return [(gid, _get_sig_group_duration_minutes(gid)) for gid in sig_group_ids]
 
@@ -839,6 +897,16 @@ def get_failing_signature_durations_for_batch(batch_sorted):
                 continue
             sig_group_ids.add(int(gid))
 
+    allowed = get_allowed_signature_group_ids()
+    disallowed = set(sig_group_ids) - set(allowed)
+    if disallowed:
+        logger.debug(
+            "Filtered %d failing signature-groups not present in %s from bisection suite.",
+            len(disallowed),
+            PERF_JOBS_PER_REV_JSON,
+        )
+        sig_group_ids = set(sig_group_ids).intersection(allowed)
+
     if has_regressor and not sig_group_ids:
         logger.warning(
             "No failing signature-groups could be derived for a batch containing regressors; "
@@ -873,11 +941,14 @@ def get_signature_durations_for_ids(signature_ids):
     _default_test_duration_min (and log a warning once per missing group id).
     """
     _load_perf_metadata()
+    allowed = get_allowed_signature_group_ids()
     suite = []
     for sig in signature_ids:
         try:
             sig_group_id = int(sig)
         except (TypeError, ValueError):
+            continue
+        if sig_group_id not in allowed:
             continue
         dur = _get_sig_group_duration_minutes(sig_group_id)
         suite.append((sig_group_id, dur))
@@ -947,7 +1018,23 @@ def get_failing_signature_groups_for_revision(revision):
             extra,
         )
 
-    return sorted(failing_group_ids)
+    allowed = get_allowed_signature_group_ids()
+    disallowed_groups = sorted(set(failing_group_ids) - set(allowed))
+    if disallowed_groups and revision not in _warned_disallowed_failing_sig_groups_by_revision:
+        _warned_disallowed_failing_sig_groups_by_revision.add(revision)
+        sample = ", ".join(str(g) for g in disallowed_groups[:20])
+        extra = "" if len(disallowed_groups) <= 20 else f" (and {len(disallowed_groups) - 20} more...)"
+        logger.warning(
+            "Revision %s has %d failing signature-groups that do not appear in %s; "
+            "they will be ignored. First disallowed signature_group_ids: %s%s",
+            str(revision),
+            len(disallowed_groups),
+            PERF_JOBS_PER_REV_JSON,
+            sample,
+            extra,
+        )
+
+    return sorted(set(failing_group_ids).intersection(allowed))
 
 class TestExecutor:
     """

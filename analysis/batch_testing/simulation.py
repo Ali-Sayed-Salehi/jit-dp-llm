@@ -711,7 +711,12 @@ def run_exhaustive_testing(commits):
 
     global BATCH_SIGNATURE_DURATIONS_ET
     if BATCH_SIGNATURE_DURATIONS_ET is None:
-        BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(SIG_GROUP_JOB_DURATIONS_CSV)
+        # Keep ET consistent with the simulator's configured "full suite":
+        # only signature-groups that exist in perf_jobs_per_revision_details_rectified.jsonl
+        # (and, by default, restricted to the cutoff-window union via
+        # configure_full_suite_signatures_union()).
+        full_suite_ids = bisection_mod.get_full_suite_signature_group_ids()
+        BATCH_SIGNATURE_DURATIONS_ET = bisection_mod.get_signature_durations_for_ids(full_suite_ids)
 
     total_tests_run = 0
     culprit_times = []
@@ -1888,11 +1893,10 @@ def main():
     )
     configure_full_suite_signatures_union(cutoff_revs)
 
-    # Sanity check: ensure that all failing perf signature-groups for the
-    # commits we will simulate (within the EVAL and FINAL windows) are
-    # actually present in perf_jobs_per_revision_details_rectified.jsonl. If not,
-    # the simulation would be unable to exercise all relevant failing
-    # signature-groups and results would be misleading.
+    # Sanity check: warn about any failing perf signature-groups (for commits we
+    # will simulate) that are not present in perf_jobs_per_revision_details_rectified.jsonl.
+    # Those signature-groups are outside the simulator's authoritative universe
+    # and will be ignored for signature-group based simulation.
     validate_failing_signatures_coverage(failing_revisions=failing_revisions)
 
     if args.final_only:
