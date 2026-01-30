@@ -498,6 +498,42 @@ def apply_pred_threshold_to_raw(preds_raw, pred_threshold):
     return out
 
 
+def _regressor_has_any_valid_signature_group(revision: str) -> bool:
+    """
+    Return True iff `revision` has at least one failing signature-group that exists
+    in the simulator's valid signature-group universe.
+
+    If the revision is missing from the failing-signature dataset, we return True
+    so the inconsistency can be caught by the simulator's coverage validation.
+    """
+    # Load raw failing signatures (may be empty).
+    raw_fail_sigs = bisection_mod.get_failing_signatures_for_revision(revision)
+    if revision not in bisection_mod.REVISION_FAIL_SIG_IDS:
+        # Keep it as a regressor; validate_failing_signatures_coverage should flag this.
+        return True
+
+    if not raw_fail_sigs:
+        # Regressor with no failing signatures is unobservable in this simulation.
+        return False
+
+    mapped_groups = set()
+    for sig in raw_fail_sigs:
+        gid = bisection_mod.get_signature_group_id_for_signature(sig)
+        if gid is None:
+            continue
+        try:
+            mapped_groups.add(int(gid))
+        except (TypeError, ValueError):
+            continue
+
+    if not mapped_groups:
+        # Keep it as a regressor; coverage validation should flag missing mappings.
+        return True
+
+    allowed = bisection_mod.get_allowed_signature_group_ids()
+    return bool(mapped_groups.intersection(allowed))
+
+
 def build_commits_from_all_with_raw_preds(
     all_commits_path, preds_raw, lower_cutoff, upper_cutoff=None, pred_threshold=PRED_THRESHOLD
 ):
@@ -519,6 +555,8 @@ def build_commits_from_all_with_raw_preds(
     )
     thr = float(pred_threshold)
     commits = []
+    dropped_regressors = 0
+    dropped_samples = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -546,6 +584,17 @@ def build_commits_from_all_with_raw_preds(
                 p_pos = 0.0
                 pred_label = 0
 
+            # If a revision is labeled as a regressor but *none* of its failing
+            # signature-groups exist in the simulator's valid signature-group
+            # universe (derived from perf_jobs_per_revision_details_rectified.jsonl),
+            # then the regressor is unobservable in this simulation and should
+            # not count. Treat it as clean.
+            if true_label and not _regressor_has_any_valid_signature_group(node):
+                true_label = False
+                dropped_regressors += 1
+                if len(dropped_samples) < 20:
+                    dropped_samples.append(node)
+
             commits.append(
                 {
                     "commit_id": node,
@@ -558,6 +607,19 @@ def build_commits_from_all_with_raw_preds(
 
     commits.sort(key=lambda x: x["ts"])
     predicted_indices = [i for i, c in enumerate(commits) if c.get("risk", 0.0) > 0.0]
+    if dropped_regressors:
+        sample = ", ".join(dropped_samples)
+        extra = (
+            "" if dropped_regressors <= len(dropped_samples) else f" (and {dropped_regressors - len(dropped_samples)} more...)"
+        )
+        logger.warning(
+            "Reclassified %d regressors as clean because none of their failing "
+            "signature-groups exist in the simulator's valid signature-group universe. "
+            "First dropped revisions: %s%s",
+            dropped_regressors,
+            sample,
+            extra,
+        )
     logger.debug(
         "Finished building commit list: %d commits within window (%d predicted)",
         len(commits),
@@ -643,6 +705,8 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
         len(pred_map),
     )
     commits = []
+    dropped_regressors = 0
+    dropped_samples = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
         processed = 0
         for line in f:
@@ -672,10 +736,17 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
                 pred_label = 0
                 p_pos = 0.0
 
+            is_regressor = bool(true_label)
+            if is_regressor and not _regressor_has_any_valid_signature_group(node):
+                is_regressor = False
+                dropped_regressors += 1
+                if len(dropped_samples) < 20:
+                    dropped_samples.append(node)
+
             commits.append(
                 {
                     "commit_id": node,
-                    "true_label": bool(true_label),
+                    "true_label": is_regressor,
                     "prediction": pred_label,
                     "risk": p_pos,
                     "ts": ts,
@@ -687,6 +758,19 @@ def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff
                 logger.debug("Processed %d commits so far while building commit list...", processed)
 
     commits.sort(key=lambda x: x["ts"])
+    if dropped_regressors:
+        sample = ", ".join(dropped_samples)
+        extra = (
+            "" if dropped_regressors <= len(dropped_samples) else f" (and {dropped_regressors - len(dropped_samples)} more...)"
+        )
+        logger.warning(
+            "Reclassified %d regressors as clean because none of their failing "
+            "signature-groups exist in the simulator's valid signature-group universe. "
+            "First dropped revisions: %s%s",
+            dropped_regressors,
+            sample,
+            extra,
+        )
     logger.debug("Finished building commit list: %d commits within window", len(commits))
     return commits
 
