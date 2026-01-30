@@ -17,6 +17,7 @@ Output
       - replace `signature_ids` with `signature_group_ids`
       - set `total_jobs` to len(unique(signature_group_ids))
       - drop signature-groups where all signatures have a `framework_id` in {2, 6, 18}
+  - Prints aggregate job-count stats across all revisions.
 """
 
 from __future__ import annotations
@@ -171,6 +172,9 @@ def rectify(
 ) -> None:
     missing_sig_first_line: Dict[int, int] = {}
     total_rows = 0
+    total_jobs_non_unique = 0
+    total_jobs_unique_per_revision = 0
+    unique_group_ids_all_revisions: Set[int] = set()
 
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)), exist_ok=True)
     with open(output_jsonl, "w", encoding="utf-8") as out_f:
@@ -201,9 +205,14 @@ def rectify(
                     continue
                 group_ids.append(group_id)
 
-            group_ids = stable_unique(group_ids)
             if excluded_group_ids:
                 group_ids = [gid for gid in group_ids if gid not in excluded_group_ids]
+
+            total_jobs_non_unique += len(group_ids)
+
+            group_ids = stable_unique(group_ids)
+            total_jobs_unique_per_revision += len(group_ids)
+            unique_group_ids_all_revisions.update(group_ids)
 
             row.pop("signature_ids", None)
             row["signature_group_ids"] = group_ids
@@ -227,6 +236,17 @@ def rectify(
         )
 
     print(f"Wrote {total_rows} rows to {output_jsonl}")
+    print(
+        f"Total jobs across all revisions (non-unique signature-group IDs): {total_jobs_non_unique}"
+    )
+    print(
+        "Total jobs across all revisions (unique signature-group IDs per revision): "
+        f"{total_jobs_unique_per_revision}"
+    )
+    print(
+        "Unique signature-group IDs across all revisions: "
+        f"{len(unique_group_ids_all_revisions)}"
+    )
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
