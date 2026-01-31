@@ -1,103 +1,48 @@
 #!/usr/bin/env python3
-"""Link Bugzilla bugs to Autoland code changes (net diff per bug).
+"""Link Bugzilla bugs to autoland code changes (net diff per bug) for `mozilla_jit`.
 
-This script produces a dataset that joins:
-1) Bugzilla bug metadata (including dependency relations), and
-2) The actual patch content that landed in Mozilla's Autoland Mercurial repo.
+This script joins:
+  1) Bugzilla bug metadata (`all_bugs.jsonl`), and
+  2) The net patch content that landed in Mozilla’s `autoland` Mercurial repo for that bug.
 
-It is intentionally modeled after `data_extraction/mercurial/get_bug_diffs.py`, but targets the
-JIT dataset inputs (`mozilla_jit/*`) and uses only the "newest contiguous block of commits for a
-bug" rule (no perf-regressor-specific logic).
+Flow:
+  1. Load commit metadata (`all_commits.jsonl`) and index commits whose message starts with
+     `Bug <id>` (case-insensitive).
+  2. For each bug id in `all_bugs.jsonl`, find the newest contiguous block of `Bug <id>` commits.
+     Backouts/reverts are skipped.
+  3. Compute a single unified “net diff” for the block:
+     `hg diff -r <p1(oldest)> -r <newest>`.
+     Base uses `parents[0]` from the commits JSONL when present, otherwise `p1(<oldest>)`.
+  4. Write one JSON object per bug with a non-empty computed diff.
 
---------
-Inputs
---------
-All inputs have CLI overrides; defaults are:
+Inputs (defaults; override via CLI):
+  - `datasets/mozilla_jit/all_bugs.jsonl`
+  - `datasets/mozilla_jit/all_commits.jsonl`
+  - Local repo: `data_extraction/mercurial/repos/autoland` (required for `hg diff`)
 
-- `--commits-jsonl`
-  `/speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl`
+Outputs (default):
+  - `datasets/mozilla_jit/mozilla_jit.jsonl`
+    Keys:
+      - `bug_id` (str)
+      - `regressed_by` (list[str]) and `regressions` (list[str]) filtered to known bug ids
+      - `diff` (str): unified diff text
+      - `commit_message` (str): cleaned/concatenated commit messages for the block
+      - `revision` (str): newest commit node in the block
+      - `last_commit_date` (str): ISO timestamp from the Mercurial `date` field
+      - `bug_creation_time` (str): Bugzilla `creation_time` normalized (`Z` → `+00:00`)
+      - `regression` (bool): True iff `regressed_by` is non-empty
+      - `regressor` (bool): True iff `regressions` is non-empty
 
-  JSONL of Autoland commits. Each line is a dict like:
-  `{"node": "<rev>", "desc": "<commit message>", "date": [<epoch>, <tzoff>], "parents": ["<p1>", ...]}`
+Controls:
+  - `--dry-run` writes 100 output rows
+  - `--limit N` writes N rows (overrides `--dry-run`)
+  - `--cutoff-date` skips bugs created before this ISO date/datetime
 
-  Notes:
-  - The file order is assumed to match Mercurial history order as exported by the project.
-  - We treat `parents[0]` as the "first parent" (p1) for stable diff base selection.
-
-- `--bugs-jsonl`
-  `/speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_bugs.jsonl`
-
-  JSONL of Bugzilla bugs. Each line is a dict like:
-  `{"id": 123, "regressed_by": [..], "regressions": [..], "creation_time": "...", ...}`
-
-- `--hg-repo`
-  `data_extraction/mercurial/repos/autoland`
-
-  Local Mercurial checkout used for `hg diff` calls.
-
----------
-Linking
----------
-For each bug id from `all_bugs.jsonl`, we locate the newest contiguous block of commits in
-`all_commits.jsonl` whose commit message starts with `Bug <id>` (case-insensitive).
-
-- "Contiguous block" means: starting from the newest matching commit, walk backwards in the
-  commit list while commits continue to match the same bug id; stop at the first non-matching
-  commit. This yields a block `[oldest, ..., newest]`.
-- Backouts/reverts are ignored: commit messages starting with `Revert` or `Backed out` are
-  skipped entirely and never considered bug-linked.
-- Bugs that have *more than one* such contiguous block anywhere in history are ignored (skipped),
-  and their bug id is logged to stderr.
-
-This produces exactly one diff per bug (if any matching commit block exists).
-
---------------
-Diff strategy
---------------
-For a block with `oldest` and `newest` commits, we compute the net code change introduced by the
-block as a single unified diff between:
-
-- Base: the *first parent* of `oldest` (`parents[0]` from the commits JSONL when present; else
-  Mercurial expression `p1(<oldest>)`), and
-- Head: `newest`.
-
-Command:
-  `hg diff -r <base> -r <newest>`
-
-This avoids concatenating per-commit diffs and instead captures the net tree change for the block.
-
--------
-Output
--------
-Writes JSONL to `--out-jsonl` (default: `datasets/mozilla_jit/mozilla_jit.jsonl`), one record per
-bug with a non-empty computed diff:
-
-- `bug_id` (string)
-- `regressed_by` (list[str]) and `regressions` (list[str]) copied from Bugzilla, but filtered to
-  contain only ids that exist in `all_bugs.jsonl`
-- `diff` (string): unified diff text
-- `commit_message` (string): concatenation of the block's commit messages with the leading
-  `Bug <id>` removed and `Differential Revision:` lines stripped
-- `revision` (string): the newest commit node in the block
-- `last_commit_date` (string): ISO timestamp derived from Mercurial `date` field of `revision`
-- `bug_creation_time` (string): Bugzilla `creation_time` normalized so `Z` becomes `+00:00`
-- `regression` (bool): true iff `regressions` is non-empty
-- `regressor` (bool): true iff `regressions` is non-empty
-
----------
-Controls
----------
-- `--dry-run`: stop after writing 100 output records
-- `--limit N`: stop after writing N output records (overrides `--dry-run`)
-- `--cutoff-date`: skip bugs created before this ISO date/datetime (e.g. `2023-01-01` or
-  `2023-01-01T00:00:00+00:00`)
-
----------
-Notes
----------
-- Since some buigs might be skipped due to various reasons, 
-  the regression and regressed_by fields in the output might have dangling references. 
-  For historical simulations, make sure to not rely on regression and regressor boolean fields and double check those values. 
+Notes:
+  - The script always uses the newest contiguous commit block per bug; older blocks (if any) are
+    ignored rather than treated as an error.
+  - Because some bugs may be skipped (no commits, empty diff, cutoff), `regressed_by`/`regressions`
+    in the output may contain dangling references; don’t assume they form a closed graph.
 """
 
 from __future__ import annotations

@@ -1,4 +1,29 @@
 #!/usr/bin/env python3
+"""
+Extract regressing perf signature IDs per Treeherder alert summary.
+
+Flow:
+  1. Load the set of `perf_reg_alert_summary_id` values from `alerts_with_bug_and_test_info.csv`.
+  2. For each summary id, parse the `alerts` payload from `alert_summaries.csv` and keep only
+     entries where `is_regression == True`.
+  3. Extract `series_signature.id` values and write them as a JSON-encoded list per summary id.
+
+Inputs (CSV, under `datasets/mozilla_perf/`):
+  - `alerts_with_bug_and_test_info.csv`
+      Used to collect the set of `perf_reg_alert_summary_id` values to process.
+  - `alert_summaries.csv`
+      Provides the `alerts` payload (parsed via `ast.literal_eval`) and `revision`.
+
+Output (CSV, under `datasets/mozilla_perf/`):
+  - `alert_summary_fail_perf_sigs.csv`
+      Columns:
+        - `alert_summary_id` (int)
+        - `revision` (str)
+        - `fail_perf_sig_ids` (JSON string): list[int] of `series_signature.id` values where
+          `is_regression == True`
+        - `num_fail_perf_sig_ids` (int)
+"""
+
 import csv
 import sys
 

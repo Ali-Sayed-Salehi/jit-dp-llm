@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """
-Fetches bugs from Bugzilla (bugzilla.mozilla.org) via the REST API and writes them to a JSONL file
-(`datasets/mozilla_jit/all_bugs.jsonl`) with a fixed set of fields. Supports pagination and a
-`--dry-run` mode to fetch only a single page. The API query is configured to only fetch bugs with
-resolution in {FIXED, WONTFIX} and exclude bugs with classification "Graveyard".
+Fetch a Bugzilla bug corpus for the `mozilla_jit` pipeline.
+
+Flow:
+  1. Page through Bugzilla `/rest/bug` results using `limit`/`offset`.
+  2. Apply server-side filters:
+     - `creation_ts > --since`
+     - `resolution in {FIXED, WONTFIX}`
+     - `classification != Graveyard`
+  3. Normalize to a fixed field set and write one JSON object per line.
+  4. Optionally resume from an existing output file (`--resume`) using its line count as the next
+     offset.
+
+Inputs:
+  - Bugzilla REST API: `https://bugzilla.mozilla.org/rest/bug`
+  - `secrets/.env` (optional): `BUGZILLA_API_KEY`
+
+Outputs (JSONL, default):
+  - `datasets/mozilla_jit/all_bugs.jsonl`
+
+Usage:
+  - `python data_extraction/bugzilla/get_all_bugs.py`
+  - `python data_extraction/bugzilla/get_all_bugs.py --since 2022-01-01T00:00:00Z --resume`
 """
 
 import argparse

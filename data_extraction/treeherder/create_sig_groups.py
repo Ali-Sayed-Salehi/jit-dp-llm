@@ -6,13 +6,19 @@ A "signature group" is the set of signatures that always co-occur: two
 signatures are in the same group iff they appear in exactly the same set of
 jobs.
 
+Flow:
+  1. Load `job_id -> signature_ids` from `sigs_by_job_id_detailed.jsonl`.
+  2. Invert to `signature_id -> {job_id, ...}`.
+  3. Group signatures by identical job-id sets (i.e., identical co-occurrence).
+  4. Write one JSON object per group to `sig_groups.jsonl`.
+
 Input (JSONL):
   - `datasets/mozilla_perf/sigs_by_job_id_detailed.jsonl`
       Each line: {"job_id": <int>, "signature_ids": [<int>, ...], ...}
 
 Output (JSONL):
   - `datasets/mozilla_perf/sig_groups.jsonl`
-      Each line: {"sig_group_id": <int>, "signatures": [<int>, ...]}
+      Each line: {"Sig_group_id": <int>, "signatures": [<int>, ...]}
 """
 
 from __future__ import annotations

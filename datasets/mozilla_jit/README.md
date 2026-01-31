@@ -9,6 +9,10 @@ This directory contains:
 - A joined bug+diff dataset (`mozilla_jit_2022.jsonl`)
 - An LLM-ready structured-diff dataset (`jit_llm_struc_2022.jsonl`)
 
+For script-level documentation of the extraction pipeline, see:
+- `data_extraction/bugzilla/README.md`
+- `data_extraction/mercurial/README.md`
+
 ## Files and schema
 
 ### `all_bugs.jsonl` (JSONL)
@@ -82,4 +86,3 @@ current script writes `jit_llm_struc_2025.jsonl`, this is an earlier snapshot)
 2. `python data_extraction/mercurial/fetch_all_commit.py` (copy/symlink output into `datasets/mozilla_jit/all_commits.jsonl`)
 3. `python data_extraction/mercurial/link_bug_diffs.py` (writes `datasets/mozilla_jit/mozilla_jit.jsonl`)
 4. `python data_extraction/data_preparation.py --mode mozilla_jit_struc` (writes `jit_llm_struc_2025.jsonl` by default)
-

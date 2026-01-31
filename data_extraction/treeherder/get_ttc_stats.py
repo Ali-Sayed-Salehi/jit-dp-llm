@@ -9,7 +9,16 @@ Where:
   - created is an ISO timestamp like: 2025-10-23T14:17:17.853020
   - push_timestamp is a Unix epoch seconds timestamp like: 1760754049
 
-Outputs summary statistics to a JSON file.
+Flow:
+  1. Load `alert_summaries.csv` and parse `created` and `push_timestamp`.
+  2. Compute deltas in seconds and aggregate summary statistics (mean/median/percentiles).
+  3. Write the stats payload to JSON.
+
+Inputs (CSV, under `datasets/mozilla_perf/`):
+  - `alert_summaries.csv` (from `data_extraction/treeherder/get_perf_alerts.py`)
+
+Outputs (JSON, under `datasets/mozilla_perf/`):
+  - `time_to_culprit_stats.json`
 """
 
 from __future__ import annotations

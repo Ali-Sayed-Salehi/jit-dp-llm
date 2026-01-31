@@ -2,11 +2,15 @@
 """
 Fetch full performance signature metadata from Treeherder and write JSONL.
 
-This script first fetches the set of signature IDs the same way as
-get_num_perf_tests.py (via `performance/signatures`). Then, for each signature
-ID, it fetches the full signature record by querying:
+Flow:
+  1. Fetch the set of signature IDs via `performance/signatures`.
+  2. For each signature id, fetch the full record by querying:
 
     client._get_json("performance/signatures", "<repo>", id=<signature_id>)
+
+Inputs:
+  - Treeherder API:
+    - `performance/signatures` (enumerate ids + fetch details per id)
 
 Output (JSONL):
   `datasets/mozilla_perf/all_signatures.jsonl`

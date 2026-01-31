@@ -3,6 +3,13 @@
 Create per-job signature lists from Treeherder caches and produce per-job
 metadata summaries.
 
+Flow:
+  1. If `sigs_by_job_id.jsonl` is missing, build it by inverting `perf_jobs_by_signature.jsonl`
+     (signature → jobs) into `job_id → signature_ids`.
+  2. Load `all_signatures.jsonl` and compute, for each job, which signature metadata fields are
+     identical across all signatures in that job (`common_sig_features`).
+  3. Write `sigs_by_job_id_detailed.jsonl` and print which fields are always common across jobs.
+
 Inputs (JSONL):
   - `datasets/mozilla_perf/perf_jobs_by_signature.jsonl` (optional)
       Each line: {"signature_id": <int>, "jobs": [<job dict>, ...]}

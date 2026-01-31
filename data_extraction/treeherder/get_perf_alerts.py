@@ -1,3 +1,26 @@
+"""
+Fetch Treeherder performance alert summaries and derive a Bugzilla join table.
+
+NOTE: Delete `datasets/mozilla_perf/alert_summaries.csv` before (re)running to avoid duplication.
+This script streams pages by appending to the CSV.
+
+Flow:
+  1. Page Treeherder `performance/alertsummary` results until the configured lookback window is
+     reached.
+  2. Stream raw pages to `datasets/mozilla_perf/alert_summaries.csv`.
+  3. Reload the CSV, parse `alerts` / `related_alerts`, and keep only regression-related statuses.
+  4. Extract regressed (test, platform) pairs from regression alerts.
+  5. Write a compact join table (`alerts_with_bug_and_test_info.csv`) used by Bugzilla extraction.
+
+Inputs:
+  - Treeherder API: `performance/alertsummary`
+  - Script constants: `TIMESPAN_IN_YEARS` (default: 3)
+
+Outputs (CSV, under `datasets/mozilla_perf/`):
+  - `alert_summaries.csv`
+  - `alerts_with_bug_and_test_info.csv`
+"""
+
 import requests
 from pprint import pprint
 import datetime
@@ -10,24 +33,6 @@ from dateutil.relativedelta import relativedelta
 import time
 import ast
 import os
-
-"""
-NOTE: Delete output files befoe starting the script to avoid duplication
-
-Fetches recent performance alert summaries from Treeherder and extracts regression info.
-
-Flow:
-1. Connects to the Treeherder API and downloads recent alert summaries until reaching the
-   given timespan (TIMESPAN_IN_DAYS).
-2. Saves all raw alerts to datasets/mozilla_perf/alert_summaries.csv.
-3. Filters only alerts linked to bugs with regression-related statuses (fixed, wontfix, backedout).
-4. For each alert, collects regressed tests and platforms from its details.
-5. Creates a compact CSV (alerts_with_bug_and_test_info.csv) with:
-   - Bug ID
-   - Regressed perf tests
-   - Alert summary ID
-This CSV is used later to link regressions with Bugzilla bugs.
-"""
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 

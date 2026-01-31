@@ -1,3 +1,26 @@
+"""
+Fetch Bugzilla bugs and label perf regressions/regressors for `mozilla_perf`.
+
+Flow:
+  1. Fetch Bugzilla bugs created within the configured lookback window and write `all_bugs.csv`.
+  2. Load Treeherder regressions from `alerts_with_bug_and_test_info.csv`.
+  3. For each regression bug, use Bugzilla’s `regressed_by` field to identify regressor bug ids.
+  4. Restrict to “relevant” product/components observed among regressor-linked bugs and after
+     `START_DATE_ISO`.
+  5. Write `perf_bugs.csv` labeling each bug as perf regressor/regression and attaching Treeherder
+     metadata (regressed tests, alert summary id, regressor revision).
+
+Inputs:
+  - Bugzilla REST API: `https://bugzilla.mozilla.org/rest/bug`
+  - `secrets/.env`: `BUGZILLA_API_KEY`
+  - `datasets/mozilla_perf/alerts_with_bug_and_test_info.csv` (from
+    `data_extraction/treeherder/get_perf_alerts.py`)
+
+Outputs (CSV, under `datasets/mozilla_perf/`):
+  - `all_bugs.csv`
+  - `perf_bugs.csv`
+"""
+
 import requests
 from pprint import pprint
 from datetime import datetime
@@ -8,21 +31,6 @@ from collections import Counter
 from dotenv import load_dotenv
 import os
 import csv
-
-"""
-Fetches recent Bugzilla bugs and links them with performance regressions from Treeherder.
-
-Flow:
-1. Uses the Bugzilla API to fetch bugs created within TIMESPAN_IN_DAYS.
-2. Saves all raw bugs to datasets/mozilla_perf/all_bugs.csv.
-3. Loads the Treeherder alerts_with_bug_and_test_info.csv for existing performance regressions.
-4. Matches each regression bug with its regressor bugs using Bugzilla’s 'regressed_by' field.
-5. Collects product and component info to focus on relevant areas.
-6. Produces a final CSV (perf_bugs.csv) labeling each bug as:
-   - Performance regressor (caused a regression)
-   - Performance regression (was regressed)
-   - Includes regressed tests, alert IDs, and metadata.
-"""
 
 REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 secrets_path = os.path.join(REPO_PATH, "secrets", ".env")

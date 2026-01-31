@@ -13,6 +13,15 @@ This script:
   - Reloads that JSONL and computes wait time statistics based on
     (start_timestamp - submit_timestamp), which are Unix epoch seconds.
   - Writes the statistics to a JSON file.
+
+Inputs (under `datasets/mozilla_perf/`):
+  - `perf_jobs_per_revision.csv` (from `get_num_perf_tests.py`)
+  - `perf_jobs_by_signature.jsonl` (from `get_num_perf_tests.py`)
+  - Treeherder API job details via `TreeherderClient.get_jobs(...)`
+
+Outputs (under `datasets/mozilla_perf/`):
+  - `max_revision_jobs.jsonl`: append-only cache of detailed Treeherder job objects for the target revision
+  - `job_wait_time_stats.json`: summary stats for `start_timestamp - submit_timestamp`
 """
 
 import argparse

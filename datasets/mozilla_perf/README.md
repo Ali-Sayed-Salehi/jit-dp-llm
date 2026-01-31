@@ -8,6 +8,11 @@ Mozilla performance regression datasets extracted from:
 This directory also contains Treeherder “coverage”/metadata artifacts (signatures, jobs, grouping)
 used by the perf-job batch testing simulations.
 
+For script-level documentation of the extraction pipeline, see:
+- `data_extraction/treeherder/README.md`
+- `data_extraction/bugzilla/README.md`
+- `data_extraction/mercurial/README.md`
+
 ## Files and schema
 
 ### `alert_summaries.csv` (CSV)
@@ -29,6 +34,8 @@ used by the perf-job batch testing simulations.
 - `alerts` / `related_alerts` are stringified list/dict structures (the scripts parse them with
   `ast.literal_eval`).
 - `push_timestamp` is the push time (epoch seconds) serialized into CSV.
+- `get_perf_alerts.py` appends to `alert_summaries.csv` if it already exists; delete the file to
+  avoid duplicated pages when regenerating.
 
 ### `alerts_with_bug_and_test_info.csv` (CSV)
 
@@ -44,6 +51,28 @@ used by the perf-job batch testing simulations.
 - `perf_reg_alert_summary_id` (int): Treeherder alert summary id
 - `regressor_push_head_revision` (str): revision/hash Treeherder associates as the regressor push head
 - `alert_creation_date` (str): timestamp from Treeherder (`created`)
+
+### `alert_summary_fail_perf_sigs.csv` (CSV)
+
+**What it is:** For each Treeherder alert summary ID, the list of *regressing* performance signature
+IDs extracted from the `alerts` payload.
+
+**Produced by:** `data_extraction/treeherder/get_failing_perf_sigs.py`
+
+**Used by:** `analysis/batch_testing/` (maps failing signatures → signature-groups via `sig_groups.jsonl`)
+
+**Columns (4):**
+- `alert_summary_id` (int)
+- `revision` (str): Treeherder `revision` field from the alert summary
+- `fail_perf_sig_ids` (JSON string): list[int] of `series_signature.id` where `is_regression == True`
+- `num_fail_perf_sig_ids` (int)
+
+### `time_to_culprit_stats.json` (JSON)
+
+**What it is:** Summary stats for Treeherder “time to culprit” (TTC), defined as:
+`created_time - push_timestamp`.
+
+**Produced by:** `data_extraction/treeherder/get_ttc_stats.py`
 
 ### `all_bugs.csv` (CSV)
 
@@ -135,7 +164,8 @@ It emits repeated blocks like:
 
 **Produced by:** `data_extraction/treeherder/get_perf_sigs.py`
 
-**Used by:** `data_extraction/treeherder/get_sigs_per_job.py`, `data_extraction/treeherder/rectify_job_count_per_revision.py`
+**Used by:** `data_extraction/treeherder/get_sigs_per_job.py`, `data_extraction/treeherder/rectify_job_count_per_revision.py`,
+`analysis/batch_testing/` (maps signature metadata → simulation pools)
 
 **Per-line object fields:** Treeherder response objects. Common keys include:
 `id`, `signature_hash`, `framework_id`, `suite`, `test`, `machine_platform`,
@@ -164,6 +194,33 @@ It emits repeated blocks like:
 **Used by:** `data_extraction/treeherder/get_job_wait_times.py`
 
 **Columns (3):** `revision` (str), `submit_time_iso` (str / ISO timestamp), `total_jobs` (int)
+
+### `perf_jobs_per_revision_details.jsonl` (JSONL)
+
+**What it is:** Per-revision perf signature coverage with the explicit `signature_ids` list attached.
+
+**Produced by:** `data_extraction/treeherder/get_num_perf_tests.py`
+
+**Used by:** `data_extraction/treeherder/rectify_job_count_per_revision.py`
+
+**Per-line object fields (4):**
+- `revision` (str)
+- `submit_time_iso` (str / ISO timestamp)
+- `total_jobs` (int): number of unique `signature_ids` for that revision (after timing filters)
+- `signature_ids` (list[int])
+
+### `perf_jobs_stats.json` (JSON)
+
+**What it is:** Summary statistics over `perf_jobs_per_revision.csv.total_jobs` (mean/median,
+percentiles, trimmed mean, geometric mean).
+
+**Produced by:** `data_extraction/treeherder/get_num_perf_tests.py`
+
+### `perf_jobs_per_revision_dist.png` (PNG)
+
+**What it is:** Histogram of `perf_jobs_per_revision.csv.total_jobs`.
+
+**Produced by:** `data_extraction/treeherder/get_num_perf_tests.py`
 
 ### `sigs_by_job_id.jsonl` (JSONL)
 
@@ -195,9 +252,19 @@ the same set of jobs.
 
 **Produced by:** `data_extraction/treeherder/create_sig_groups.py`
 
-**Used by:** `data_extraction/treeherder/get_job_duration.py`, `data_extraction/treeherder/rectify_job_count_per_revision.py`
+**Used by:** `data_extraction/treeherder/get_job_duration.py`, `data_extraction/treeherder/rectify_job_count_per_revision.py`,
+`analysis/batch_testing/` (maps signatures → signature-groups)
 
 **Per-line object fields (2):** `Sig_group_id` (int), `signatures` (list[int])
+
+### `job_durations.csv` (CSV)
+
+**What it is:** Intermediate per-signature mean job duration estimates (minutes). This file is used
+to build `sig_group_job_durations.csv`.
+
+**Produced by:** `data_extraction/treeherder/get_job_duration.py`
+
+**Columns (2):** `signature_id` (int), `duration_minutes` (float)
 
 ### `sig_group_job_durations.csv` (CSV)
 
@@ -205,7 +272,38 @@ the same set of jobs.
 
 **Produced by:** `data_extraction/treeherder/get_job_duration.py`
 
+**Used by:** `analysis/batch_testing/` (simulation + bisection strategy timing)
+
 **Columns (2):** `signature_group_id` (int), `duration_minutes` (float)
+
+### `sig_group_job_duration_stats.json` (JSON)
+
+**What it is:** Summary statistics over `sig_group_job_durations.csv.duration_minutes`.
+
+**Produced by:** `data_extraction/treeherder/get_job_duration.py`
+
+### `job_durations.png` (PNG)
+
+**What it is:** Histogram plot of `sig_group_job_durations.csv.duration_minutes`.
+
+**Produced by:** `data_extraction/treeherder/get_job_duration.py`
+
+### `max_revision_jobs.jsonl` (JSONL)
+
+**What it is:** Append-only cache of detailed Treeherder job objects for the single revision with
+the highest `perf_jobs_per_revision.csv.total_jobs`.
+
+**Produced by:** `data_extraction/treeherder/get_job_wait_times.py`
+
+**Per-line object fields:** Treeherder job objects (the script uses `id`/`job_id`,
+`submit_timestamp`, `start_timestamp`, and `revision`).
+
+### `job_wait_time_stats.json` (JSON)
+
+**What it is:** Summary stats for job “wait time” (seconds/minutes), defined as:
+`start_timestamp - submit_timestamp`, computed from `max_revision_jobs.jsonl`.
+
+**Produced by:** `data_extraction/treeherder/get_job_wait_times.py`
 
 ### `perf_jobs_per_revision_details_rectified.jsonl` (JSONL)
 
@@ -214,6 +312,8 @@ to exclude specific signature frameworks.
 
 **Produced by:** `data_extraction/treeherder/rectify_job_count_per_revision.py`
 (`perf_jobs_per_revision_details.jsonl` is the unrectified input produced by `get_num_perf_tests.py`)
+
+**Used by:** `analysis/batch_testing/` (derives the set of signature-groups Mozilla actually ran per revision)
 
 **Per-line object fields (4):**
 - `revision` (str)
@@ -224,14 +324,16 @@ to exclude specific signature frameworks.
 ## Typical regeneration order
 
 1. `python data_extraction/treeherder/get_perf_alerts.py`
-2. `python data_extraction/bugzilla/get_perf_bugs.py`
-3. `python data_extraction/mercurial/fetch_all_commit.py`
-4. `python data_extraction/mercurial/get_bug_diffs.py`
-5. `python data_extraction/data_preparation.py --mode mozilla_perf_struc`
-6. `python data_extraction/treeherder/get_num_perf_tests.py`
-7. `python data_extraction/treeherder/get_perf_sigs.py`
-8. `python data_extraction/treeherder/get_sigs_per_job.py`
-9. `python data_extraction/treeherder/create_sig_groups.py`
-10. `python data_extraction/treeherder/get_job_duration.py`
-11. `python data_extraction/treeherder/rectify_job_count_per_revision.py`
-
+2. `python data_extraction/treeherder/get_ttc_stats.py` (optional)
+3. `python data_extraction/treeherder/get_failing_perf_sigs.py` (optional)
+4. `python data_extraction/bugzilla/get_perf_bugs.py`
+5. `python data_extraction/mercurial/fetch_all_commit.py`
+6. `python data_extraction/mercurial/get_bug_diffs.py`
+7. `python data_extraction/data_preparation.py --mode mozilla_perf_struc`
+8. `python data_extraction/treeherder/get_num_perf_tests.py`
+9. `python data_extraction/treeherder/get_perf_sigs.py`
+10. `python data_extraction/treeherder/get_sigs_per_job.py`
+11. `python data_extraction/treeherder/create_sig_groups.py`
+12. `python data_extraction/treeherder/get_job_duration.py` (optional; hits Treeherder for timestamps)
+13. `python data_extraction/treeherder/get_job_wait_times.py` (optional; hits Treeherder for timestamps)
+14. `python data_extraction/treeherder/rectify_job_count_per_revision.py`

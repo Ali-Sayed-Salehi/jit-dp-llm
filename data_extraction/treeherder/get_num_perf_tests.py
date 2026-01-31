@@ -357,7 +357,7 @@ def aggregate_revision_counts(signature_jobs, allowed_revisions):
                 continue
 
             # For jobs with a submit_time, we require push_timestamp and
-            # enforce the 5-minute window.
+            # enforce the 10-minute window.
             if not push_ts_str:
                 continue
 

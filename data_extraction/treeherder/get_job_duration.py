@@ -1,11 +1,25 @@
 """
-Fetch Treeherder performance signatures and sample job durations
-over a configurable time window, saving a CSV, statistics JSON,
-and a histogram plot of job durations.
+Estimate Treeherder job durations and aggregate them by signature-group.
 
-This version reads pre-fetched jobs from perf_jobs_by_signature.jsonl
-produced by get_num_perf_tests.py, but fetches per-job timing details
-from Treeherder when computing durations.
+Flow:
+  1. Load per-signature job summaries from `perf_jobs_by_signature.jsonl`.
+  2. For each signature, sample a few job instances and fetch timing details from Treeherder
+     (`get_jobs(..., id=<job_id>)`) to compute duration minutes.
+  3. Write per-signature mean durations to `job_durations.csv` (cached; reused if it already exists).
+  4. Map signature IDs to signature-group IDs via `sig_groups.jsonl` and compute mean duration per
+     signature-group.
+  5. Write `sig_group_job_durations.csv`, summary stats JSON, and a histogram plot.
+
+Inputs (under `datasets/mozilla_perf/`):
+  - `perf_jobs_by_signature.jsonl` (from `get_num_perf_tests.py`)
+  - `sig_groups.jsonl` (from `create_sig_groups.py`)
+  - Treeherder API job details via `TreeherderClient.get_jobs(...)`
+
+Outputs (under `datasets/mozilla_perf/`):
+  - `job_durations.csv` (per signature)
+  - `sig_group_job_durations.csv` (per signature-group)
+  - `sig_group_job_duration_stats.json`
+  - `job_durations.png`
 """
 
 import math

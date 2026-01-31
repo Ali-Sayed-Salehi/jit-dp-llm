@@ -2,13 +2,21 @@
 """
 Rectify per-revision perf job counts by signature-grouping.
 
+Flow:
+  1. Load signature → signature-group mapping from `sig_groups.jsonl`.
+  2. Load signature → `framework_id` mapping from `all_signatures.jsonl` and mark excluded
+     signature-groups where all signatures fall into excluded framework IDs.
+  3. For each revision row in `perf_jobs_per_revision_details.jsonl`, map `signature_ids` to
+     `signature_group_ids`, drop excluded groups, and set `total_jobs` to the unique group count.
+  4. Write rectified rows to JSONL and print aggregate counts.
+
 Input
   - datasets/mozilla_perf/perf_jobs_per_revision_details.jsonl
       {"revision": "...", "submit_time_iso": "...", "total_jobs": 5,
        "signature_ids": [2304398, ...]}
   - datasets/mozilla_perf/all_signatures.jsonl
       Each line: a signature metadata object with at least `id` and `framework_id`.
-  - sig_groups.jsonl (default: /speed-scratch/.../datasets/mozilla_perf/sig_groups.jsonl)
+  - datasets/mozilla_perf/sig_groups.jsonl
       {"Sig_group_id": 1083, "signatures": [5436251, 5436252]}
 
 Output

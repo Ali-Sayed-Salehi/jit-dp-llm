@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+"""
+Extract Treeherder-filed performance regression bugs from Bugzilla.
+
+This script targets bugs created by the "treeherder Bug Filer" account and attempts to parse a
+regressor revision from the filing comment text (a 40-hex SHA1-like string).
+
+Flow:
+  1. Query Bugzilla for bugs where `creator == "treeherder Bug Filer"` (paged).
+  2. For each bug id, fetch comments and locate the Treeherder regression template comment.
+  3. Extract the first 40-hex SHA1 from the qualifying comment text.
+  4. Write one CSV row per bug where a regressor revision is found.
+
+Inputs:
+  - Bugzilla REST API:
+    - `https://bugzilla.mozilla.org/rest/bug`
+    - `https://bugzilla.mozilla.org/rest/bug/<id>/comment`
+  - `secrets/.env` (optional): `BUGZILLA_API_KEY`
+
+Outputs (CSV, default):
+  - `datasets/mozilla_perf/perf_reg_bugs.csv`
+    Columns: `regression_bug_id`, `regressor_push_head_revision`, `creation_time`
+
+Notes:
+  - The script has an in-code `DEBUG` flag that limits fetching to a single page.
+"""
+
 import os
 import csv
 import re
@@ -89,7 +115,7 @@ def main():
             if sha:
                 w.writerow([
                         bug_id, 
-                        # sha, 
+                        sha,
                         created
                     ])
 

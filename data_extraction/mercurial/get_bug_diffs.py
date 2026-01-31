@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""Export per-bug diffs from a local Mercurial checkout (Autoland).
+"""Attach a net Mercurial diff to each perf bug (`mozilla_perf`).
+
+Flow:
+  1. Load `perf_bugs.csv` (bug ids + labels + optional `regressor_revision`).
+  2. Load `all_commits.jsonl` so we can locate `Bug <id>` commits and first-parent hashes.
+  3. For each bug id, find the newest contiguous block of commits whose message starts with
+     `Bug <id>` (case-insensitive). Backouts/reverts are skipped.
+  4. Compute a single unified “net diff” for that block:
+     `hg diff -r <p1(oldest)> -r <newest>`.
+  5. Write one JSONL record per bug with a non-empty diff.
 
 Inputs:
-- `datasets/mozilla_perf/perf_bugs.csv`: bug ids and (optionally) a regressor revision.
-- `datasets/mozilla_perf/all_commits.jsonl`: Autoland commit metadata (node, parents, desc, date).
-- Local repo at `data_extraction/mercurial/repos/autoland` with `hg` available.
+  - `datasets/mozilla_perf/perf_bugs.csv`
+  - `datasets/mozilla_perf/all_commits.jsonl`
+  - Local repo: `data_extraction/mercurial/repos/autoland` (requires `hg`)
 
-For each bug, the script finds a contiguous block of Autoland commits whose commit message starts
-with `Bug <id>` (reverts/backouts are skipped). It then computes a single unified diff that
-represents the net code change introduced by that block: it diffs the *tree at the first parent*
-of the oldest commit against the *tree at the newest commit* (`hg diff -r <p1(oldest)> -r <newest>`).
-Using the first-parent recorded in `all_commits.jsonl` keeps the range stable for commits with
-multiple parents (e.g., merges); if the parent is missing in the JSONL, it falls back to asking
-Mercurial directly via `p1(<oldest>)`.
-
-Output:
-- `datasets/mozilla_perf/perf_bugs_with_diff.jsonl`: one record per bug containing `bug_id`,
-  `revision` (newest commit), `diff`, `commit_message` (cleaned/combined), `last_commit_date`,
-  and `regressor` (bool).
+Outputs:
+  - `datasets/mozilla_perf/perf_bugs_with_diff.jsonl`
+    Keys: `bug_id`, `revision`, `diff`, `commit_message`, `last_commit_date`, `regressor`.
 
 Notes:
-- Records are streamed: the output file is truncated at start, and each JSON line is written and
-  flushed as the corresponding CSV row is processed.
-- Bugs with no matching commits are skipped; bugs whose computed diff is empty are also skipped.
-- For regressor bugs (`bug_is_perf_regressor=true`), the script uses `regressor_revision` as the
-  newest commit and expands backward only across *contiguous* same-bug commits immediately
-  preceding it.
+  - Records are streamed: the output file is truncated at start and each JSON line is written and
+    flushed per input row.
+  - Bugs with no matching commit block are skipped; bugs with an empty computed diff are skipped.
+  - For regressor bugs (`bug_is_perf_regressor=true`), the script uses `regressor_revision` as the
+    newest commit and expands backward only across contiguous same-bug commits immediately
+    preceding it.
 """
 import csv
 import json
