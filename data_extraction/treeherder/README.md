@@ -163,6 +163,19 @@ all signatures in the group belong to specific `framework_id` values.
 - **Notes**
   - Default excluded frameworks: `{2, 6, 18}` (override with `--exclude-framework-ids`).
 
+### `filter_perf_llm_struc.py` (post-processing)
+
+Relabel `perf_llm_struc.jsonl` by excluding failing signatures in specific Treeherder frameworks.
+
+- **Inputs**
+  - `datasets/mozilla_perf/perf_llm_struc.jsonl` (LLM dataset produced by `data_extraction/data_preparation.py`)
+  - `datasets/mozilla_perf/alert_summary_fail_perf_sigs.csv` (from `get_failing_perf_sigs.py`)
+  - `datasets/mozilla_perf/all_signatures.jsonl` (from `get_perf_sigs.py`; provides `framework_id`)
+- **Outputs**
+  - A rewritten JSONL with updated `response` labels (default:
+    `datasets/mozilla_perf/perf_llm_struc_no_fw_2_6_18.jsonl`)
+  - Optional JSON report (`--report-json`) with sanity-check counters.
+
 ## Typical Treeherder-only run order
 
 This is a common order for (re)generating the Treeherder-derived artifacts under
@@ -178,4 +191,3 @@ This is a common order for (re)generating the Treeherder-derived artifacts under
 8. `python data_extraction/treeherder/get_job_duration.py` (optional; hits API for timestamps)
 9. `python data_extraction/treeherder/get_job_wait_times.py` (optional; hits API for timestamps)
 10. `python data_extraction/treeherder/rectify_job_count_per_revision.py`
-
