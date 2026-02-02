@@ -1,7 +1,7 @@
 debug: false
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
-dataset_path: datasets/mozilla_jit/jit_llm_struc_2025.jsonl
+dataset_path: datasets/mozilla_jit/jit_llm_struc_2022.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B
 quant: true
 lora: true
@@ -9,13 +9,13 @@ flash_attn_2: false
 mixed_precision: bf16
 truncation_len: 22000       # 40000     # 22000
 chunking_len: null           # only for clm
-class_imbalance_fix: oversampling     # oversampling
+class_imbalance_fix: undersampling     # oversampling
 threshold: null
 selection_metric: roc_auc       #f1   # recall@top_30%  -  only for seq_ls
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
-continue_from_dir: null   # /home/alis/links/scratch/repos/perf-pilot/llama/training/run_2025-09-11_13-54-25/output
+continue_from_dir: /speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2026-01-27_17-50-18/output
 learning_rate: 2e-4  
-num_train_epochs: 3
+num_train_epochs: 5
 weight_decay: 0
 resampling_ratio: 0.7
 lora_r: 32
