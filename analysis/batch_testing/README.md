@@ -195,10 +195,10 @@ All bisection strategies share:
 
 `simulation.py` uses Optuna to tune batching parameters. For the `TKRB` bisection strategy it also tunes `TKRB_TOP_K` and sets the module-level value in `bisection_strats.py` before each simulation run.
 
-The Optuna objective is multi-objective: minimize `(total_tests_run, mean_time_to_culprit_hr)`.
+The Optuna objective is multi-objective: minimize `(total_tests_run, max_time_to_culprit_hr)`.
 
 After Optuna finishes a study for a given batching×bisection combo, we select a single configuration from the Pareto front:
 
-- Prefer Pareto points whose `mean_time_to_culprit_hr` is **<=** the baseline mean TTC (baseline is `TWSB + PAR` when included).
-- If any such points exist, choose the one with the smallest `total_tests_run` (tie-break by `mean_time_to_culprit_hr`).
-- If none exist, choose the one with the smallest `mean_time_to_culprit_hr` (tie-break by `total_tests_run`).
+- Prefer Pareto points whose `max_time_to_culprit_hr` is **<=** the baseline max TTC (baseline is `TWSB + PAR` when included).
+- If any such points exist, choose the one with the smallest `total_tests_run` (tie-break by `max_time_to_culprit_hr`).
+- If none exist, choose the one with the smallest `max_time_to_culprit_hr` (tie-break by `total_tests_run`).

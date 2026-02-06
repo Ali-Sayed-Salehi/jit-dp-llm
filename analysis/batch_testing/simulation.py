@@ -1045,23 +1045,23 @@ def run_evaluation_mopt(
             else 0.0
         )
 
-    def pick_best(pareto, baseline_mean_ttc_local):
+    def pick_best(pareto, baseline_max_ttc_local):
         if not pareto:
             return None
         feas = [
             r
             for r in pareto
             if (
-                baseline_mean_ttc_local is None
-                or r["mean_time_to_culprit_hr"] <= baseline_mean_ttc_local
+                baseline_max_ttc_local is None
+                or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local
             )
         ]
         if feas:
             return min(
-                feas, key=lambda r: (r["total_tests_run"], r["mean_time_to_culprit_hr"])
+                feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"])
             )
         return min(
-            pareto, key=lambda r: (r["mean_time_to_culprit_hr"], r["total_tests_run"])
+            pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"])
         )
 
     # unified output (same shape as before)
@@ -1186,7 +1186,7 @@ def run_evaluation_mopt(
                 res = convert_result_minutes_to_hours(res)
                 return (
                     res.get("total_tests_run", float("inf")),
-                    res.get("mean_time_to_culprit_hr", float("inf")),
+                    res.get("max_time_to_culprit_hr", float("inf")),
                 )
 
             study = optuna.create_study(directions=["minimize", "minimize"])
@@ -1297,20 +1297,13 @@ def run_evaluation_mopt(
                         ),
                         "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                         "violates_baseline": (
-                            (
-                                baseline_mean_ttc is not None
-                                and res.get("mean_time_to_culprit_hr", 0)
-                                > baseline_mean_ttc
-                            )
-                            or (
-                                baseline_fb is not None
-                                and res.get("mean_feedback_time_hr", 0) > baseline_fb
-                            )
+                            baseline_max_ttc is not None
+                            and res.get("max_time_to_culprit_hr", 0) > baseline_max_ttc
                         ),
                     }
                 )
 
-            selected = pick_best(pareto, baseline_mean_ttc)
+            selected = pick_best(pareto, baseline_max_ttc)
             if selected is None:
                 logger.warning(
                     "No Pareto-optimal configuration selected for combo %s; skipping",
@@ -1382,14 +1375,8 @@ def run_evaluation_mopt(
             res = convert_result_minutes_to_hours(res)
 
             violates = (
-                (
-                    baseline_mean_ttc is not None
-                    and res.get("mean_time_to_culprit_hr", 0) > baseline_mean_ttc
-                )
-                or (
-                    baseline_fb is not None
-                    and res.get("mean_feedback_time_hr", 0) > baseline_fb
-                )
+                baseline_max_ttc is not None
+                and res.get("max_time_to_culprit_hr", 0) > baseline_max_ttc
             )
 
             result_entry = {
@@ -1666,15 +1653,8 @@ def run_final_test_unified(
         res_final = convert_result_minutes_to_hours(res_final)
 
         violates = (
-            (
-                baseline_mean_ttc is not None
-                and res_final.get("mean_time_to_culprit_hr", float("inf"))
-                > baseline_mean_ttc
-            )
-            or (
-                baseline_fb is not None
-                and res_final.get("mean_feedback_time_hr", float("inf")) > baseline_fb
-            )
+            baseline_max_ttc is not None
+            and res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
         )
         saved_pct = time_saved_pct(
             baseline_tests, res_final.get("total_tests_run", baseline_tests)
