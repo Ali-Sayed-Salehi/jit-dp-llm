@@ -83,7 +83,6 @@ RATB_THRESHOLD = 0.5
 RATB_TIME_WINDOW_HOURS = 4
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
-PRED_THRESHOLD = 0.7
 RANDOM_SEED = 42
 
 DEFAULT_TEST_DURATION_MIN = 20.0
@@ -419,49 +418,9 @@ def _resolve_strategy_filter(raw: str, all_names, kind: str):
     return set(tokens)
 
 
-def load_predictions(path, pred_threshold):
-    """
-    Load model predictions and convert them into per-commit risk values.
-
-    Input JSON is expected to contain samples with:
-      - `commit_id`, `true_label`, `prediction`, `confidence`.
-
-    The simulator uses:
-      - `risk`: probability of being positive (p_pos)
-      - `pred_label`: derived by thresholding p_pos at `pred_threshold`
-    """
-    logger.debug("Loading predictions from %s with pred_threshold=%.4f", path, pred_threshold)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Prediction file does not exist: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    preds = {}
-    for s in data.get("samples", []):
-        cid = s["commit_id"]
-        true_label = int(s["true_label"])
-        original_pred = int(s["prediction"])
-        original_conf = float(s["confidence"])
-
-        if original_pred == 1:
-            p_pos = original_conf
-        else:
-            p_pos = 1.0 - original_conf
-
-        final_pred = 1 if p_pos >= pred_threshold else 0
-
-        preds[cid] = {
-            "true_label": true_label,
-            "pred_label": final_pred,
-            "p_pos": p_pos,
-        }
-    return preds
-
-
 def load_predictions_raw(path):
     """
-    Load model predictions and compute per-commit p_pos without applying any
-    prediction thresholding.
+    Load model predictions and compute per-commit p_pos.
 
     Returns:
       dict[commit_id] -> {"true_label": int, "p_pos": float}
@@ -488,34 +447,18 @@ def load_predictions_raw(path):
     return preds
 
 
-def apply_pred_threshold_to_raw(preds_raw, pred_threshold):
-    """
-    Convert a raw prediction map (commit_id -> {true_label, p_pos}) into the
-    thresholded shape expected by existing code (adds pred_label).
-    """
-    out = {}
-    thr = float(pred_threshold)
-    for cid, info in preds_raw.items():
-        p_pos = float(info["p_pos"])
-        out[cid] = {
-            "true_label": int(info["true_label"]),
-            "pred_label": 1 if p_pos >= thr else 0,
-            "p_pos": p_pos,
-        }
-    return out
-
-
 def build_commits_from_all_with_raw_preds(
-    all_commits_path, preds_raw, lower_cutoff, upper_cutoff=None, pred_threshold=PRED_THRESHOLD
+    all_commits_path, preds_raw, lower_cutoff, upper_cutoff=None
 ):
     """
-    Like read_commits_from_all, but uses `preds_raw` and applies `pred_threshold`
-    without requiring a per-trial re-read of the prediction JSON.
+    Build the simulation commit stream from `all_commits.jsonl` using `preds_raw`.
+
+    This avoids per-trial re-reading of the prediction JSON during Optuna runs.
 
     Returns:
       (commits_sorted, predicted_indices)
     where predicted_indices are indices in commits_sorted for commits that
-    appear in preds_raw (i.e. have a non-zero risk).
+    have a non-zero predicted risk.
     """
     logger.debug(
         "Building commits from %s with lower_cutoff=%s upper_cutoff=%s (preds_raw size=%d)",
@@ -524,7 +467,6 @@ def build_commits_from_all_with_raw_preds(
         upper_cutoff,
         len(preds_raw),
     )
-    thr = float(pred_threshold)
     commits = []
     with open(all_commits_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -547,17 +489,14 @@ def build_commits_from_all_with_raw_preds(
             if info is not None:
                 true_label = bool(int(info["true_label"]))
                 p_pos = float(info["p_pos"])
-                pred_label = 1 if p_pos >= thr else 0
             else:
                 true_label = False
                 p_pos = 0.0
-                pred_label = 0
 
             commits.append(
                 {
                     "commit_id": node,
                     "true_label": true_label,
-                    "prediction": pred_label,
                     "risk": p_pos,
                     "ts": ts,
                 }
@@ -582,10 +521,11 @@ def parse_hg_date(date_field):
       - ISO-8601 datetime strings.
     """
     if isinstance(date_field, list) and len(date_field) == 2:
-        unix_ts, offset_sec = date_field
-        dt_utc = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
-        dt_local = dt_utc + timedelta(seconds=offset_sec)
-        return dt_local
+        unix_ts, offset_seconds_west = date_field
+        # Mercurial stores tz offset as seconds west of UTC (positive values mean UTC-<hours>).
+        # Python's timezone offset is seconds east of UTC, so we negate.
+        tz = timezone(timedelta(seconds=-int(offset_seconds_west)))
+        return datetime.fromtimestamp(float(unix_ts), tz=tz)
     if isinstance(date_field, str):
         return datetime.fromisoformat(date_field)
     raise TypeError(
@@ -632,70 +572,6 @@ def get_cutoff_from_input(all_commits_path, pred_map):
         scanned,
     )
     return oldest, newest
-
-
-def read_commits_from_all(all_commits_path, pred_map, lower_cutoff, upper_cutoff=None):
-    """
-    Build the simulation commit stream from `all_commits.jsonl`.
-
-    Returns a list of commit dicts sorted by timestamp. Commits within the
-    cutoff window but missing from `pred_map` are treated as non-regressors
-    with zero risk.
-    """
-    logger.debug(
-        "Reading commits from %s with lower_cutoff=%s upper_cutoff=%s (pred_map size=%d)",
-        all_commits_path,
-        lower_cutoff,
-        upper_cutoff,
-        len(pred_map),
-    )
-    commits = []
-    with open(all_commits_path, "r", encoding="utf-8") as f:
-        processed = 0
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            node = obj.get("node")
-            date_field = obj.get("date")
-            if not node or date_field is None:
-                continue
-
-            ts = parse_hg_date(date_field)
-
-            if ts <= lower_cutoff:
-                continue
-            if upper_cutoff is not None and ts > upper_cutoff:
-                continue
-
-            if node in pred_map:
-                info = pred_map[node]
-                true_label = info["true_label"]
-                pred_label = info["pred_label"]
-                p_pos = info["p_pos"]
-            else:
-                true_label = 0
-                pred_label = 0
-                p_pos = 0.0
-
-            commits.append(
-                {
-                    "commit_id": node,
-                    "true_label": bool(true_label),
-                    "prediction": pred_label,
-                    "risk": p_pos,
-                    "ts": ts,
-                }
-            )
-
-            processed += 1
-            if processed % 50000 == 0:
-                logger.debug("Processed %d commits so far while building commit list...", processed)
-
-    commits.sort(key=lambda x: x["ts"])
-    logger.debug("Finished building commit list: %d commits within window", len(commits))
-    return commits
 
 
 def run_exhaustive_testing(commits):
@@ -1014,7 +890,6 @@ def run_evaluation_mopt(
             preds_raw,
             lower_cutoff,
             upper_cutoff,
-            pred_threshold=PRED_THRESHOLD,
         )
     if run_exhaustive_testing_et and base_commits_for_context:
         et_results = run_exhaustive_testing(base_commits_for_context)
@@ -1529,7 +1404,6 @@ def run_final_test_unified(
             preds_raw_final,
             final_lower,
             final_upper,
-            pred_threshold=PRED_THRESHOLD,
         )
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
@@ -1885,7 +1759,6 @@ def main():
         eval_preds_raw,
         eval_lower,
         eval_upper,
-        pred_threshold=PRED_THRESHOLD,
     )
     failing_revs_eval = {
         c["commit_id"] for c in eval_commits if c.get("true_label")
@@ -1903,7 +1776,6 @@ def main():
         final_preds_raw,
         final_lower,
         final_upper,
-        pred_threshold=PRED_THRESHOLD,
     )
     failing_revs_final = {
         c["commit_id"] for c in final_commits if c.get("true_label")

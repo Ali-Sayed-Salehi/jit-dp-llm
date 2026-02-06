@@ -1143,12 +1143,10 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
         # Otherwise, apply TWB-style time-window rule.
         batch_end = batch_start_time + window_delta
         if c_ts >= batch_end:
-            # Flush the existing batch (without c),
-            # using the last commit time in that batch as end time.
-            prev_end_time = current_batch[-1]["ts"]
+            # Flush the existing batch (without c) at the time-window boundary.
             total_tests_run, culprit_times, feedback_times = bisect_fn(
                 current_batch,
-                prev_end_time,
+                batch_end,
                 total_tests_run,
                 culprit_times,
                 feedback_times,
@@ -1220,7 +1218,7 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
 
         batch_end_time = batch_start_time + window_delta
         if c_ts >= batch_end_time:
-            batches.append((start, idx - 1, commits[idx - 1]["ts"]))
+            batches.append((start, idx - 1, batch_end_time))
             start = idx
             batch_start_time = c_ts
 

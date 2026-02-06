@@ -50,7 +50,7 @@ echo "Running script ..."
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
 # --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s \
-# --bisection PAR,TOB,RWAB,TKRB,SWB,SWF \
+# --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
 # --dry-run \
 # --log-level INFO \
 # --final-only

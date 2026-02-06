@@ -149,7 +149,9 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
   - Stream commits in time order, maintaining a contiguous current batch.
   - **Risk trigger**: if a commit arrives with `risk >= threshold`, include it and immediately flush the batch.
   - **Time-window fallback**: if no high-risk commit arrives, flush when the current batch’s age exceeds `time_window_hours` (the time span from the first commit in the batch).
-  - Flush time is the timestamp of the last commit included in the flush.
+  - Flush time:
+    - Risk trigger: the timestamp of the triggering commit.
+    - Time-window fallback: the time-window boundary (`batch_start + time_window_hours`).
 - **Intuition**: ensures “prompt handling” of very risky commits while still bounding worst-case staleness during low-risk periods.
 
 - **RATB-s**: same boundaries, but uses subset suite detection and overlap-based triggering.
