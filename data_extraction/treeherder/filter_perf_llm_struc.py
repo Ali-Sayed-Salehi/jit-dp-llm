@@ -29,6 +29,7 @@ Flow
 Inputs (defaults)
   - `datasets/mozilla_perf/perf_llm_struc.jsonl`
   - `datasets/mozilla_perf/alert_summary_fail_perf_sigs.csv`
+  - `datasets/mozilla_perf/alert_summaries.csv` (optional; only used to print alert summary framework)
   - `datasets/mozilla_perf/all_signatures.jsonl`
 
 Outputs (defaults)
@@ -38,6 +39,7 @@ Outputs (defaults)
 Usage
   python data_extraction/treeherder/filter_perf_llm_struc.py
   python data_extraction/treeherder/filter_perf_llm_struc.py --exclude-framework-ids 2 6 18 --report-json report.json
+  python data_extraction/treeherder/filter_perf_llm_struc.py --alert-summaries-csv datasets/mozilla_perf/alert_summaries.csv
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ DATASET_DIR = os.path.join(REPO_ROOT, "datasets", "mozilla_perf")
 
 DEFAULT_IN_JSONL = os.path.join(DATASET_DIR, "perf_llm_struc.jsonl")
 DEFAULT_FAIL_SIGS_CSV = os.path.join(DATASET_DIR, "alert_summary_fail_perf_sigs.csv")
+DEFAULT_ALERT_SUMMARIES_CSV = os.path.join(DATASET_DIR, "alert_summaries.csv")
 DEFAULT_ALL_SIGNATURES_JSONL = os.path.join(DATASET_DIR, "all_signatures.jsonl")
 DEFAULT_OUT_JSONL = os.path.join(DATASET_DIR, "perf_llm_struc_no_fw_2_6_18.jsonl")
 
@@ -128,21 +131,26 @@ def load_excluded_signature_ids(
 
 def load_failing_sigs_by_revision(
     fail_sigs_csv: str,
-) -> tuple[dict[str, set[int]], set[int], Counter[str]]:
+) -> tuple[dict[str, set[int]], dict[str, set[int]], set[int], set[int], Counter[str]]:
     """
     Load failing perf signature IDs per revision from alert_summary_fail_perf_sigs.csv.
 
     The CSV is expected to include:
+      - alert_summary_id (int)
       - revision (str)
       - fail_perf_sig_ids (JSON string of list[int])
 
     Returns:
       - revision_to_fail_sig_ids: revision -> set(signature_id)
+      - revision_to_alert_summary_ids: revision -> set(alert_summary_id)
       - all_fail_sig_ids: union of all failing signature IDs across all revisions
+      - all_alert_summary_ids: union of all alert_summary_id values across all rows
       - stats: parsing counters
     """
     revision_to_fail_sig_ids: dict[str, set[int]] = defaultdict(set)
+    revision_to_alert_summary_ids: dict[str, set[int]] = defaultdict(set)
     all_fail_sig_ids: set[int] = set()
+    all_alert_summary_ids: set[int] = set()
     stats: Counter[str] = Counter()
 
     with open(fail_sigs_csv, "r", newline="", encoding="utf-8") as f:
@@ -153,6 +161,22 @@ def load_failing_sigs_by_revision(
             if not revision:
                 stats["rows_missing_revision"] += 1
                 continue
+
+            summary_id_raw = row.get("alert_summary_id")
+            if summary_id_raw is None:
+                stats["rows_missing_alert_summary_id"] += 1
+            else:
+                summary_id_raw = str(summary_id_raw).strip()
+                if not summary_id_raw:
+                    stats["rows_missing_alert_summary_id"] += 1
+                else:
+                    try:
+                        summary_id_int = int(summary_id_raw)
+                    except Exception:
+                        stats["rows_non_int_alert_summary_id"] += 1
+                    else:
+                        revision_to_alert_summary_ids[revision].add(summary_id_int)
+                        all_alert_summary_ids.add(summary_id_int)
 
             raw = row.get("fail_perf_sig_ids")
             if raw is None:
@@ -183,9 +207,79 @@ def load_failing_sigs_by_revision(
                 revision_to_fail_sig_ids[revision].add(sig_id)
                 all_fail_sig_ids.add(sig_id)
 
-    stats["unique_revisions"] = len(revision_to_fail_sig_ids)
+    # Use the union of revision sets across both maps for a more faithful count.
+    stats["unique_revisions"] = len(
+        set(revision_to_fail_sig_ids.keys()) | set(revision_to_alert_summary_ids.keys())
+    )
     stats["unique_failing_signature_ids"] = len(all_fail_sig_ids)
-    return revision_to_fail_sig_ids, all_fail_sig_ids, stats
+    stats["unique_alert_summary_ids"] = len(all_alert_summary_ids)
+    return (
+        revision_to_fail_sig_ids,
+        revision_to_alert_summary_ids,
+        all_fail_sig_ids,
+        all_alert_summary_ids,
+        stats,
+    )
+
+
+def load_alert_summary_frameworks(
+    alert_summaries_csv: str,
+    *,
+    needed_alert_summary_ids: set[int],
+) -> tuple[dict[int, str], Counter[str]]:
+    """
+    Load Treeherder alert summary `framework` for a set of summary IDs.
+
+    `alert_summaries.csv` includes a large `alerts` column; increase CSV field size limits to
+    avoid parse errors.
+
+    Returns:
+      - alert_summary_id_to_framework: alert_summary_id -> framework (string; may be empty)
+      - stats: counters
+    """
+    stats: Counter[str] = Counter()
+    if not needed_alert_summary_ids:
+        return {}, stats
+
+    try:
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2**31 - 1)
+
+    alert_summary_id_to_framework: dict[int, str] = {}
+    remaining = set(needed_alert_summary_ids)
+
+    with open(alert_summaries_csv, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            stats["rows_total"] += 1
+            raw_id = row.get("id")
+            if raw_id is None:
+                stats["rows_missing_id"] += 1
+                continue
+            try:
+                summary_id = int(str(raw_id).strip())
+            except Exception:
+                stats["rows_non_int_id"] += 1
+                continue
+
+            if summary_id not in remaining:
+                continue
+
+            fw = row.get("framework")
+            fw_str = "" if fw is None else str(fw).strip()
+            if not fw_str:
+                stats["rows_missing_framework"] += 1
+            alert_summary_id_to_framework[summary_id] = fw_str
+            stats["rows_used"] += 1
+            remaining.discard(summary_id)
+
+            if not remaining:
+                break
+
+    stats["needed_ids"] = len(needed_alert_summary_ids)
+    stats["found_ids"] = len(alert_summary_id_to_framework)
+    return alert_summary_id_to_framework, stats
 
 
 def rewrite_perf_llm_dataset(
@@ -201,10 +295,11 @@ def rewrite_perf_llm_dataset(
 
     Returns:
       - stats counters
-      - flipped_commit_ids_preview (up to 20 ids)
+      - flipped_commit_ids (unique, in first-seen order)
     """
     stats: Counter[str] = Counter()
-    flipped_preview: list[str] = []
+    flipped_commit_ids: list[str] = []
+    flipped_seen: set[str] = set()
 
     out_dir = os.path.dirname(os.path.abspath(out_jsonl))
     if out_dir:
@@ -249,8 +344,9 @@ def rewrite_perf_llm_dataset(
                     if orig_cnt > 0 and filtered_cnt == 0:
                         record["response"] = "0"
                         stats["regressor_flipped_to_clean"] += 1
-                        if commit_id and len(flipped_preview) < 20:
-                            flipped_preview.append(commit_id)
+                        if commit_id and commit_id not in flipped_seen:
+                            flipped_seen.add(commit_id)
+                            flipped_commit_ids.append(commit_id)
                     else:
                         stats["regressor_kept_as_regressor"] += 1
             else:
@@ -263,7 +359,7 @@ def rewrite_perf_llm_dataset(
                 stats["stopped_due_to_limit"] += 1
                 break
 
-    return stats, flipped_preview
+    return stats, flipped_commit_ids
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -283,6 +379,11 @@ def main(argv: list[str] | None = None) -> int:
         "--fail-sigs-csv",
         default=DEFAULT_FAIL_SIGS_CSV,
         help="alert_summary_fail_perf_sigs.csv path.",
+    )
+    parser.add_argument(
+        "--alert-summaries-csv",
+        default=DEFAULT_ALERT_SUMMARIES_CSV,
+        help="alert_summaries.csv path (used for framework lookup when printing flipped revisions).",
     )
     parser.add_argument(
         "--all-signatures",
@@ -312,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     in_jsonl = os.path.abspath(args.in_jsonl)
     out_jsonl = os.path.abspath(args.out_jsonl)
     fail_sigs_csv = os.path.abspath(args.fail_sigs_csv)
+    alert_summaries_csv = os.path.abspath(args.alert_summaries_csv)
     all_signatures_jsonl = os.path.abspath(args.all_signatures)
     excluded_framework_ids = set(args.exclude_framework_ids or [])
 
@@ -337,20 +439,25 @@ def main(argv: list[str] | None = None) -> int:
         all_signatures_jsonl,
         excluded_framework_ids,
     )
-    revision_to_fail_sig_ids, all_fail_sig_ids, fail_stats = load_failing_sigs_by_revision(
-        fail_sigs_csv
-    )
+    (
+        revision_to_fail_sig_ids,
+        revision_to_alert_summary_ids,
+        all_fail_sig_ids,
+        all_alert_summary_ids,
+        fail_stats,
+    ) = load_failing_sigs_by_revision(fail_sigs_csv)
 
     missing_fail_sig_meta = sorted(all_fail_sig_ids - known_sig_ids)
     excluded_fail_sigs = all_fail_sig_ids & excluded_sig_ids
 
-    rewrite_stats, flipped_preview = rewrite_perf_llm_dataset(
+    rewrite_stats, flipped_commit_ids = rewrite_perf_llm_dataset(
         in_jsonl=in_jsonl,
         out_jsonl=out_jsonl,
         revision_to_fail_sig_ids=revision_to_fail_sig_ids,
         excluded_sig_ids=excluded_sig_ids,
         limit=max(0, int(args.limit or 0)),
     )
+    flipped_preview = flipped_commit_ids[:20]
 
     # -------------------------
     # Sanity-check reporting
@@ -400,6 +507,78 @@ def main(argv: list[str] | None = None) -> int:
     if flipped_preview:
         print("Flipped commit_id examples:", ", ".join(flipped_preview))
 
+    # -------------------------
+    # Flipped revisions: alert summary id + framework
+    # -------------------------
+    if flipped_commit_ids:
+        if not revision_to_alert_summary_ids:
+            print(
+                "\n[WARN] Cannot print alert_summary_id/framework for flipped revisions: "
+                f"{os.path.basename(fail_sigs_csv)} did not yield any alert_summary_id mappings.",
+                file=sys.stderr,
+            )
+        else:
+            needed_summary_ids: set[int] = set()
+            for rev in flipped_commit_ids:
+                needed_summary_ids.update(revision_to_alert_summary_ids.get(rev, set()))
+
+            if needed_summary_ids and not os.path.exists(alert_summaries_csv):
+                print(
+                    "\n[WARN] alert_summaries.csv not found; frameworks will be blank: "
+                    f"{alert_summaries_csv}",
+                    file=sys.stderr,
+                )
+                alert_summary_id_to_framework: dict[int, str] = {}
+            elif needed_summary_ids:
+                alert_summary_id_to_framework, _fw_stats = load_alert_summary_frameworks(
+                    alert_summaries_csv,
+                    needed_alert_summary_ids=needed_summary_ids,
+                )
+            else:
+                alert_summary_id_to_framework = {}
+
+            print("\n=== Flipped revisions (alert summaries) ===")
+            print("revision,alert_summary_id,framework")
+
+            missing_summary_id_mapping: list[str] = []
+            missing_framework_ids: list[int] = []
+            for rev in flipped_commit_ids:
+                summary_ids = sorted(revision_to_alert_summary_ids.get(rev, set()))
+                if not summary_ids:
+                    missing_summary_id_mapping.append(rev)
+                    continue
+                for sid in summary_ids:
+                    fw = alert_summary_id_to_framework.get(sid, "")
+                    if sid not in alert_summary_id_to_framework:
+                        missing_framework_ids.append(sid)
+                    print(f"{rev},{sid},{fw}")
+
+            if missing_summary_id_mapping:
+                preview = ", ".join(missing_summary_id_mapping[:10])
+                more = (
+                    ""
+                    if len(missing_summary_id_mapping) <= 10
+                    else f" (+{len(missing_summary_id_mapping) - 10} more)"
+                )
+                print(
+                    f"\n[WARN] {len(missing_summary_id_mapping)} flipped revisions had no alert_summary_id mapping "
+                    f"in {fail_sigs_csv} (showing first 10): {preview}{more}",
+                    file=sys.stderr,
+                )
+            if missing_framework_ids:
+                missing_unique = sorted(set(missing_framework_ids))
+                preview = ", ".join(str(x) for x in missing_unique[:10])
+                more = (
+                    ""
+                    if len(missing_unique) <= 10
+                    else f" (+{len(missing_unique) - 10} more)"
+                )
+                print(
+                    f"[WARN] {len(missing_unique)} alert_summary_id values were not found in {alert_summaries_csv} "
+                    f"(framework printed blank). Showing first 10 ids: {preview}{more}",
+                    file=sys.stderr,
+                )
+
     # Optional JSON report
     if args.report_json:
         report_path = os.path.abspath(args.report_json)
@@ -424,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
                 "unique_failing_signature_ids": fail_stats.get("unique_failing_signature_ids", 0),
                 "unique_failing_signature_ids_excluded": len(excluded_fail_sigs),
                 "unique_failing_signature_ids_missing_metadata": len(missing_fail_sig_meta),
+                "unique_alert_summary_ids": fail_stats.get("unique_alert_summary_ids", 0),
             },
             "relabel": dict(rewrite_stats),
         }
@@ -437,4 +617,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

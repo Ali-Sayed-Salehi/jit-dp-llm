@@ -170,6 +170,7 @@ Relabel `perf_llm_struc.jsonl` by excluding failing signatures in specific Treeh
 - **Inputs**
   - `datasets/mozilla_perf/perf_llm_struc.jsonl` (LLM dataset produced by `data_extraction/data_preparation.py`)
   - `datasets/mozilla_perf/alert_summary_fail_perf_sigs.csv` (from `get_failing_perf_sigs.py`)
+  - `datasets/mozilla_perf/alert_summaries.csv` (from `get_perf_alerts.py`; used to print alert summary `framework`)
   - `datasets/mozilla_perf/all_signatures.jsonl` (from `get_perf_sigs.py`; provides `framework_id`)
 - **Outputs**
   - A rewritten JSONL with updated `response` labels (default:
