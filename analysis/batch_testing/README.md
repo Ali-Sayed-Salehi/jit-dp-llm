@@ -102,6 +102,15 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
 
 - **RASB-s**: same boundary rule, but the initial run is a subset suite and detection depends on overlap with failing signature-groups.
 
+### RASB-la / RASB-la-s - Risk-Adaptive Stream Batching (linear aggregation)
+- **Trigger rule (RASB-la)**: grow a batch until a linear “risk budget” is exceeded.
+  - Maintains `risk_sum = Σ risk_i` across the current batch.
+  - Flushes when `risk_sum >= risk_budget`.
+  - Flush time is the timestamp of the most recent commit.
+- **How to interpret `risk_budget`**: for probabilistic risks, `risk_sum ≈ 1.0` loosely corresponds to “about one expected failing commit per batch” (though it is not the same as the RASB independence model).
+
+- **RASB-la-s**: same boundaries, but uses subset suite detection and overlap-based triggering.
+
 ### RAPB / RAPB-s - Risk-Aware Priority Batching (threshold + aging)
 - **Parameters**: `params = (threshold_T, aging_rate)`.
 - **Trigger rule (RAPB)**: like RASB, but “ages” each commit’s risk the longer it has been waiting in the current batch.
@@ -113,14 +122,15 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
 
 - **RAPB-s**: same boundary rule, but uses subset suite detection and triggers bisection only when overlap occurs.
 
-### RRBB / RRBB-s - Risk-Ranked Budget Batching
-- **Trigger rule (RRBB)**: accumulate commits until a linear “risk budget” is exceeded.
-  - Maintains `risk_sum = Σ risk_i` across the current batch.
-  - Flushes when `risk_sum >= risk_budget`.
+### RAPB-la / RAPB-la-s - Risk-Aware Priority Batching (linear aggregation)
+- **Parameters**: `params = (risk_budget_T, aging_rate)`.
+- **Trigger rule (RAPB-la)**: like RAPB, but aggregates aged risks linearly.
+  - For each commit, compute a waiting time in hours since it entered the batch.
+  - Convert base risk into an aged risk `aged_p` using an exponential term controlled by `aging_rate`.
+  - Maintain `risk_sum = Σ aged_p` and flush when `risk_sum >= risk_budget_T`.
   - Flush time is the timestamp of the most recent commit.
-- **How to interpret `risk_budget`**: for probabilistic risks, `risk_sum ≈ 1.0` loosely corresponds to “about one expected failing commit per batch” (though it is not the same as the RASB independence model).
 
-- **RRBB-s**: same boundaries, but uses subset suite detection and overlap-based triggering.
+- **RAPB-la-s**: same boundary rule, but uses subset suite detection and overlap-based triggering.
 
 ### RATB / RATB-s - Risk-Adaptive Time-Window Batching
 - **Parameters**: `params = (threshold, time_window_hours)` (or a scalar `threshold` with a default window of 4h).

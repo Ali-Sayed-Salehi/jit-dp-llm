@@ -617,6 +617,115 @@ def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
 
+def simulate_rasb_la_with_bisect(commits, bisect_fn, risk_budget, num_workers):
+    """
+    Risk-Adaptive Stream Batching with linear aggregation (RASB-la).
+
+    Accumulates commits into a batch until the sum of per-commit risk scores
+    reaches `risk_budget`:
+
+        risk_sum = Σ risk_i
+
+    Flush happens at the timestamp of the last commit in the batch. `bisect_fn`
+    is invoked on the flushed commits.
+    """
+    logger.info(
+        "simulate_rasb_la_with_bisect: %d commits, risk_budget=%.4f, bisect_fn=%s",
+        len(commits),
+        float(risk_budget),
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    total_tests_run = 0
+    culprit_times = []
+    feedback_times = {}
+
+    if not commits:
+        logger.info("simulate_rasb_la_with_bisect: no commits; returning empty results")
+        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+
+    executor = TestExecutor(num_workers)
+
+    current_batch = []
+    current_end_time = None
+    risk_sum = 0.0
+
+    for idx, c in enumerate(commits, start=1):
+        current_batch.append(c)
+        current_end_time = c["ts"]
+
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                f"Missing or None 'risk' value for commit at index {idx}: {c!r}"
+            )
+        risk_sum += float(c["risk"])
+
+        if risk_sum >= risk_budget:
+            total_tests_run, culprit_times, feedback_times = bisect_fn(
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+            )
+            logger.debug(
+                "RASB-la: risk_budget reached; flushed batch of size %d at index %d/%d with risk_sum=%.4f",
+                len(current_batch),
+                idx,
+                len(commits),
+                risk_sum,
+            )
+            current_batch = []
+            current_end_time = None
+            risk_sum = 0.0
+
+    if current_batch:
+        total_tests_run, culprit_times, feedback_times = bisect_fn(
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+        )
+
+    logger.info(
+        "simulate_rasb_la_with_bisect: finished; total_tests_run=%d",
+        total_tests_run,
+    )
+    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+
+
+def simulate_rasb_la_s_with_bisect(commits, bisect_fn, risk_budget, num_workers):
+    """
+    RASB-la with subset suite detection (RASB-la-s).
+
+    Same batching trigger as RASB-la, but the initial batch run uses a subset
+    suite (union of signature-groups observed within the batch). Detection
+    depends on overlap between that subset and each regressor's failing
+    signature-groups.
+    """
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0)
+
+    start = 0
+    risk_sum = 0.0
+
+    for idx, c in enumerate(commits):
+        risk_sum += float(c["risk"])
+        if risk_sum >= risk_budget:
+            batches.append((start, idx, c["ts"]))
+            start = idx + 1
+            risk_sum = 0.0
+
+    if start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
+
+
 def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
     """
     Risk-Aware Priority Batching (RAPB).
@@ -739,23 +848,31 @@ def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
 
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
-
-def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
+def simulate_rapb_la_with_bisect(commits, bisect_fn, params, num_workers):
     """
-    Risk-Ranked Budget Batching (RRBB).
+    Risk-Aware Priority Batching with linear aggregation (RAPB-la).
 
-    - Stream commits in time order.
-    - Maintain a cumulative risk_sum = Σ p_i in the current batch.
-    - Once risk_sum >= risk_budget, flush the batch to bisect_fn and start a new one.
-    - Always keeps batches contiguous in commit order.
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_budget_T, aging_rate)` where:
+          - `risk_budget_T` is the target *sum of aged risks* threshold.
+          - `aging_rate` controls how quickly older commits become more urgent.
 
-    Param:
-      risk_budget: e.g. 1.0 ~ "about one expected failing commit per batch"
+    Each commit's risk is "aged" as it waits in the current batch, then we
+    compute:
+
+        risk_sum = Σ aged_risk_i
+
+    and flush when `risk_sum >= risk_budget_T`.
     """
+    risk_budget_T, aging_rate = params
+
     logger.info(
-        "simulate_rrbb_with_bisect: %d commits, risk_budget=%.4f, bisect_fn=%s",
+        "simulate_rapb_la_with_bisect: %d commits, risk_budget_T=%.4f, aging_rate=%.4f, bisect_fn=%s",
         len(commits),
-        risk_budget,
+        float(risk_budget_T),
+        float(aging_rate),
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -763,73 +880,107 @@ def simulate_rrbb_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     culprit_times = []
     feedback_times = {}
 
-    if not commits:
-        logger.info("simulate_rrbb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
-
     executor = TestExecutor(num_workers)
 
     current_batch = []
+    entry_times = []
     current_end_time = None
-    risk_sum = 0.0
 
     for idx, c in enumerate(commits, start=1):
-        current_batch.append(c)
-        current_end_time = c["ts"]
-        if "risk" not in c or c["risk"] is None:
-            raise ValueError(f"Missing or None 'risk' value for commit at index {idx}: {c!r}")
-        risk_sum += float(c["risk"])
+        now_ts = c["ts"]
 
-        if risk_sum >= risk_budget:
+        current_batch.append(c)
+        entry_times.append(now_ts)
+        current_end_time = now_ts
+
+        risk_sum = 0.0
+        for commit, entered_at in zip(current_batch, entry_times):
+            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
+            base_risk = commit["risk"]
+
+            decay = math.exp(-aging_rate * wait_hours)
+            aged_p = 1.0 - (1.0 - base_risk) * decay
+
+            risk_sum += aged_p
+
+        if risk_sum >= risk_budget_T:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
-                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
             )
             logger.debug(
-                "RRBB: risk_budget reached; flushed batch of size %d at index %d/%d with risk_sum=%.4f",
+                "RAPB-la: threshold reached; flushed batch of size %d at index %d/%d with risk_sum=%.4f",
                 len(current_batch),
                 idx,
                 len(commits),
                 risk_sum,
             )
             current_batch = []
+            entry_times = []
             current_end_time = None
-            risk_sum = 0.0
 
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
-            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
         )
 
     logger.info(
-        "simulate_rrbb_with_bisect: finished; total_tests_run=%d", total_tests_run
+        "simulate_rapb_la_with_bisect: finished; total_tests_run=%d",
+        total_tests_run,
     )
     return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
 
 
-def simulate_rrbb_s_with_bisect(commits, bisect_fn, risk_budget, num_workers):
+def simulate_rapb_la_s_with_bisect(commits, bisect_fn, params, num_workers):
     """
-    RRBB with subset suite detection (RRBB-s).
+    RAPB-la with subset suite detection (RAPB-la-s).
+
+    Uses the same batching trigger as RAPB-la, but the batch run uses a subset
+    suite (union of signature-groups observed within the batch) and detection
+    depends on overlap with failing signature-groups.
     """
+    risk_budget_T, aging_rate = params
     batches = []
     if not commits:
         return build_results(0, [], {}, 0.0)
 
     start = 0
-    risk_sum = 0.0
+    entry_times = []
+    current_batch_indices = []
+
     for idx, c in enumerate(commits):
-        risk_sum += float(c["risk"])
-        if risk_sum >= risk_budget:
-            batches.append((start, idx, c["ts"]))
+        now_ts = c["ts"]
+        current_batch_indices.append(idx)
+        entry_times.append(now_ts)
+
+        risk_sum = 0.0
+        for commit_idx, entered_at in zip(current_batch_indices, entry_times):
+            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
+            base_risk = float(commits[commit_idx]["risk"])
+            decay = math.exp(-aging_rate * wait_hours)
+            aged_p = 1.0 - (1.0 - base_risk) * decay
+            risk_sum += aged_p
+
+        if risk_sum >= risk_budget_T:
+            batches.append((start, idx, now_ts))
             start = idx + 1
-            risk_sum = 0.0
+            entry_times = []
+            current_batch_indices = []
 
     if start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
-
-from datetime import timedelta
 
 def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
     """

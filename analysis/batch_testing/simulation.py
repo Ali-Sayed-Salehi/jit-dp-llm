@@ -36,10 +36,12 @@ from batch_strats import (
     simulate_fsb_s_with_bisect,
     simulate_rasb_with_bisect,
     simulate_rasb_s_with_bisect,
+    simulate_rasb_la_with_bisect,
+    simulate_rasb_la_s_with_bisect,
     simulate_rapb_with_bisect,
     simulate_rapb_s_with_bisect,
-    simulate_rrbb_with_bisect,
-    simulate_rrbb_s_with_bisect,
+    simulate_rapb_la_with_bisect,
+    simulate_rapb_la_s_with_bisect,
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
     simulate_twsb_with_bisect,
@@ -74,7 +76,7 @@ FSB_SIZE = 20
 RASB_THRESHOLD = 0.5
 RAPB_THRESHOLD = 0.35
 RAPB_AGING_PER_HOUR = 0.05
-RRBB_BUDGET = 1.0
+LINEAR_RISK_BUDGET = 1.0
 RATB_THRESHOLD = 0.5
 RATB_TIME_WINDOW_HOURS = 4
 
@@ -106,10 +108,12 @@ BATCHING_STRATEGIES = [
     ("FSB-s",  simulate_fsb_s_with_bisect,      FSB_SIZE),
     ("RASB", simulate_rasb_with_bisect,   RASB_THRESHOLD),
     ("RASB-s", simulate_rasb_s_with_bisect,   RASB_THRESHOLD),
+    ("RASB-la", simulate_rasb_la_with_bisect,   LINEAR_RISK_BUDGET),
+    ("RASB-la-s", simulate_rasb_la_s_with_bisect,   LINEAR_RISK_BUDGET),
     ("RAPB", simulate_rapb_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
     ("RAPB-s", simulate_rapb_s_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
-    ("RRBB", simulate_rrbb_with_bisect,     RRBB_BUDGET),
-    ("RRBB-s", simulate_rrbb_s_with_bisect,     RRBB_BUDGET),
+    ("RAPB-la", simulate_rapb_la_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
+    ("RAPB-la-s", simulate_rapb_la_s_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
     ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
 ]
@@ -1111,12 +1115,18 @@ def run_evaluation_mopt(
                     param = trial.suggest_int("FSB_SIZE", 4, 200)
                 elif normalized_batch_name == "RASB":
                     param = trial.suggest_float("RASB_THRESHOLD", 0.10, 0.95)
+                elif normalized_batch_name == "RASB-la":
+                    param = trial.suggest_float("RASB_LA_BUDGET", 0.25, 6.0)
                 elif normalized_batch_name == "RAPB":
                     T = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
                     a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
                     param = (T, a)
-                elif normalized_batch_name == "RRBB":
-                    param = trial.suggest_float("RRBB_BUDGET", 0.25, 6.0)
+                elif normalized_batch_name == "RAPB-la":
+                    T = trial.suggest_float("RAPB_LA_BUDGET", 0.25, 6.0)
+                    a = trial.suggest_float(
+                        "RAPB_LA_AGING_PER_HOUR", 0.005, 0.200
+                    )
+                    param = (T, a)
                 elif normalized_batch_name == "RATB":
                     thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
@@ -1180,13 +1190,18 @@ def run_evaluation_mopt(
                     param = int(params["FSB_SIZE"])
                 elif normalized_batch_name == "RASB":
                     param = params["RASB_THRESHOLD"]
+                elif normalized_batch_name == "RASB-la":
+                    param = params["RASB_LA_BUDGET"]
                 elif normalized_batch_name == "RAPB":
                     param = (
                         params["RAPB_THRESHOLD"],
                         params["RAPB_AGING_PER_HOUR"],
                     )
-                elif normalized_batch_name == "RRBB":
-                    param = params["RRBB_BUDGET"]
+                elif normalized_batch_name == "RAPB-la":
+                    param = (
+                        params["RAPB_LA_BUDGET"],
+                        params["RAPB_LA_AGING_PER_HOUR"],
+                    )
                 elif normalized_batch_name == "RATB":
                     param = (
                         params["RATB_THRESHOLD"],
@@ -1216,13 +1231,18 @@ def run_evaluation_mopt(
                     best_param_dict = {"FSB_SIZE": param}
                 elif normalized_batch_name == "RASB":
                     best_param_dict = {"RASB_THRESHOLD": param}
+                elif normalized_batch_name == "RASB-la":
+                    best_param_dict = {"RASB_LA_BUDGET": param}
                 elif normalized_batch_name == "RAPB":
                     best_param_dict = {
                         "RAPB_THRESHOLD": param[0],
                         "RAPB_AGING_PER_HOUR": param[1],
                     }
-                elif normalized_batch_name == "RRBB":
-                    best_param_dict = {"RRBB_BUDGET": param}
+                elif normalized_batch_name == "RAPB-la":
+                    best_param_dict = {
+                        "RAPB_LA_BUDGET": param[0],
+                        "RAPB_LA_AGING_PER_HOUR": param[1],
+                    }
                 elif normalized_batch_name == "RATB":
                     best_param_dict = {
                         "RATB_THRESHOLD": param[0],
@@ -1584,6 +1604,13 @@ def run_final_test_unified(
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
+        elif normalized_batch_name == "RAPB-la":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params["RAPB_LA_BUDGET"],
+                best_params["RAPB_LA_AGING_PER_HOUR"],
+            )
         elif normalized_batch_name == "RATB":
             if not isinstance(best_params, dict):
                 continue
@@ -1597,7 +1624,7 @@ def run_final_test_unified(
         else:
             # single-valued dict e.g., {"BATCH_HOURS": x} 
             # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
-            # or {"RRBB_BUDGET": b}
+            # or {"RASB_LA_BUDGET": b}
             try:
                 if not isinstance(best_params, dict):
                     continue
