@@ -243,72 +243,11 @@ def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
                 last_clean_idx = prev
         last_clean_for_regressor_by_idx[idx] = last_clean_idx
 
-    def _final_full_suite_flush(final_batch_end_idx: int):
-        """
-        Ensure the last commit in the simulation window receives a final batch test
-        that is a full-suite run (i.e., `is_batch_root=True`).
-
-        This prevents "-s" policies from missing regressors whose failing signature-groups
-        were never exercised by any subset suite before the stream ends.
-        """
-        nonlocal total_tests_run, culprit_times, feedback_times
-
-        remaining = []
-        for reg_idx, fail_sigs in regressor_fail_sigs_by_idx.items():
-            if reg_idx in handled_regressor_idxs:
-                continue
-            if reg_idx > final_batch_end_idx:
-                continue
-            if not fail_sigs:
-                continue
-            cid = commits[reg_idx]["commit_id"]
-            if cid in found_regressors:
-                continue
-            remaining.append(reg_idx)
-
-        remaining_set = set(remaining)
-
-        if remaining_set:
-            start_candidates = [
-                last_clean_for_regressor_by_idx.get(i, -1) + 1 for i in remaining_set
-            ]
-            start_idx = max(0, min(start_candidates)) if start_candidates else 0
-            start_idx = min(start_idx, final_batch_end_idx)
-        else:
-            start_idx = final_batch_end_idx
-
-        slice_commits = commits[start_idx : final_batch_end_idx + 1]
-        batch_for_bisect = []
-        for offset, c in enumerate(slice_commits):
-            global_idx = start_idx + offset
-            batch_for_bisect.append(
-                {
-                    **c,
-                    "true_label": bool(global_idx in remaining_set),
-                }
-            )
-
-        total_tests_run, culprit_times, feedback_times = bisect_fn(
-            batch_for_bisect,
-            commits[final_batch_end_idx]["ts"],
-            total_tests_run,
-            culprit_times,
-            feedback_times,
-            executor,
-            True,  # is_batch_root=True; final flush is full-suite
-            found_regressors=found_regressors,
-        )
-        handled_regressor_idxs.update(remaining_set)
-
     for batch_start_idx, batch_end_idx, batch_end_time in batches:
         if batch_end_idx < batch_start_idx:
             continue
         for idx in range(batch_start_idx, batch_end_idx + 1):
             note_regressor(idx, commits[idx])
-
-        if batch_end_idx == len(commits) - 1:
-            _final_full_suite_flush(batch_end_idx)
-            break
 
         batch_commits = commits[batch_start_idx : batch_end_idx + 1]
         suite_sig_ids = _union_tested_signature_group_ids_for_commits(batch_commits)
@@ -525,52 +464,6 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
             )
 
             handled_regressor_idxs.add(j)
-
-    # Final full-suite flush on the last commit in the simulation window.
-    # This ensures that any remaining regressors are detectable even if none of
-    # the per-revision subset suites exercised their failing signature-groups
-    # before the stream ended.
-    final_idx = len(commits) - 1
-    final_ts = commits[final_idx]["ts"]
-
-    remaining = []
-    for j, fail_sigs in regressor_fail_sigs.items():
-        if not fail_sigs:
-            continue
-        cid = commits[j]["commit_id"]
-        if cid in found_regressors:
-            continue
-        remaining.append(j)
-
-    remaining_set = set(remaining)
-    if remaining_set:
-        start_candidates = [last_clean_for_regressor.get(j, -1) + 1 for j in remaining_set]
-        start_idx = max(0, min(start_candidates)) if start_candidates else 0
-        start_idx = min(start_idx, final_idx)
-    else:
-        start_idx = final_idx
-
-    slice_commits = commits[start_idx : final_idx + 1]
-    batch_for_bisect = []
-    for offset, c in enumerate(slice_commits):
-        global_idx = start_idx + offset
-        batch_for_bisect.append(
-            {
-                **c,
-                "true_label": bool(global_idx in remaining_set),
-            }
-        )
-
-    total_tests_run, culprit_times, feedback_times = bisect_fn(
-        batch_for_bisect,
-        final_ts,
-        total_tests_run,
-        culprit_times,
-        feedback_times,
-        executor,
-        True,  # is_batch_root=True; final flush is full-suite
-        found_regressors=found_regressors,
-    )
 
     logger.info(
         "simulate_twsb_with_bisect: finished; total_tests_run=%d",
