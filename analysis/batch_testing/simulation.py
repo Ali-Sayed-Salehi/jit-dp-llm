@@ -593,6 +593,9 @@ def run_exhaustive_testing(commits):
             "p95_time_to_culprit_hr": 0.0,
             "p99_time_to_culprit_hr": 0.0,
             "total_cpu_time_hr": 0.0,
+            "num_regressors_total": 0,
+            "num_regressors_found": 0,
+            "found_all_regressors": True,
         }
 
     global BATCH_SIGNATURE_DURATIONS_ET
@@ -602,6 +605,7 @@ def run_exhaustive_testing(commits):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(WORKER_POOLS)
     logger.debug(
@@ -684,6 +688,9 @@ def run_exhaustive_testing(commits):
         "p95_time_to_culprit_min": round(p95_ttc_min, 2),
         "p99_time_to_culprit_min": round(p99_ttc_min, 2),
         "total_cpu_time_min": round(float(total_cpu_time_min), 2),
+        "num_regressors_total": int(num_regressors_total),
+        "num_regressors_found": int(num_regressors_total),
+        "found_all_regressors": True,
     }
 
     # Reuse common conversion helper for consistency
@@ -1173,9 +1180,10 @@ def run_evaluation_mopt(
                             "p99_time_to_culprit_hr"
                         ),
                         "total_cpu_time_hr": res.get("total_cpu_time_hr"),
-                        "violates_baseline": (
-                            baseline_max_ttc is not None
-                            and res.get("max_time_to_culprit_hr", 0) > baseline_max_ttc
+                        "num_regressors_total": res.get("num_regressors_total", 0),
+                        "num_regressors_found": res.get("num_regressors_found", 0),
+                        "found_all_regressors": bool(
+                            res.get("found_all_regressors", False)
                         ),
                     }
                 )
@@ -1198,7 +1206,11 @@ def run_evaluation_mopt(
                 "p95_time_to_culprit_hr": selected.get("p95_time_to_culprit_hr"),
                 "p99_time_to_culprit_hr": selected.get("p99_time_to_culprit_hr"),
                 "total_cpu_time_hr": selected.get("total_cpu_time_hr"),
-                "violates_baseline": selected["violates_baseline"],
+                "num_regressors_total": selected.get("num_regressors_total", 0),
+                "num_regressors_found": selected.get("num_regressors_found", 0),
+                "found_all_regressors": bool(
+                    selected.get("found_all_regressors", False)
+                ),
                 "best_params": selected["best_params"],
                 "tests_saved_vs_baseline_pct": time_saved_pct(
                     baseline_tests, selected["total_tests_run"]
@@ -1251,11 +1263,6 @@ def run_evaluation_mopt(
             )
             res = convert_result_minutes_to_hours(res)
 
-            violates = (
-                baseline_max_ttc is not None
-                and res.get("max_time_to_culprit_hr", 0) > baseline_max_ttc
-            )
-
             result_entry = {
                 "total_tests_run": res.get("total_tests_run"),
                 "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
@@ -1265,7 +1272,11 @@ def run_evaluation_mopt(
                 "p95_time_to_culprit_hr": res.get("p95_time_to_culprit_hr"),
                 "p99_time_to_culprit_hr": res.get("p99_time_to_culprit_hr"),
                 "total_cpu_time_hr": res.get("total_cpu_time_hr"),
-                "violates_baseline": violates,
+                "num_regressors_total": res.get("num_regressors_total", 0),
+                "num_regressors_found": res.get("num_regressors_found", 0),
+                "found_all_regressors": bool(
+                    res.get("found_all_regressors", False)
+                ),
                 "best_params": {},  # no tunable params for TWSB
                 "tests_saved_vs_baseline_pct": time_saved_pct(
                     baseline_tests,
@@ -1528,17 +1539,12 @@ def run_final_test_unified(
         res_final = b_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
         res_final = convert_result_minutes_to_hours(res_final)
 
-        violates = (
-            baseline_max_ttc is not None
-            and res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
-        )
         saved_pct = time_saved_pct(
             baseline_tests, res_final.get("total_tests_run", baseline_tests)
         )
 
         res_final.update(
             {
-                "violates_baseline": violates,
                 "tests_saved_vs_baseline_pct": saved_pct,
                 "mean_feedback_time_saved_vs_baseline_pct": time_saved_pct(
                     baseline_fb, res_final.get("mean_feedback_time_hr", baseline_fb)

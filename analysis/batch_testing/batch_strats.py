@@ -83,7 +83,14 @@ def _percentile_linear(sorted_values, p: float) -> float:
     return float(sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac)
 
 
-def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time_min):
+def build_results(
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    total_cpu_time_min,
+    num_regressors_total=None,
+    num_regressors_found=None,
+):
     """
     Build the standard results payload returned by batching simulations.
 
@@ -99,6 +106,10 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
     total_cpu_time_min:
         Cumulative CPU minutes across all scheduled tests (sums durations,
         independent of parallelism).
+    num_regressors_total:
+        Total number of true regressors present in the simulation window.
+    num_regressors_found:
+        Number of true regressors actually identified as culprits by the combo.
 
     Returns
     -------
@@ -123,6 +134,13 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         p95_ttc = 0.0
         p99_ttc = 0.0
 
+    if num_regressors_total is None:
+        num_regressors_total = 0
+    if num_regressors_found is None:
+        num_regressors_found = len(culprit_times) if culprit_times else 0
+    num_regressors_total = int(num_regressors_total)
+    num_regressors_found = int(num_regressors_found)
+
     return {
         "total_tests_run": total_tests_run,
         "mean_feedback_time_min": round(mean_fb, 2),
@@ -132,6 +150,9 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         "p95_time_to_culprit_min": round(p95_ttc, 2),
         "p99_time_to_culprit_min": round(p99_ttc, 2),
         "total_cpu_time_min": round(float(total_cpu_time_min), 2),
+        "num_regressors_total": num_regressors_total,
+        "num_regressors_found": num_regressors_found,
+        "found_all_regressors": (num_regressors_found == num_regressors_total),
     }
 
 def _union_tested_signature_group_ids_for_commits(commits):
@@ -177,9 +198,19 @@ def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
 
     if not commits:
-        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+        return build_results(
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            0.0,
+            num_regressors_total=0,
+            num_regressors_found=0,
+        )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(num_workers)
 
@@ -279,11 +310,19 @@ def _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers):
             feedback_times,
             executor,
             False,  # is_batch_root=False; batch suite already ran
+            found_regressors=found_regressors,
         )
 
         handled_regressor_idxs.update(detected_set)
 
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
@@ -310,10 +349,19 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     if not commits:
         logger.info("simulate_twsb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+        return build_results(
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
 
     executor = TestExecutor(num_workers)
 
@@ -371,6 +419,11 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
         for j, fail_sigs in regressor_fail_sigs.items():
             if j in handled_regressor_idxs:
                 continue
+            # This regressor may have been found as a side-effect of an earlier
+            # bisection trigger for a different bug; avoid re-bisecting it.
+            if commits[j]["commit_id"] in found_regressors:
+                handled_regressor_idxs.add(j)
+                continue
             if j > idx:
                 # Bug has not landed yet at this point in the stream.
                 continue
@@ -407,6 +460,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
                 feedback_times,
                 executor,
                 False,  # is_batch_root=False so we only use failing signature-groups
+                found_regressors=found_regressors,
             )
 
             handled_regressor_idxs.add(j)
@@ -415,7 +469,14 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
         "simulate_twsb_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
@@ -435,13 +496,22 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     # One central executor per simulation run
     executor = TestExecutor(num_workers)
 
     if not commits:
         logger.info("simulate_twb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+        return build_results(
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
 
     batch_start = commits[0]["ts"]
     batch_end = batch_start + timedelta(hours=batch_hours)
@@ -452,7 +522,13 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
             current_batch.append(c)
         else:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
-                current_batch, batch_end, total_tests_run, culprit_times, feedback_times, executor
+                current_batch,
+                batch_end,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "TWB: flushing batch with %d commits ending at %s (processed %d/%d commits)",
@@ -467,14 +543,27 @@ def simulate_twb_with_bisect(commits, bisect_fn, batch_hours, num_workers):
 
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
-            current_batch, batch_end, total_tests_run, culprit_times, feedback_times, executor
+            current_batch,
+            batch_end,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_twb_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_twb_s_with_bisect(commits, bisect_fn, batch_hours, num_workers):
@@ -490,7 +579,7 @@ def simulate_twb_s_with_bisect(commits, bisect_fn, batch_hours, num_workers):
     `is_batch_root=False` because the batch suite has already run.
     """
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     batches = []
     batch_start_idx = 0
@@ -531,6 +620,8 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(num_workers)
 
@@ -542,7 +633,13 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
         current_end_time = c["ts"]
         if len(current_batch) >= batch_size:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
-                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "FSB: flushing batch of size %d at commit index %d/%d",
@@ -555,13 +652,26 @@ def simulate_fsb_with_bisect(commits, bisect_fn, batch_size, num_workers):
 
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
-            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_fsb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_fsb_s_with_bisect(commits, bisect_fn, batch_size, num_workers):
@@ -574,7 +684,7 @@ def simulate_fsb_s_with_bisect(commits, bisect_fn, batch_size, num_workers):
     """
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     for end in range(len(commits)):
@@ -614,6 +724,8 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(num_workers)
 
@@ -631,7 +743,13 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
 
         if fail_prob >= threshold:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
-                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "RASB: threshold reached; flushed batch of size %d at index %d/%d with fail_prob=%.4f",
@@ -646,13 +764,26 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
 
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
-            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_rasb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
@@ -666,7 +797,7 @@ def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
     """
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     log_survival = 0.0
@@ -708,10 +839,19 @@ def simulate_rasb_la_with_bisect(commits, bisect_fn, risk_budget, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     if not commits:
         logger.info("simulate_rasb_la_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+        return build_results(
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
 
     executor = TestExecutor(num_workers)
 
@@ -737,6 +877,7 @@ def simulate_rasb_la_with_bisect(commits, bisect_fn, risk_budget, num_workers):
                 culprit_times,
                 feedback_times,
                 executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "RASB-la: risk_budget reached; flushed batch of size %d at index %d/%d with risk_sum=%.4f",
@@ -757,13 +898,21 @@ def simulate_rasb_la_with_bisect(commits, bisect_fn, risk_budget, num_workers):
             culprit_times,
             feedback_times,
             executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_rasb_la_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_rasb_la_s_with_bisect(commits, bisect_fn, risk_budget, num_workers):
@@ -777,7 +926,7 @@ def simulate_rasb_la_s_with_bisect(commits, bisect_fn, risk_budget, num_workers)
     """
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     risk_sum = 0.0
@@ -822,6 +971,8 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(num_workers)
 
@@ -850,7 +1001,13 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
 
         if fail_prob >= threshold_T:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
-                current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+                current_batch,
+                current_end_time,
+                total_tests_run,
+                culprit_times,
+                feedback_times,
+                executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "RAPB: threshold reached; flushed batch of size %d at index %d/%d with fail_prob=%.4f",
@@ -865,14 +1022,27 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
 
     if current_batch:
         total_tests_run, culprit_times, feedback_times = bisect_fn(
-            current_batch, current_end_time, total_tests_run, culprit_times, feedback_times, executor
+            current_batch,
+            current_end_time,
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_rapb_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
@@ -886,7 +1056,7 @@ def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
     threshold_T, aging_rate = params
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     entry_times = []
@@ -948,6 +1118,8 @@ def simulate_rapb_la_with_bisect(commits, bisect_fn, params, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     executor = TestExecutor(num_workers)
 
@@ -980,6 +1152,7 @@ def simulate_rapb_la_with_bisect(commits, bisect_fn, params, num_workers):
                 culprit_times,
                 feedback_times,
                 executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "RAPB-la: threshold reached; flushed batch of size %d at index %d/%d with risk_sum=%.4f",
@@ -1000,13 +1173,21 @@ def simulate_rapb_la_with_bisect(commits, bisect_fn, params, num_workers):
             culprit_times,
             feedback_times,
             executor,
+            found_regressors=found_regressors,
         )
 
     logger.info(
         "simulate_rapb_la_with_bisect: finished; total_tests_run=%d",
         total_tests_run,
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_rapb_la_s_with_bisect(commits, bisect_fn, params, num_workers):
@@ -1020,7 +1201,7 @@ def simulate_rapb_la_s_with_bisect(commits, bisect_fn, params, num_workers):
     risk_budget_T, aging_rate = params
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     entry_times = []
@@ -1090,10 +1271,19 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
+    found_regressors = set()
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
 
     if not commits:
         logger.info("simulate_ratb_with_bisect: no commits; returning empty results")
-        return build_results(total_tests_run, culprit_times, feedback_times, 0.0)
+        return build_results(
+            total_tests_run,
+            culprit_times,
+            feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
 
     executor = TestExecutor(num_workers)
 
@@ -1127,6 +1317,7 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
                 culprit_times,
                 feedback_times,
                 executor,
+                found_regressors=found_regressors,
             )
             logger.debug(
                 "RATB: risk-triggered flush; batch size %d at index %d/%d (risk=%.4f)",
@@ -1151,6 +1342,7 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
                 culprit_times,
                 feedback_times,
                 executor,
+                found_regressors=found_regressors,
             )
             # Start a new batch with c.
             current_batch = [c]
@@ -1170,11 +1362,19 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
             culprit_times,
             feedback_times,
             executor,
+            found_regressors=found_regressors,
         )
     logger.info(
         "simulate_ratb_with_bisect: finished; total_tests_run=%d", total_tests_run
     )
-    return build_results(total_tests_run, culprit_times, feedback_times, executor.total_cpu_minutes)
+    return build_results(
+        total_tests_run,
+        culprit_times,
+        feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(found_regressors),
+    )
 
 
 def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
@@ -1195,7 +1395,7 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
 
     batches = []
     if not commits:
-        return build_results(0, [], {}, 0.0)
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
     batch_start_time = commits[0]["ts"]

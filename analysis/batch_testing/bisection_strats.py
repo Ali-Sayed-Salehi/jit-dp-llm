@@ -94,6 +94,25 @@ TKRB_TOP_K = 1
 
 logger = logging.getLogger(__name__)
 
+def _record_regressor_found(commit, ttc_min, culprit_times, found_regressors=None):
+    """
+    Record a newly-found true regressor for this simulation run.
+
+    `culprit_times` tracks minutes-to-culprit values for *unique* regressors.
+    `found_regressors` (if provided) is a set of commit_ids used to de-dupe
+    regressors across overlapping bisection calls within a single simulation.
+    """
+    if not commit.get("true_label"):
+        return
+    if found_regressors is not None:
+        cid = commit.get("commit_id")
+        if cid is None:
+            return
+        if cid in found_regressors:
+            return
+        found_regressors.add(cid)
+    culprit_times.append(ttc_min)
+
 
 def configure_bisection_defaults(
     default_test_duration_min=None,
@@ -1214,6 +1233,7 @@ def time_ordered_bisect(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Time-Ordered Bisection (TOB) with central executor.
@@ -1294,9 +1314,10 @@ def time_ordered_bisect(
         status[idx] = "defect_found"
 
         fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     tests_added = total_tests_run - tests_before
     tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
@@ -1326,6 +1347,7 @@ def exhaustive_parallel(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Parallel 'no-bisection' strategy with realistic durations.
@@ -1375,9 +1397,9 @@ def exhaustive_parallel(
         finish_time = run_test_suite(executor, start_time, durations)
 
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[cid] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
         return total_tests_run, culprit_times, feedback_times
 
@@ -1407,10 +1429,9 @@ def exhaustive_parallel(
         intermediate_finish_times.append(finish_time)
 
         fb_min = (finish_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[cid] = fb_min
-
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     # 3) Feedback for the last commit comes when the last per-commit suite finishes.
     last_commit = batch_sorted[-1]
@@ -1425,9 +1446,9 @@ def exhaustive_parallel(
     fb_min_last = (
         last_intermediate_finish - last_commit["ts"]
     ).total_seconds() / 60.0
-    feedback_times[last_cid] = fb_min_last
-    if last_commit["true_label"]:
-        culprit_times.append(fb_min_last)
+    if last_cid not in feedback_times:
+        feedback_times[last_cid] = fb_min_last
+    _record_regressor_found(last_commit, fb_min_last, culprit_times, found_regressors)
 
     tests_added = total_tests_run - tests_before
     tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
@@ -1457,6 +1478,7 @@ def risk_weighted_adaptive_bisect(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Risk-Weighted Adaptive Bisection (RWAB).
@@ -1570,9 +1592,10 @@ def risk_weighted_adaptive_bisect(
         status[idx] = "defect_found"
 
         fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     tests_added = total_tests_run - tests_before
     tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
@@ -1602,6 +1625,7 @@ def risk_weighted_adaptive_bisect_log_survival(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Risk-Weighted Adaptive Bisection using log-survival combined probability (RWAB-LS).
@@ -1758,9 +1782,10 @@ def risk_weighted_adaptive_bisect_log_survival(
         status[idx] = "defect_found"
 
         fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     tests_added = total_tests_run - tests_before
     tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
@@ -1790,6 +1815,7 @@ def topk_risk_first_bisect(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Top-K Risk-First Bisection (TKRB-K).
@@ -1902,9 +1928,10 @@ def topk_risk_first_bisect(
             if status[culprit_idx] != "defect_found":
                 status[culprit_idx] = "defect_found"
                 fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-                feedback_times[c["commit_id"]] = fb_min
-                if c["true_label"]:
-                    culprit_times.append(fb_min)
+                cid = c["commit_id"]
+                if cid not in feedback_times:
+                    feedback_times[cid] = fb_min
+                _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     # ---- Step 1: Initial whole-batch test (like TOB) ----
     whole_fails = run_interval(0, n - 1)
@@ -1930,9 +1957,10 @@ def topk_risk_first_bisect(
             return
         status[idx] = "defect_found"
         fb_min = (at_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     def interval_has_defect(lo, hi):
         return any(
@@ -2037,9 +2065,10 @@ def topk_risk_first_bisect(
         if status[culprit_idx] != "defect_found":
             status[culprit_idx] = "defect_found"
             fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-            feedback_times[c["commit_id"]] = fb_min
-            if c["true_label"]:
-                culprit_times.append(fb_min)
+            cid = c["commit_id"]
+            if cid not in feedback_times:
+                feedback_times[cid] = fb_min
+            _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     tests_added = total_tests_run - tests_before
     tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
@@ -2067,6 +2096,7 @@ def sequential_walk_backward_bisect(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Sequential Walk-Backward Bisection (SWB).
@@ -2149,9 +2179,10 @@ def sequential_walk_backward_bisect(
         status[culprit_idx] = "defect_found"
 
         fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     logger.debug(
         "sequential_walk_backward_bisect: finished batch_size=%d total_tests_run=%d",
@@ -2169,6 +2200,7 @@ def sequential_walk_forward_bisect(
     feedback_times,
     executor,
     is_batch_root=True,
+    found_regressors=None,
 ):
     """
     Sequential Walk-Forward Bisection (SWF).
@@ -2246,9 +2278,10 @@ def sequential_walk_forward_bisect(
         status[culprit_idx] = "defect_found"
 
         fb_min = (current_time - c["ts"]).total_seconds() / 60.0
-        feedback_times[c["commit_id"]] = fb_min
-        if c["true_label"]:
-            culprit_times.append(fb_min)
+        cid = c["commit_id"]
+        if cid not in feedback_times:
+            feedback_times[cid] = fb_min
+        _record_regressor_found(c, fb_min, culprit_times, found_regressors)
 
     logger.debug(
         "sequential_walk_forward_bisect: finished batch_size=%d total_tests_run=%d",
