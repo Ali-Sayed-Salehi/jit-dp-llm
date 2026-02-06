@@ -15,8 +15,8 @@ Key references:
   - `analysis/batch_testing/bisection_strats.py` for bisection implementations,
     metadata loading, and the central test executor.
 
-The Optuna mode (`run_evaluation_mopt`) tunes batching parameters and the
-prediction threshold. For TKRB it also tunes `bisection_strats.TKRB_TOP_K`.
+The Optuna mode (`run_evaluation_mopt`) tunes batching parameters. For TKRB it
+also tunes `bisection_strats.TKRB_TOP_K`.
 """
 
 import os
@@ -911,8 +911,6 @@ def run_evaluation_mopt(
     Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
 
     For each (batching, bisection) pair in the configured grids, this function:
-      - Tunes a prediction threshold (`pred_threshold`) used to derive the
-        binary predicted label from model confidence.
       - Tunes the batching strategy parameter(s) for that batching policy.
       - For the `TKRB` bisection strategy, also tunes `TKRB_TOP_K` by mutating
         `bisection_strats.TKRB_TOP_K` prior to each trial run.
@@ -946,12 +944,6 @@ def run_evaluation_mopt(
         and (selected_bisection_set is None or "PAR" in selected_bisection_set)
     )
 
-    def set_thresholded_predictions_in_place(commits, indices, thr):
-        thr_f = float(thr)
-        for idx in indices:
-            c = commits[idx]
-            c["prediction"] = 1 if float(c["risk"]) >= thr_f else 0
-
     # Allow main() to pass precomputed/cached inputs to avoid re-reading
     # INPUT_JSON_EVAL and scanning all_commits.jsonl again.
     if preds_raw is None:
@@ -972,12 +964,6 @@ def run_evaluation_mopt(
             lower_cutoff,
             upper_cutoff,
             pred_threshold=PRED_THRESHOLD,
-        )
-    else:
-        # Ensure the commit list is consistent with the default threshold when
-        # provided externally.
-        set_thresholded_predictions_in_place(
-            base_commits_for_context, predicted_indices, PRED_THRESHOLD
         )
     if run_exhaustive_testing_et and base_commits_for_context:
         et_results = run_exhaustive_testing(base_commits_for_context)
@@ -1010,21 +996,23 @@ def run_evaluation_mopt(
             else 0.0
         )
 
-    def pick_best(pareto, baseline_max_ttc_local):
+    def pick_best(pareto, baseline_mean_ttc_local):
         if not pareto:
             return None
         feas = [
             r
             for r in pareto
-            if baseline_max_ttc_local is None
-            or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local
+            if (
+                baseline_mean_ttc_local is None
+                or r["mean_time_to_culprit_hr"] <= baseline_mean_ttc_local
+            )
         ]
         if feas:
             return min(
-                feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"])
+                feas, key=lambda r: (r["total_tests_run"], r["mean_time_to_culprit_hr"])
             )
         return min(
-            pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"])
+            pareto, key=lambda r: (r["mean_time_to_culprit_hr"], r["total_tests_run"])
         )
 
     # unified output (same shape as before)
@@ -1093,9 +1081,6 @@ def run_evaluation_mopt(
                         n_trials,
                         combo_key,
                     )
-                # Shared continuous pred threshold
-                pred_thr = trial.suggest_float("pred_threshold", 0.30, 0.995)
-
                 # Bisection-specific tunables (only for TKRB).
                 if bis_name == "TKRB":
                     bisection_mod.TKRB_TOP_K = trial.suggest_int("TKRB_TOP_K", 1, 10)
@@ -1142,24 +1127,17 @@ def run_evaluation_mopt(
 
                 if not base_commits_for_context:
                     logger.warning(
-                        "No commits returned for combo %s at trial %d (pred_thr=%.4f)",
+                        "No commits returned for combo %s at trial %d",
                         combo_key,
                         trial.number,
-                        pred_thr,
                     )
                     return (float("inf"), float("inf"))
-
-                # Update thresholded prediction labels in-place for the subset
-                # of commits present in the prediction file (risk > 0.0).
-                set_thresholded_predictions_in_place(
-                    base_commits_for_context, predicted_indices, pred_thr
-                )
 
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
                 return (
                     res.get("total_tests_run", float("inf")),
-                    res.get("max_time_to_culprit_hr", float("inf")),
+                    res.get("mean_time_to_culprit_hr", float("inf")),
                 )
 
             study = optuna.create_study(directions=["minimize", "minimize"])
@@ -1174,7 +1152,6 @@ def run_evaluation_mopt(
             pareto = []
             for t in study.best_trials:
                 params = t.params
-                pred_thr = params.get("pred_threshold", PRED_THRESHOLD)
 
                 if bis_name == "TKRB":
                     bisection_mod.TKRB_TOP_K = int(params.get("TKRB_TOP_K", 1))
@@ -1218,10 +1195,6 @@ def run_evaluation_mopt(
                 if not base_commits_for_context:
                     continue
 
-                set_thresholded_predictions_in_place(
-                    base_commits_for_context, predicted_indices, pred_thr
-                )
-
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
 
@@ -1255,7 +1228,6 @@ def run_evaluation_mopt(
 
                 pareto.append(
                     {
-                        "pred_threshold_used": pred_thr,
                         "best_params": best_param_dict,
                         "total_tests_run": res.get("total_tests_run"),
                         "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
@@ -1267,14 +1239,20 @@ def run_evaluation_mopt(
                         ),
                         "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                         "violates_baseline": (
-                            baseline_max_ttc is not None
-                            and res.get("max_time_to_culprit_hr", 0)
-                            > baseline_max_ttc
+                            (
+                                baseline_mean_ttc is not None
+                                and res.get("mean_time_to_culprit_hr", 0)
+                                > baseline_mean_ttc
+                            )
+                            or (
+                                baseline_fb is not None
+                                and res.get("mean_feedback_time_hr", 0) > baseline_fb
+                            )
                         ),
                     }
                 )
 
-            selected = pick_best(pareto, baseline_max_ttc)
+            selected = pick_best(pareto, baseline_mean_ttc)
             if selected is None:
                 logger.warning(
                     "No Pareto-optimal configuration selected for combo %s; skipping",
@@ -1291,7 +1269,6 @@ def run_evaluation_mopt(
                 "total_cpu_time_hr": selected.get("total_cpu_time_hr"),
                 "violates_baseline": selected["violates_baseline"],
                 "best_params": selected["best_params"],
-                "pred_threshold_used": selected["pred_threshold_used"],
                 "tests_saved_vs_baseline_pct": time_saved_pct(
                     baseline_tests, selected["total_tests_run"]
                 )
@@ -1326,10 +1303,6 @@ def run_evaluation_mopt(
         and not dry_run
         and (selected_batching is None or "TWSB" in selected_batching)
     ):
-        # Ensure the fixed TWSB evaluation uses the documented fixed threshold.
-        set_thresholded_predictions_in_place(
-            base_commits_for_context, predicted_indices, PRED_THRESHOLD
-        )
         for bis_name, bis_fn in BISECTION_STRATEGIES:
             if selected_bisection is not None and bis_name not in selected_bisection:
                 continue
@@ -1348,9 +1321,14 @@ def run_evaluation_mopt(
             res = convert_result_minutes_to_hours(res)
 
             violates = (
-                baseline_max_ttc is not None
-                and res.get("max_time_to_culprit_hr", 0)
-                > baseline_max_ttc
+                (
+                    baseline_mean_ttc is not None
+                    and res.get("mean_time_to_culprit_hr", 0) > baseline_mean_ttc
+                )
+                or (
+                    baseline_fb is not None
+                    and res.get("mean_feedback_time_hr", 0) > baseline_fb
+                )
             )
 
             result_entry = {
@@ -1361,7 +1339,6 @@ def run_evaluation_mopt(
                 "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                 "violates_baseline": violates,
                 "best_params": {},  # no tunable params for TWSB
-                "pred_threshold_used": PRED_THRESHOLD,
                 "tests_saved_vs_baseline_pct": time_saved_pct(
                     baseline_tests,
                     res.get("total_tests_run", baseline_tests),
@@ -1466,8 +1443,8 @@ def run_final_test_unified(
     then re-runs the same (batching, bisection) combos on `INPUT_JSON_FINAL`.
 
     For each combo it:
-      - Reconstructs the tuned parameters (including `pred_threshold` and any
-        tuned batching params; for TKRB, `TKRB_TOP_K`).
+      - Reconstructs the tuned parameters (tuned batching params; for TKRB,
+        `TKRB_TOP_K`).
       - Runs the simulation.
       - Computes deltas vs the baseline from the EVAL payload.
       - Writes a unified JSON result file to `OUTPUT_PATH_FINAL`.
@@ -1477,11 +1454,6 @@ def run_final_test_unified(
         INPUT_JSON_FINAL,
         OUTPUT_PATH_FINAL,
     )
-    def set_thresholded_predictions_in_place(commits, indices, thr):
-        thr_f = float(thr)
-        for idx in indices:
-            c = commits[idx]
-            c["prediction"] = 1 if float(c["risk"]) >= thr_f else 0
 
     # Allow main() to pass precomputed/cached inputs to avoid re-reading
     # INPUT_JSON_FINAL and scanning all_commits.jsonl again.
@@ -1505,10 +1477,6 @@ def run_final_test_unified(
             final_lower,
             final_upper,
             pred_threshold=PRED_THRESHOLD,
-        )
-    else:
-        set_thresholded_predictions_in_place(
-            base_commits_final, predicted_indices_final, PRED_THRESHOLD
         )
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
@@ -1592,8 +1560,6 @@ def run_final_test_unified(
         if b_fn is None or bis_fn is None:
             continue
 
-        pred_thr = val.get("pred_threshold_used", PRED_THRESHOLD)
-
         # Unpack params for this strategy
         best_params = val.get("best_params")
         normalized_batch_name = b_name[:-2] if b_name.endswith("-s") else b_name
@@ -1632,18 +1598,19 @@ def run_final_test_unified(
             except Exception:
                 continue
 
-        # Update thresholded prediction labels in-place for the subset of commits
-        # present in the prediction file (risk > 0.0), then run the simulation.
-        set_thresholded_predictions_in_place(
-            base_commits_final, predicted_indices_final, pred_thr
-        )
-
         res_final = b_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
         res_final = convert_result_minutes_to_hours(res_final)
 
         violates = (
-            baseline_max_ttc is not None
-            and res_final.get("max_time_to_culprit_hr", float("inf")) > baseline_max_ttc
+            (
+                baseline_mean_ttc is not None
+                and res_final.get("mean_time_to_culprit_hr", float("inf"))
+                > baseline_mean_ttc
+            )
+            or (
+                baseline_fb is not None
+                and res_final.get("mean_feedback_time_hr", float("inf")) > baseline_fb
+            )
         )
         saved_pct = time_saved_pct(
             baseline_tests, res_final.get("total_tests_run", baseline_tests)
@@ -1665,7 +1632,6 @@ def run_final_test_unified(
                     res_final.get("max_time_to_culprit_hr", baseline_max_ttc),
                 ),
                 "best_params_from_eval": best_params,
-                "pred_threshold_used_from_eval": pred_thr,
             }
         )
 

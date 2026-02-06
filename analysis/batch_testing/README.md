@@ -182,4 +182,6 @@ All bisection strategies share:
 
 ## Optuna Optimization
 
-`simulation.py` uses Optuna to tune batching parameters and shared prediction thresholds. For the `TKRB` bisection strategy it also tunes `TKRB_TOP_K` and sets the module-level value in `bisection_strats.py` before each simulation run.
+`simulation.py` uses Optuna to tune batching parameters. For the `TKRB` bisection strategy it also tunes `TKRB_TOP_K` and sets the module-level value in `bisection_strats.py` before each simulation run.
+
+The Optuna objective is multi-objective: minimize `(total_tests_run, mean_time_to_culprit_hr)`.
