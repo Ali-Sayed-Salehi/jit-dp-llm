@@ -179,6 +179,9 @@ All bisection strategies share:
 ### RWAB - Risk-Weighted Adaptive Bisection
 - Like TOB, but chooses split points so that *sum of predicted risk* is balanced between halves.
 
+### RWAB-LS - Risk-Weighted Adaptive Bisection (log survival)
+- Same as RWAB, but balances split points using the combined probability mass `1 - Π(1 - risk_i)` (computed via log-survival for numerical stability).
+
 ### TKRB - Top-K Risk-First Bisection (K tunable)
 - After the initial full suite run, probes the **top-K** most risky commits first using prefix tests `[0..idx]`.
 - If a probe indicates a defect boundary at `idx`, `idx` is marked as a culprit.

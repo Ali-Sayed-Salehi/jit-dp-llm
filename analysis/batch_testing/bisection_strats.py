@@ -4,7 +4,7 @@ Bisection strategies and shared execution/time model for the batch-testing simul
 This module provides:
   - Perf metadata loading utilities (signature-group IDs, durations, failing signatures).
   - A central test-capacity simulator (`TestExecutor` + `run_test_suite`).
-  - Bisection strategies that operate on batches (TOB, PAR, RWAB, TKRB, SWB, SWF).
+  - Bisection strategies that operate on batches (TOB, PAR, RWAB, RWAB-LS, TKRB, SWB, SWF).
 
 See `analysis/batch_testing/README.md` for a detailed conceptual overview.
 """
@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import heapq
+import math
 
 # ---------- Perf metadata loading ----------
 
@@ -1579,6 +1580,194 @@ def risk_weighted_adaptive_bisect(
     culprits_batch = len(culprit_times) - culprits_before
     logger.debug(
         "risk_weighted_adaptive_bisect: batch_size=%d, tests_batch_root=%d, "
+        "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
+        "total_tests_run=%d",
+        n,
+        tests_batch_root,
+        tests_bisection,
+        culprits_batch,
+        len(culprit_times),
+        total_tests_run,
+    )
+    return total_tests_run, culprit_times, feedback_times
+
+
+# ------------------ RWAB-LS ------------------ #
+
+def risk_weighted_adaptive_bisect_log_survival(
+    batch,
+    start_time,
+    total_tests_run,
+    culprit_times,
+    feedback_times,
+    executor,
+    is_batch_root=True,
+):
+    """
+    Risk-Weighted Adaptive Bisection using log-survival combined probability (RWAB-LS).
+
+    Same as RWAB, but balances split points using a combined probability mass over
+    an interval:
+
+        1 - Π(1 - p_i)
+
+    where p_i are per-commit risk probabilities. The combined probability is
+    computed via log-survival prefix sums for numerical stability.
+    """
+    if not batch:
+        return total_tests_run, culprit_times, feedback_times
+
+    # Batches from higher-level strategies are already time-ordered.
+    batch_sorted = batch
+    n = len(batch_sorted)
+    tests_before = total_tests_run
+    culprits_before = len(culprit_times)
+    logger.debug("risk_weighted_adaptive_bisect_log_survival: starting batch_size=%d", n)
+
+    status = ["unknown"] * n
+    current_time = start_time
+    first_test = bool(is_batch_root)
+
+    # Prefix sums of log survival mass:
+    #
+    #   log_survival_prefix[k] = Σ log(1 - p_i) for i in [0, k)
+    #
+    # We keep p==1.0 as a separate prefix count to avoid propagating -inf and
+    # producing NaNs when subtracting -inf - (-inf) for ranges that do not
+    # include the p==1.0 element.
+    log_survival_prefix = [0.0] * (n + 1)
+    certain_fail_prefix = [0] * (n + 1)
+    for i, c in enumerate(batch_sorted):
+        if "risk" not in c or c["risk"] is None:
+            raise ValueError(
+                "Missing or None 'risk' value in batch for risk_weighted_adaptive_bisect_log_survival "
+                f"at index {i}: {c!r}"
+            )
+        p = float(c["risk"])
+        if p < 0.0 or p > 1.0:
+            raise ValueError(f"Risk probabilities must be in [0,1], got {p} at index {i}: {c!r}")
+
+        log_survival_prefix[i + 1] = log_survival_prefix[i]
+        certain_fail_prefix[i + 1] = certain_fail_prefix[i]
+        if p >= 1.0:
+            certain_fail_prefix[i + 1] += 1
+        elif p > 0.0:
+            log_survival_prefix[i + 1] += math.log1p(-p)
+
+    def combined_probability(lo, hi):
+        """
+        Combined probability of at least one defect in the inclusive interval [lo, hi].
+        """
+        if lo > hi:
+            return 0.0
+        start = lo
+        end = hi + 1
+        if certain_fail_prefix[end] - certain_fail_prefix[start] > 0:
+            return 1.0
+        log_survival = float(log_survival_prefix[end] - log_survival_prefix[start])
+        return float(1.0 - math.exp(log_survival))
+
+    def choose_probability_balanced_split(lo, hi):
+        """
+        Choose split s in [lo, hi-1] such that combined probability mass is
+        approximately balanced between [lo..s] and [s+1..hi].
+        """
+        if lo >= hi:
+            return lo
+
+        total_mass = combined_probability(lo, hi)
+        if total_mass <= 0.0:
+            return (lo + hi) // 2
+
+        search_lo = lo
+        search_hi = hi - 1
+        best_idx = (lo + hi) // 2
+        best_gap = float("inf")
+
+        # gap(mid) = mass_left - mass_right is monotone increasing in mid for contiguous halves.
+        while search_lo <= search_hi:
+            mid = (search_lo + search_hi) // 2
+            mass_left = combined_probability(lo, mid)
+            mass_right = combined_probability(mid + 1, hi)
+            gap = abs(mass_left - mass_right)
+            if gap < best_gap:
+                best_gap = gap
+                best_idx = mid
+
+            if mass_left < mass_right:
+                search_lo = mid + 1
+            else:
+                search_hi = mid - 1
+
+        if best_idx < lo:
+            best_idx = lo
+        if best_idx >= hi:
+            best_idx = hi - 1
+        return best_idx
+
+    batch_fail_durations = get_failing_signature_durations_for_batch(batch_sorted)
+
+    while True:
+        unknown_indices = [i for i, s in enumerate(status) if s == "unknown"]
+        if not unknown_indices:
+            break
+
+        lo = unknown_indices[0]
+        hi = unknown_indices[-1]
+
+        # Test the whole unknown region
+        still_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+            batch_sorted,
+            status,
+            lo,
+            hi,
+            current_time,
+            first_test,
+            total_tests_run,
+            feedback_times,
+            executor,
+            batch_fail_durations,
+        )
+        if not still_fails:
+            break
+
+        left = lo
+        right = hi
+        # Risk-weighted "binary" search using combined probability mass
+        while left < right:
+            split = choose_probability_balanced_split(left, right)
+            left_fails, current_time, first_test, total_tests_run = _run_interval_and_update(
+                batch_sorted,
+                status,
+                left,
+                split,
+                current_time,
+                first_test,
+                total_tests_run,
+                feedback_times,
+                executor,
+                batch_fail_durations,
+            )
+            if left_fails:
+                right = split
+            else:
+                left = split + 1
+
+        idx = left
+        c = batch_sorted[idx]
+        status[idx] = "defect_found"
+
+        fb_min = (current_time - c["ts"]).total_seconds() / 60.0
+        feedback_times[c["commit_id"]] = fb_min
+        if c["true_label"]:
+            culprit_times.append(fb_min)
+
+    tests_added = total_tests_run - tests_before
+    tests_batch_root = len(get_batch_signature_durations()) if is_batch_root else 0
+    tests_bisection = max(0, tests_added - tests_batch_root)
+    culprits_batch = len(culprit_times) - culprits_before
+    logger.debug(
+        "risk_weighted_adaptive_bisect_log_survival: batch_size=%d, tests_batch_root=%d, "
         "tests_bisection=%d, culprits_this_batch=%d, culprits_total=%d, "
         "total_tests_run=%d",
         n,
