@@ -82,6 +82,7 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
     - Builds the subset suite as the union of signature-groups Mozilla actually ran for revisions in the batch (`perf_jobs_per_revision_details_rectified.jsonl`).
     - Detects a regressor in that batch only if the subset suite intersects that regressor’s failing signature-groups (`alert_summary_fail_perf_sigs.csv` → `sig_groups.jsonl`).
     - Invokes `bisect_fn(..., is_batch_root=False)` because the “batch root” suite has already been run by the batching policy.
+  - **End-of-window full-suite flush**: for `TWSB` and all `-s` variants, we also run a final full-suite batch test on the **last commit** in the simulation window (`is_batch_root=True`) to avoid missing regressors whose failing signature-groups were never exercised by the subset suites before the stream ends.
 
 ### TWB / TWB-s - Time-Window Batching
 - **Trigger rule (TWB)**: partition the stream into fixed wall-clock windows of size `batch_hours` based on commit timestamps.
@@ -161,6 +162,7 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
 - **Trigger rule**: for a regressor commit `j`, trigger bisection at the first revision `i >= j` whose tested subset intersects any of `j`’s failing signature-groups.
   - The bisection range starts at the last known clean revision (for those failing signature-groups) and ends at `i`.
   - The “batch end time” passed to bisection is the completion time of the per-revision subset suite for `i`.
+- **Final flush**: at the end of the simulation window, run a full-suite batch test on the last commit and bisect any remaining regressors that were never exercised by the per-revision subsets.
 - **Intuition**: models a more continuous “test what was run on each revision” world; detection timing is driven by which signature-groups happen to be exercised over time.
 
 ## Bisection Strategies (`bisection_strats.py`)
