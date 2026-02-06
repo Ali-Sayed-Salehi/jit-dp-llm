@@ -87,24 +87,24 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
---bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
---commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
---risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
---risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
---output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
---output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
---pareto-front-stats-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_stats.json \
---pareto-front-plot-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_distributions.png \
---penalize-window-start-lookback \
---window-start-lookback-penalty-tests 4 \
---mopt-trials 50 \
---optuna-seed 42 \
---lookback NBLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RATLB-AD,RATLB-AI,RWLBS,RWLBS-AD,RWLBS-AI,RWLBLS,RWLBLS-AD,RWLBLS-AI,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RATLB-AD-FF,RATLB-AI-FF,RWLBS-FF,RWLBS-AD-FF,RWLBS-AI-FF,RWLBLS-FF,RWLBLS-AD-FF,RWLBLS-AI-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \
---bisection GB,TKRB,RWBS,RWBLS \
---log-level INFO \
---final-only
-# --dry-run
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
+# --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
+# --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
+# --risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
+# --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
+# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
+# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
+# --pareto-front-stats-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_stats.json \
+# --pareto-front-plot-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_distributions.png \
+# --penalize-window-start-lookback \
+# --window-start-lookback-penalty-tests 4 \
+# --mopt-trials 50 \
+# --optuna-seed 42 \
+# --lookback NBLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RATLB-AD,RATLB-AI,RWLBS,RWLBS-AD,RWLBS-AI,RWLBLS,RWLBLS-AD,RWLBLS-AI,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RATLB-AD-FF,RATLB-AI-FF,RWLBS-FF,RWLBS-AD-FF,RWLBS-AI-FF,RWLBLS-FF,RWLBLS-AD-FF,RWLBLS-AI-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \
+# --bisection GB,TKRB,RWBS,RWBLS \
+# --log-level INFO \
+# --final-only
+# # --dry-run
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
@@ -114,6 +114,8 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_sig_groups.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/rectify_job_count_per_revision.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/filter_perf_llm_struc.py
 
 
 echo "Script finished"

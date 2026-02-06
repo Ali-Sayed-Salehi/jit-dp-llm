@@ -1,7 +1,7 @@
 debug: false
 task_type: seq_cls    # seq_cls   # clm
 live_metrics: true
-dataset_path: datasets/mozilla_perf/perf_llm_struc.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
+dataset_path: datasets/mozilla_perf/perf_llm_struc_no_fw_2_6_18.jsonl   # datasets/apachejit/apachejit_small_llm_struc.jsonl   # datasets/jit_defects4j/jit_defects4j_small_llm_struc.jsonl
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/snapshots/meta-llama/Llama-3.1-8B    # LLMs/pretrained/sequence-classification/llama3.1_apachejit
 quant: true
 lora: true
