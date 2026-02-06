@@ -458,6 +458,7 @@ def _pool_from_machine_platform(machine_platform: str):
     Expected values contain substrings like:
       - linux
       - android
+      - ac-ui-test (treated as android)
       - osx (e.g. "macosx")
       - ios (routed to mac pool)
       - windows
@@ -468,6 +469,10 @@ def _pool_from_machine_platform(machine_platform: str):
     s = str(machine_platform).strip().lower()
     if not s:
         return None
+    # Some Android Components tasks report a non-standard platform string.
+    # Route these to the android worker pool.
+    if "ac-ui-test" in s:
+        return "android"
     if "android" in s:
         return "android"
     if "ios" in s:
