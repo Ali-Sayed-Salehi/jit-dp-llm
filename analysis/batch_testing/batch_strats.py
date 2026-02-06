@@ -55,6 +55,34 @@ def _combined_probability_from_log_survival(log_survival: float) -> float:
     return float(1.0 - math.exp(float(log_survival)))
 
 
+def _percentile_linear(sorted_values, p: float) -> float:
+    """
+    Compute the p-th percentile (0-100) using linear interpolation.
+
+    Expects `sorted_values` to be a non-decreasing sequence.
+    Returns 0.0 for empty inputs.
+    """
+    if not sorted_values:
+        return 0.0
+
+    p = float(p)
+    if p <= 0.0:
+        return float(sorted_values[0])
+    if p >= 100.0:
+        return float(sorted_values[-1])
+
+    n = len(sorted_values)
+    # Interpolate between ranks over [0, n-1].
+    pos = (n - 1) * (p / 100.0)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return float(sorted_values[lo])
+
+    frac = pos - lo
+    return float(sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac)
+
+
 def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time_min):
     """
     Build the standard results payload returned by batching simulations.
@@ -82,17 +110,27 @@ def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time
         mean_fb = 0.0
 
     if culprit_times:
-        mean_ttc = sum(culprit_times) / len(culprit_times)
-        max_ttc = max(culprit_times)
+        culprit_times_sorted = sorted(float(x) for x in culprit_times)
+        mean_ttc = sum(culprit_times_sorted) / len(culprit_times_sorted)
+        max_ttc = culprit_times_sorted[-1]
+        p90_ttc = _percentile_linear(culprit_times_sorted, 90)
+        p95_ttc = _percentile_linear(culprit_times_sorted, 95)
+        p99_ttc = _percentile_linear(culprit_times_sorted, 99)
     else:
         mean_ttc = 0.0
         max_ttc = 0.0
+        p90_ttc = 0.0
+        p95_ttc = 0.0
+        p99_ttc = 0.0
 
     return {
         "total_tests_run": total_tests_run,
         "mean_feedback_time_min": round(mean_fb, 2),
         "mean_time_to_culprit_min": round(mean_ttc, 2),
         "max_time_to_culprit_min": round(max_ttc, 2),
+        "p90_time_to_culprit_min": round(p90_ttc, 2),
+        "p95_time_to_culprit_min": round(p95_ttc, 2),
+        "p99_time_to_culprit_min": round(p99_ttc, 2),
         "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
 

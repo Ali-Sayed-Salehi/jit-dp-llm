@@ -22,6 +22,7 @@ also tunes `bisection_strats.TKRB_TOP_K`.
 import os
 import json
 import random
+import math
 from datetime import datetime, timedelta, timezone
 import argparse
 import csv
@@ -710,6 +711,9 @@ def run_exhaustive_testing(commits):
             "mean_feedback_time_hr": 0.0,
             "mean_time_to_culprit_hr": 0.0,
             "max_time_to_culprit_hr": 0.0,
+            "p90_time_to_culprit_hr": 0.0,
+            "p95_time_to_culprit_hr": 0.0,
+            "p99_time_to_culprit_hr": 0.0,
             "total_cpu_time_hr": 0.0,
         }
 
@@ -758,11 +762,38 @@ def run_exhaustive_testing(commits):
         mean_fb_min = 0.0
 
     if culprit_times:
-        mean_ttc_min = sum(culprit_times) / len(culprit_times)
-        max_ttc_min = max(culprit_times)
+        culprit_times_sorted = sorted(float(x) for x in culprit_times)
+        mean_ttc_min = sum(culprit_times_sorted) / len(culprit_times_sorted)
+        max_ttc_min = culprit_times_sorted[-1]
+
+        def _percentile_linear(sorted_values, p: float) -> float:
+            if not sorted_values:
+                return 0.0
+            p = float(p)
+            if p <= 0.0:
+                return float(sorted_values[0])
+            if p >= 100.0:
+                return float(sorted_values[-1])
+            n = len(sorted_values)
+            pos = (n - 1) * (p / 100.0)
+            lo = int(math.floor(pos))
+            hi = int(math.ceil(pos))
+            if lo == hi:
+                return float(sorted_values[lo])
+            frac = pos - lo
+            return float(
+                sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac
+            )
+
+        p90_ttc_min = _percentile_linear(culprit_times_sorted, 90)
+        p95_ttc_min = _percentile_linear(culprit_times_sorted, 95)
+        p99_ttc_min = _percentile_linear(culprit_times_sorted, 99)
     else:
         mean_ttc_min = 0.0
         max_ttc_min = 0.0
+        p90_ttc_min = 0.0
+        p95_ttc_min = 0.0
+        p99_ttc_min = 0.0
 
     total_cpu_time_min = getattr(executor, "total_cpu_minutes", 0.0)
 
@@ -771,6 +802,9 @@ def run_exhaustive_testing(commits):
         "mean_feedback_time_min": round(mean_fb_min, 2),
         "mean_time_to_culprit_min": round(mean_ttc_min, 2),
         "max_time_to_culprit_min": round(max_ttc_min, 2),
+        "p90_time_to_culprit_min": round(p90_ttc_min, 2),
+        "p95_time_to_culprit_min": round(p95_ttc_min, 2),
+        "p99_time_to_culprit_min": round(p99_ttc_min, 2),
         "total_cpu_time_min": round(float(total_cpu_time_min), 2),
     }
 
@@ -799,6 +833,21 @@ def convert_result_minutes_to_hours(res):
             res["max_time_to_culprit_min"] / 60.0, 2
         )
         del res["max_time_to_culprit_min"]
+    if "p90_time_to_culprit_min" in res:
+        res["p90_time_to_culprit_hr"] = round(
+            res["p90_time_to_culprit_min"] / 60.0, 2
+        )
+        del res["p90_time_to_culprit_min"]
+    if "p95_time_to_culprit_min" in res:
+        res["p95_time_to_culprit_hr"] = round(
+            res["p95_time_to_culprit_min"] / 60.0, 2
+        )
+        del res["p95_time_to_culprit_min"]
+    if "p99_time_to_culprit_min" in res:
+        res["p99_time_to_culprit_hr"] = round(
+            res["p99_time_to_culprit_min"] / 60.0, 2
+        )
+        del res["p99_time_to_culprit_min"]
     if "total_cpu_time_min" in res:
         res["total_cpu_time_hr"] = round(
             res["total_cpu_time_min"] / 60.0, 2
@@ -1237,6 +1286,15 @@ def run_evaluation_mopt(
                         "max_time_to_culprit_hr": res.get(
                             "max_time_to_culprit_hr"
                         ),
+                        "p90_time_to_culprit_hr": res.get(
+                            "p90_time_to_culprit_hr"
+                        ),
+                        "p95_time_to_culprit_hr": res.get(
+                            "p95_time_to_culprit_hr"
+                        ),
+                        "p99_time_to_culprit_hr": res.get(
+                            "p99_time_to_culprit_hr"
+                        ),
                         "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                         "violates_baseline": (
                             (
@@ -1266,6 +1324,9 @@ def run_evaluation_mopt(
                 "mean_feedback_time_hr": selected["mean_feedback_time_hr"],
                 "mean_time_to_culprit_hr": selected["mean_time_to_culprit_hr"],
                 "max_time_to_culprit_hr": selected["max_time_to_culprit_hr"],
+                "p90_time_to_culprit_hr": selected.get("p90_time_to_culprit_hr"),
+                "p95_time_to_culprit_hr": selected.get("p95_time_to_culprit_hr"),
+                "p99_time_to_culprit_hr": selected.get("p99_time_to_culprit_hr"),
                 "total_cpu_time_hr": selected.get("total_cpu_time_hr"),
                 "violates_baseline": selected["violates_baseline"],
                 "best_params": selected["best_params"],
@@ -1336,6 +1397,9 @@ def run_evaluation_mopt(
                 "mean_feedback_time_hr": res.get("mean_feedback_time_hr"),
                 "mean_time_to_culprit_hr": res.get("mean_time_to_culprit_hr"),
                 "max_time_to_culprit_hr": res.get("max_time_to_culprit_hr"),
+                "p90_time_to_culprit_hr": res.get("p90_time_to_culprit_hr"),
+                "p95_time_to_culprit_hr": res.get("p95_time_to_culprit_hr"),
+                "p99_time_to_culprit_hr": res.get("p99_time_to_culprit_hr"),
                 "total_cpu_time_hr": res.get("total_cpu_time_hr"),
                 "violates_baseline": violates,
                 "best_params": {},  # no tunable params for TWSB

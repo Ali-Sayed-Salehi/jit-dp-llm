@@ -51,6 +51,17 @@ Most bisection strategies repeatedly “test an interval” `[lo..hi]` of commit
 
 The first interval test in a batch may be a **full suite** run (`is_batch_root=True`), and subsequent tests in that batch are **targeted** runs.
 
+## Output Metrics
+
+Each simulation run (for a single batching×bisection combo) produces a dict of summary metrics. In the JSON outputs written by `simulation.py`, time-based metrics are reported in **hours** (`*_hr`).
+
+- `total_tests_run`: total number of signature-group jobs executed across all suite runs (batch roots + bisection steps).
+- `total_cpu_time_hr`: sum of all scheduled signature-group job durations (independent of parallelism).
+- `mean_feedback_time_hr`: mean time from commit timestamp to first “feedback” time across commits that receive feedback.
+- `mean_time_to_culprit_hr`: mean time-to-culprit across detected true regressors.
+- `max_time_to_culprit_hr`: worst-case time-to-culprit across detected true regressors.
+- `p90_time_to_culprit_hr` / `p95_time_to_culprit_hr` / `p99_time_to_culprit_hr`: percentile time-to-culprit values computed over the same time-to-culprit distribution.
+
 ## Batching Strategies (`batch_strats.py`)
 
 Batching strategies determine when to “flush” a batch and call a bisection strategy on that batch. They all share:
@@ -185,3 +196,9 @@ All bisection strategies share:
 `simulation.py` uses Optuna to tune batching parameters. For the `TKRB` bisection strategy it also tunes `TKRB_TOP_K` and sets the module-level value in `bisection_strats.py` before each simulation run.
 
 The Optuna objective is multi-objective: minimize `(total_tests_run, mean_time_to_culprit_hr)`.
+
+After Optuna finishes a study for a given batching×bisection combo, we select a single configuration from the Pareto front:
+
+- Prefer Pareto points whose `mean_time_to_culprit_hr` is **<=** the baseline mean TTC (baseline is `TWSB + PAR` when included).
+- If any such points exist, choose the one with the smallest `total_tests_run` (tie-break by `mean_time_to_culprit_hr`).
+- If none exist, choose the one with the smallest `mean_time_to_culprit_hr` (tie-break by `total_tests_run`).
