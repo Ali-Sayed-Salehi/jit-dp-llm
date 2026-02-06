@@ -95,8 +95,8 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
 ### RASB / RASB-s - Risk-Adaptive Stream Batching
 - **Trigger rule (RASB)**: grow a batch until its predicted probability of containing at least one failure crosses a threshold.
   - Assumes independent per-commit failure probabilities (`risk_i`).
-  - Maintains `prod_clean = Π(1 - risk_i)` over the current batch.
-  - Flushes when `fail_prob = 1 - prod_clean >= threshold`.
+  - Computes `fail_prob = 1 - Π(1 - risk_i)`.
+  - Implementation detail: uses log-survival mass `log_survival = Σ log(1 - risk_i)` (via `log1p`) and `fail_prob = 1 - exp(log_survival)` for numerical stability.
   - Schedules the initial run at the timestamp of the last commit in the batch.
 - **Intuition**: produces smaller batches when risk is high (for faster detection/localization) and larger batches when risk is low (for lower testing overhead).
 
@@ -116,7 +116,7 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
 - **Trigger rule (RAPB)**: like RASB, but “ages” each commit’s risk the longer it has been waiting in the current batch.
   - For each commit, compute a waiting time in hours since it entered the batch.
   - Convert base risk into an aged risk `aged_p` using an exponential term controlled by `aging_rate`.
-  - Recompute a batch failure probability from the aged risks, and flush when it exceeds `threshold_T`.
+  - Recompute `fail_prob = 1 - Π(1 - aged_p)` from the aged risks (computed via log-survival mass), and flush when it exceeds `threshold_T`.
   - Flush time is the timestamp of the most recent commit.
 - **Intuition**: prevents very old commits from waiting indefinitely when the stream is mostly low-risk (aging increases urgency over time).
 

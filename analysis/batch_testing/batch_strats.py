@@ -24,6 +24,37 @@ from bisection_strats import (
 
 logger = logging.getLogger(__name__)
 
+def _accumulate_log_survival(log_survival: float, p: float) -> float:
+    """
+    Update log survival mass:
+
+        log_survival := Σ log(1 - p_i)
+
+    using `log1p` for numerical stability.
+
+    `p` is expected to be in [0, 1]. If p == 1, survival becomes 0 (log=-inf).
+    """
+    p = float(p)
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"Risk probabilities must be in [0,1], got {p}")
+    if p >= 1.0:
+        return float("-inf")
+    if math.isinf(log_survival) and log_survival < 0:
+        return float("-inf")
+    return float(log_survival + math.log1p(-p))
+
+
+def _combined_probability_from_log_survival(log_survival: float) -> float:
+    """
+    Convert log survival mass to combined probability:
+
+        combined = 1 - exp(log_survival)
+    """
+    if math.isinf(log_survival) and log_survival < 0:
+        return 1.0
+    return float(1.0 - math.exp(float(log_survival)))
+
+
 def build_results(total_tests_run, culprit_times, feedback_times, total_cpu_time_min):
     """
     Build the standard results payload returned by batching simulations.
@@ -549,7 +580,7 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
     executor = TestExecutor(num_workers)
 
     current_batch = []
-    prod_clean = 1.0
+    log_survival = 0.0
     current_end_time = None
 
     for idx, c in enumerate(commits, start=1):
@@ -557,8 +588,8 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
         current_batch.append(c)
         current_end_time = c["ts"]
 
-        prod_clean *= (1.0 - p)
-        fail_prob = 1.0 - prod_clean
+        log_survival = _accumulate_log_survival(log_survival, p)
+        fail_prob = _combined_probability_from_log_survival(log_survival)
 
         if fail_prob >= threshold:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
@@ -572,7 +603,7 @@ def simulate_rasb_with_bisect(commits, bisect_fn, threshold, num_workers):
                 fail_prob,
             )
             current_batch = []
-            prod_clean = 1.0
+            log_survival = 0.0
             current_end_time = None
 
     if current_batch:
@@ -600,16 +631,16 @@ def simulate_rasb_s_with_bisect(commits, bisect_fn, threshold, num_workers):
         return build_results(0, [], {}, 0.0)
 
     start = 0
-    prod_clean = 1.0
+    log_survival = 0.0
 
     for idx, c in enumerate(commits):
         p = c["risk"]
-        prod_clean *= (1.0 - p)
-        fail_prob = 1.0 - prod_clean
+        log_survival = _accumulate_log_survival(log_survival, p)
+        fail_prob = _combined_probability_from_log_survival(log_survival)
         if fail_prob >= threshold:
             batches.append((start, idx, c["ts"]))
             start = idx + 1
-            prod_clean = 1.0
+            log_survival = 0.0
 
     if start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
@@ -767,7 +798,7 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
         entry_times.append(now_ts)
         current_end_time = now_ts
 
-        prod_clean = 1.0
+        log_survival = 0.0
         for commit, entered_at in zip(current_batch, entry_times):
             wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
             base_risk = commit["risk"]
@@ -775,9 +806,9 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
             decay = math.exp(-aging_rate * wait_hours)
             aged_p = 1.0 - (1.0 - base_risk) * decay
 
-            prod_clean *= (1.0 - aged_p)
+            log_survival = _accumulate_log_survival(log_survival, aged_p)
 
-        fail_prob = 1.0 - prod_clean
+        fail_prob = _combined_probability_from_log_survival(log_survival)
 
         if fail_prob >= threshold_T:
             total_tests_run, culprit_times, feedback_times = bisect_fn(
@@ -828,15 +859,15 @@ def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
         current_batch_indices.append(idx)
         entry_times.append(now_ts)
 
-        prod_clean = 1.0
+        log_survival = 0.0
         for commit_idx, entered_at in zip(current_batch_indices, entry_times):
             wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
             base_risk = float(commits[commit_idx]["risk"])
             decay = math.exp(-aging_rate * wait_hours)
             aged_p = 1.0 - (1.0 - base_risk) * decay
-            prod_clean *= (1.0 - aged_p)
+            log_survival = _accumulate_log_survival(log_survival, aged_p)
 
-        fail_prob = 1.0 - prod_clean
+        fail_prob = _combined_probability_from_log_survival(log_survival)
         if fail_prob >= threshold_T:
             batches.append((start, idx, now_ts))
             start = idx + 1
