@@ -1140,6 +1140,50 @@ def run_test_suite(executor: TestExecutor, requested_start_time, durations_minut
     return last_finish
 
 
+def schedule_test_suite_jobs(executor: TestExecutor, requested_start_time, durations_minutes):
+    """
+    Schedule a suite like `run_test_suite`, but return per-job finish times.
+
+    This is used by batching strategies that want to react to individual
+    signature-group job completions (e.g., trigger bisection as soon as a
+    failing signature-group is detected), instead of waiting for the entire
+    suite to complete.
+
+    Returns
+    -------
+    (job_finishes, last_finish_time)
+
+    where `job_finishes` is a list of (signature_group_id, finish_time) pairs.
+    """
+    if not durations_minutes:
+        return [], requested_start_time
+
+    # Build must complete before the suite's jobs become ready.
+    ready_time = requested_start_time + timedelta(minutes=float(_build_time_minutes))
+
+    job_finishes = []
+    last_finish = ready_time
+    for entry in durations_minutes:
+        sig_group_id = None
+        dur = entry
+        if isinstance(entry, (tuple, list)) and len(entry) == 2:
+            sig_group_id, dur = entry[0], entry[1]
+        elif isinstance(entry, dict):
+            sig_group_id = entry.get("signature_group_id")
+            dur = entry.get("duration_minutes")
+
+        finish_time = executor.schedule(
+            ready_time,
+            dur,
+            signature_group_id=sig_group_id,
+        )
+        job_finishes.append((sig_group_id, finish_time))
+        if finish_time > last_finish:
+            last_finish = finish_time
+
+    return job_finishes, last_finish
+
+
 def batch_has_regressor(batch):
     return any(c["true_label"] for c in batch)
 
