@@ -61,8 +61,6 @@ DEFAULT_WORKER_POOLS = {
 
 # Fallbacks and knobs (configured by the main simulation script).
 _default_test_duration_min = 20.0
-# -1 means "use all available signature-groups" (no downsampling).
-_full_suite_signatures_per_run = -1
 # Constant build-time overhead applied once per suite run (minutes).
 _build_time_minutes = 90.0  # 1.5 hours
 # When a signature-group cannot be mapped to a platform (or platform metadata is
@@ -98,7 +96,6 @@ logger = logging.getLogger(__name__)
 
 def configure_bisection_defaults(
     default_test_duration_min=None,
-    full_suite_signatures_per_run=None,
     build_time_minutes=None,
     unknown_platform_pool=None,
 ):
@@ -110,10 +107,6 @@ def configure_bisection_defaults(
     default_test_duration_min:
         Fallback duration (minutes) used when a signature-group ID has no
         recorded duration in `sig_group_job_durations.csv`.
-    full_suite_signatures_per_run:
-        Caps the number of signature-groups used for a "full suite" run:
-          - `-1` => use all available signature-groups
-          - `N>0` => randomly sample N signature-groups (models partial suite runs)
     build_time_minutes:
         Constant build-time overhead (minutes) added once per suite run (both
         batch root runs and bisection-step runs).
@@ -125,23 +118,10 @@ def configure_bisection_defaults(
     These knobs are typically set by `simulation.py` so all strategies share
     the same configuration.
     """
-    global _default_test_duration_min, _full_suite_signatures_per_run, _build_time_minutes, _unknown_platform_pool
+    global _default_test_duration_min, _build_time_minutes, _unknown_platform_pool
 
     if default_test_duration_min is not None:
         _default_test_duration_min = float(default_test_duration_min)
-
-    if full_suite_signatures_per_run is not None:
-        val = int(full_suite_signatures_per_run)
-        if val < 0:
-            # -1 => use all signature-groups (no cap)
-            _full_suite_signatures_per_run = -1
-        elif val == 0:
-            raise ValueError(
-                "full_suite_signatures_per_run must be a positive integer "
-                "or -1 to indicate 'use all signature-groups'; got 0."
-            )
-        else:
-            _full_suite_signatures_per_run = val
 
     if build_time_minutes is not None:
         val = float(build_time_minutes)
@@ -161,10 +141,8 @@ def configure_bisection_defaults(
 
     logger.info(
         "Configured bisection defaults: default_test_duration_min=%.2f, "
-        "full_suite_signatures_per_run=%s, build_time_minutes=%.2f, "
-        "unknown_platform_pool=%s",
+        "build_time_minutes=%.2f, unknown_platform_pool=%s",
         _default_test_duration_min,
-        str(_full_suite_signatures_per_run),
         float(_build_time_minutes),
         str(_unknown_platform_pool),
     )
@@ -789,9 +767,7 @@ def get_batch_signature_durations():
     """
     Suite for a "full suite" perf run (signature-groups).
 
-    By default this is all signature-groups from `sig_group_job_durations.csv`,
-    but it can be
-    capped to a fixed-size random subset via `_full_suite_signatures_per_run`.
+    By default this is all signature-groups from `sig_group_job_durations.csv`.
 
     This suite is used for the *first* run of a batch when bisection strategies
     are invoked with `is_batch_root=True`.
@@ -801,14 +777,7 @@ def get_batch_signature_durations():
     if not BATCH_SIG_GROUP_IDS:
         return [(None, float(_default_test_duration_min))]
 
-    limit = _full_suite_signatures_per_run
-    # Non-negative limit => cap via random subset when smaller than the
-    # available suite size. Negative (e.g., -1) means "use all".
-    if isinstance(limit, int) and limit >= 0 and len(BATCH_SIG_GROUP_IDS) > limit:
-        sig_group_ids = random.sample(BATCH_SIG_GROUP_IDS, limit)
-    else:
-        sig_group_ids = BATCH_SIG_GROUP_IDS
-
+    sig_group_ids = BATCH_SIG_GROUP_IDS
     return [(gid, _get_sig_group_duration_minutes(gid)) for gid in sig_group_ids]
 
 

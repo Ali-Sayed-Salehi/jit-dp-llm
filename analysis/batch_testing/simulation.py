@@ -95,10 +95,6 @@ BUILD_TIME_MINUTES = BUILD_TIME_HOURS * 60.0
 # metadata (see datasets/mozilla_perf/all_signatures.jsonl).
 WORKER_POOLS = dict(bisection_mod.DEFAULT_WORKER_POOLS)
 
-# Number of perf signature-groups to run for each "full suite" batch test step.
-# If this is -1 or larger than the available groups, all groups are used.
-FULL_SUITE_SIGNATURES_PER_RUN = 200
-
 # Global toggle for lightweight, debugging-oriented runs.
 DRY_RUN = False
 
@@ -374,25 +370,6 @@ def get_args():
             "Worker pool key to use when a signature-group/job cannot be mapped to a "
             "platform (missing signature-group id, missing signature metadata, or "
             "unrecognized machine_platform)."
-        ),
-    )
-    parser.add_argument(
-        "--full-suite-sigs-per-run",
-        type=int,
-        default=FULL_SUITE_SIGNATURES_PER_RUN,
-        help=(
-            "Number of perf signature-groups to run per 'full suite' batch test step "
-            "(-1 means use all groups; positive values cap via random subset)."
-        ),
-    )
-    parser.add_argument(
-        "--dont-use-all-tests-per-batch",
-        action="store_true",
-        help=(
-            "If set, each initial batch test run executes only a random subset "
-            "of perf signature-groups, with size equal to --full-suite-sigs-per-run. "
-            "By default (flag not set), all signature-groups that appear at least "
-            "once within the cutoff window are executed."
         ),
     )
     parser.add_argument(
@@ -675,19 +652,8 @@ def run_exhaustive_testing(commits):
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        # Full suite, but capped to a fixed random subset of signature-groups
-        # if a non-negative cap is configured. A negative value (e.g., -1)
-        # means "use all signature-groups".
-        limit = FULL_SUITE_SIGNATURES_PER_RUN
-        if limit is None:
-            raise RuntimeError(
-                "FULL_SUITE_SIGNATURES_PER_RUN must not be None in "
-                "run_exhaustive_testing; use -1 to indicate 'all signature-groups'."
-            )
-        if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS_ET) > limit:
-            durations = random.sample(BATCH_SIGNATURE_DURATIONS_ET, limit)
-        else:
-            durations = BATCH_SIGNATURE_DURATIONS_ET
+        # Full suite: run all signature-groups in sig_group_job_durations.csv.
+        durations = BATCH_SIGNATURE_DURATIONS_ET
         finish_time = run_test_suite(executor, submit_time, durations)
 
         total_tests_run += len(durations)
@@ -1769,7 +1735,6 @@ def main():
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
-        "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
@@ -1782,8 +1747,6 @@ def main():
         int(getattr(args, "workers_mac", 0)),
         str(getattr(args, "unknown_platform_pool", "")),
         str(getattr(args, "build_time_minutes", None)),
-        str(args.full_suite_sigs_per_run),
-        str(args.dont_use_all_tests_per_batch),
         str(getattr(args, "batching", "all")),
         str(getattr(args, "bisection", "all")),
         str(bool(getattr(args, "skip_exhaustive_testing", False))),
@@ -1792,8 +1755,8 @@ def main():
         RANDOM_SEED,
     )
 
-    # Apply CLI overrides to global WORKER_POOLS and FULL_SUITE_SIGNATURES_PER_RUN
-    global WORKER_POOLS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
+    # Apply CLI overrides to global WORKER_POOLS
+    global WORKER_POOLS, DRY_RUN
     if args.num_test_workers is not None:
         # Single shared pool (legacy mode)
         WORKER_POOLS = {"default": int(args.num_test_workers)}
@@ -1816,28 +1779,6 @@ def main():
     bad_pools = {k: v for k, v in WORKER_POOLS.items() if int(v) <= 0}
     if bad_pools:
         raise ValueError(f"All worker pool sizes must be positive; got: {bad_pools}")
-    # By default, each initial batch test run executes all signature-groups
-    # that appear at least once within the cutoff window. If the user
-    # passes --dont-use-all-tests-per-batch, we instead cap each run
-    # to a random subset whose size is --full-suite-sigs-per-run.
-    if args.dont_use_all_tests_per_batch:
-        if args.full_suite_sigs_per_run is not None:
-            val = int(args.full_suite_sigs_per_run)
-            if val < 0:
-                FULL_SUITE_SIGNATURES_PER_RUN = -1
-            elif val == 0:
-                raise ValueError(
-                    "--full-suite-sigs-per-run must be a positive integer "
-                    "or -1 to indicate 'use all signature-groups'; got 0."
-                )
-            else:
-                FULL_SUITE_SIGNATURES_PER_RUN = val
-        else:
-            # Fall back to default cap (may itself be -1 or a positive cap).
-            FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
-    else:
-        # Default: no cap; use all signature-groups from the cutoff-window union.
-        FULL_SUITE_SIGNATURES_PER_RUN = -1
 
     DRY_RUN = bool(getattr(args, "dry_run", False))
 
@@ -1847,7 +1788,6 @@ def main():
     # Propagate defaults/knobs to bisection_strats
     configure_bisection_defaults(
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
-        full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
         build_time_minutes=build_time_minutes,
         unknown_platform_pool=unknown_platform_pool,
     )
@@ -1925,8 +1865,7 @@ def main():
 
     # Restrict the "full suite" batch runs to the union of signature-groups
     # that actually appear at least once within the cutoff windows used
-    # for EVAL and FINAL. Whether we run all of them or a random subset
-    # is controlled by FULL_SUITE_SIGNATURES_PER_RUN.
+    # for EVAL and FINAL.
     cutoff_revs = {
         c["commit_id"] for c in eval_commits
     }.union(

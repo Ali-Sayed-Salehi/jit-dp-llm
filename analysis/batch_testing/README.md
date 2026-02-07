@@ -23,7 +23,7 @@ The simulator models two kinds of test runs:
 
 1. **Full suite run** (“batch root”):
    - Represents a batch test run that executes a “full suite” of perf signature-groups.
-   - In code: `get_batch_signature_durations()` decides what “full suite” means (all signature-groups or a capped/subsampled set).
+   - In code: `get_batch_signature_durations()` defines the “full suite” (all signature-groups, optionally restricted to the cutoff-window union via `configure_full_suite_signatures_union()`).
 
 2. **Per-signature-group run** (“bisection step”):
    - Represents a follow-up interval/prefix test for a *single failing signature-group* (one job per logical run).
