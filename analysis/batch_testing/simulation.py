@@ -102,6 +102,49 @@ FULL_SUITE_SIGNATURES_PER_RUN = 200
 # Global toggle for lightweight, debugging-oriented runs.
 DRY_RUN = False
 
+# Timeliness metric selection for Optuna objectives and Pareto-point selection.
+# The CLI flag `--optimize-for-timeliness-metric` resolves to one of these JSON
+# result keys (all in hours).
+DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC = "max_ttc"
+TIMELINESS_METRIC_ALIASES = {
+    # Common shorthands (also used by analysis/batch_testing/plot.py).
+    "mft": "mean_feedback_time_hr",
+    "max_ttc": "max_time_to_culprit_hr",
+    "mean_ttc": "mean_time_to_culprit_hr",
+    "p90_ttc": "p90_time_to_culprit_hr",
+    "p95_ttc": "p95_time_to_culprit_hr",
+    "p99_ttc": "p99_time_to_culprit_hr",
+    # Back-compat / convenience aliases.
+    "max": "max_time_to_culprit_hr",
+    "mean": "mean_time_to_culprit_hr",
+}
+VALID_TIMELINESS_METRIC_KEYS = set(TIMELINESS_METRIC_ALIASES.values())
+
+
+def resolve_timeliness_metric_key(raw: str) -> str:
+    """
+    Resolve a user-provided timeliness metric string into a result dict key.
+
+    Accepts:
+      - shorthands like "max_ttc", "p95_ttc" (case/space/hyphen-insensitive), or
+      - a full JSON key like "p95_time_to_culprit_hr".
+    """
+    if raw is None:
+        raw = DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC
+
+    normalized = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in TIMELINESS_METRIC_ALIASES:
+        return TIMELINESS_METRIC_ALIASES[normalized]
+    if normalized in VALID_TIMELINESS_METRIC_KEYS:
+        return normalized
+
+    choices = ", ".join(sorted(set(TIMELINESS_METRIC_ALIASES.keys())))
+    keys = ", ".join(sorted(VALID_TIMELINESS_METRIC_KEYS))
+    raise ValueError(
+        f"Unknown timeliness metric {raw!r}. Use one of: {choices} "
+        f"(or a full result key: {keys})."
+    )
+
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
     ("TWB-s",  simulate_twb_s_with_bisect,      BATCH_HOURS),
@@ -215,6 +258,16 @@ def get_args():
         type=int,
         default=200,
         help="Number of Optuna trials per (batch,bisect) combo.",
+    )
+    parser.add_argument(
+        "--optimize-for-timeliness-metric",
+        default=DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC,
+        help=(
+            "Timeliness metric to minimize as the 2nd Optuna objective and use for "
+            "Pareto-point selection (replaces max TTC). Examples: max_ttc (default), "
+            "mean_ttc, p95_ttc, p99_ttc, mft (or a full key like "
+            "p95_time_to_culprit_hr)."
+        ),
     )
     parser.add_argument(
         "--input-json-eval",
@@ -831,6 +884,7 @@ def choose_best_overall_from_items(items):
 def run_evaluation_mopt(
     INPUT_JSON_EVAL,
     n_trials,
+    optimize_for_timeliness_metric="max_time_to_culprit_hr",
     selected_batching=None,
     selected_bisection=None,
     run_exhaustive_testing_et=True,
@@ -862,9 +916,10 @@ def run_evaluation_mopt(
         ) from e
 
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s",
         INPUT_JSON_EVAL,
         n_trials,
+        optimize_for_timeliness_metric,
     )
 
     selected_batching_set = (
@@ -921,6 +976,7 @@ def run_evaluation_mopt(
     baseline_fb = baseline.get("mean_feedback_time_hr", None)
     baseline_mean_ttc = baseline.get("mean_time_to_culprit_hr", None)
     baseline_tests = baseline.get("total_tests_run", None)
+    baseline_timeliness = baseline.get(optimize_for_timeliness_metric, None)
 
     def time_saved_pct(base, val):
         return (
@@ -929,23 +985,40 @@ def run_evaluation_mopt(
             else 0.0
         )
 
-    def pick_best(pareto, baseline_max_ttc_local):
+    def _float_or_inf(x):
+        try:
+            if x is None:
+                return float("inf")
+            return float(x)
+        except (TypeError, ValueError):
+            return float("inf")
+
+    def pick_best(pareto, baseline_timeliness_local):
         if not pareto:
             return None
         feas = [
             r
             for r in pareto
             if (
-                baseline_max_ttc_local is None
-                or r["max_time_to_culprit_hr"] <= baseline_max_ttc_local
+                baseline_timeliness_local is None
+                or _float_or_inf(r.get(optimize_for_timeliness_metric))
+                <= _float_or_inf(baseline_timeliness_local)
             )
         ]
         if feas:
             return min(
-                feas, key=lambda r: (r["total_tests_run"], r["max_time_to_culprit_hr"])
+                feas,
+                key=lambda r: (
+                    _float_or_inf(r.get("total_tests_run")),
+                    _float_or_inf(r.get(optimize_for_timeliness_metric)),
+                ),
             )
         return min(
-            pareto, key=lambda r: (r["max_time_to_culprit_hr"], r["total_tests_run"])
+            pareto,
+            key=lambda r: (
+                _float_or_inf(r.get(optimize_for_timeliness_metric)),
+                _float_or_inf(r.get("total_tests_run")),
+            ),
         )
 
     # unified output (same shape as before)
@@ -953,6 +1026,7 @@ def run_evaluation_mopt(
         "Exhaustive Testing (ET)": et_results,
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
+        "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
     }
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
@@ -1069,8 +1143,8 @@ def run_evaluation_mopt(
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
                 return (
-                    res.get("total_tests_run", float("inf")),
-                    res.get("max_time_to_culprit_hr", float("inf")),
+                    _float_or_inf(res.get("total_tests_run")),
+                    _float_or_inf(res.get(optimize_for_timeliness_metric)),
                 )
 
             study = optuna.create_study(directions=["minimize", "minimize"])
@@ -1188,7 +1262,7 @@ def run_evaluation_mopt(
                     }
                 )
 
-            selected = pick_best(pareto, baseline_max_ttc)
+            selected = pick_best(pareto, baseline_timeliness)
             if selected is None:
                 logger.warning(
                     "No Pareto-optimal configuration selected for combo %s; skipping",
@@ -1334,6 +1408,16 @@ def run_evaluation_mopt(
     # Per-metric bests
     out_eval["best_by_total_tests"] = (
         min(combo_items, key=lambda kv: kv[1]["total_tests_run"])[0]
+        if combo_items
+        else "-"
+    )
+    out_eval["best_by_timeliness_metric"] = (
+        min(
+            combo_items,
+            key=lambda kv: _float_or_inf(
+                kv[1].get(optimize_for_timeliness_metric, float("inf"))
+            ),
+        )[0]
         if combo_items
         else "-"
     )
@@ -1636,8 +1720,13 @@ def main():
     random.seed(RANDOM_SEED)
 
     logger.info("Starting batch-testing simulation CLI")
+
+    timeliness_metric_key = resolve_timeliness_metric_key(
+        getattr(args, "optimize_for_timeliness_metric", DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC)
+    )
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
+        "optimize_for_timeliness_metric=%s, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
@@ -1647,6 +1736,7 @@ def main():
         args.mopt_trials,
         args.final_only,
         str(args.num_test_workers),
+        timeliness_metric_key,
         int(getattr(args, "workers_android", 0)),
         int(getattr(args, "workers_windows", 0)),
         int(getattr(args, "workers_linux", 0)),
@@ -1846,6 +1936,7 @@ def main():
     eval_payload = run_evaluation_mopt(
         INPUT_JSON_EVAL,
         n_trials=args.mopt_trials,
+        optimize_for_timeliness_metric=timeliness_metric_key,
         selected_batching=selected_batching,
         selected_bisection=selected_bisection,
         run_exhaustive_testing_et=run_et,
