@@ -5,8 +5,8 @@ This folder contains a simulation of *batch testing* and *bisection* policies ov
 The code intentionally separates:
 
 - **Batching strategies** (`analysis/batch_testing/batch_strats.py`): decide *which commits are grouped together* and *when a batch test run happens*.
-- **Bisection strategies** (`analysis/batch_testing/bisection_strats.py`): given a batch (already known to contain a failure), decide *which intervals/prefixes to test* to identify culprit commits.
-- **Execution/time model** (`analysis/batch_testing/bisection_strats.py`): `TestExecutor` models per-platform worker pools; `run_test_suite` schedules suites; `_run_interval_and_update` implements “test this interval” semantics shared by multiple strategies.
+- **Bisection strategies** (`analysis/batch_testing/batch_strats.py`): per-failing-signature-group bisection processes that decide *which intervals/prefixes to test* to identify culprit commits.
+- **Execution/time model** (`analysis/batch_testing/bisection_strats.py`): perf metadata loading + `TestExecutor` (per-platform worker pools); `run_test_suite` / `schedule_test_suite_jobs` schedule suites and return completion times.
 
 ## Core Objects and Semantics
 
@@ -25,9 +25,9 @@ The simulator models two kinds of test runs:
    - Represents a batch test run that executes a “full suite” of perf signature-groups.
    - In code: `get_batch_signature_durations()` decides what “full suite” means (all signature-groups or a capped/subsampled set).
 
-2. **Targeted run** (“bisection step”):
-   - Represents a follow-up run using only the **failing signature-group suite** for the batch (union of failing signature-groups across regressors in that batch).
-   - In code: `get_failing_signature_durations_for_batch(batch)` computes the durations for that suite.
+2. **Per-signature-group run** (“bisection step”):
+   - Represents a follow-up interval/prefix test for a *single failing signature-group* (one job per logical run).
+   - In code: bisection steps schedule `get_signature_durations_for_ids([sig_group_id])` from `batch_strats.py`.
 
 Each **logical run** (full suite or targeted) consumes “CPU cost” equal to the number of signature-groups in its suite, and occupies worker capacity according to the suite’s per-job durations.
 
@@ -44,12 +44,12 @@ Additionally, each logical run includes a constant **build-time overhead** (defa
 This is how “parallel test capacity K” is modeled for all strategies.
 
 ### Interval testing (the shared primitive)
-Most bisection strategies repeatedly “test an interval” `[lo..hi]` of commits in a batch using `_run_interval_and_update`:
+Most bisection strategies repeatedly “test an interval” `[lo..hi]` of commits in a batch, *per failing signature-group*:
 
 - **If the run is clean**, it marks commits in `[lo..hi]` as `clean` and records their feedback time.
 - **If the run fails**, it means at least one commit in `[lo..hi]` is a regressor that has not yet been marked as `defect_found`.
 
-The first interval test in a batch may be a **full suite** run (`is_batch_root=True`), and subsequent tests in that batch are **targeted** runs.
+Each interval test schedules a single signature-group job and uses its completion time as the step finish time.
 
 ## Output Metrics
 
@@ -67,7 +67,7 @@ Each simulation run (for a single batching×bisection combo) produces a dict of 
 Batching strategies determine when to “flush” a batch and call a bisection strategy on that batch. They all share:
 
 - A single `TestExecutor` for the whole simulation run.
-- The same bisection function signature: `bisect_fn(batch, batch_end_time, ...)`.
+- The same bisection selector (`bisect_fn`): a string id like `TOB`, `PAR`, `RWAB`, `RWAB-LS`, `TKRB`, `SWB`, `SWF`.
 
 ### Common mechanics (flush boundaries, suites, and the “-s” variants)
 For all strategies, the batching policy defines **batch boundaries**: contiguous slices of the commit stream. When a boundary is reached, the policy schedules an initial “batch test” and (if needed) launches bisection to localize culprits within that slice.
@@ -77,23 +77,23 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
   - Time-window policies typically start the run at the *window end time* (even if the last commit arrived earlier).
   - Size/risk stream policies typically start the run at the *timestamp of the last commit in the batch*.
 - **What the initial run executes**:
-  - Non-`-s` variants: the bisection strategy is responsible for the initial “batch root” run (`is_batch_root=True`), which uses `get_batch_signature_durations()` (often “full suite”, optionally capped/downsampled).
-  - `-s` variants: the batching strategy itself runs a **subset suite** for the batch and only triggers bisection if that subset would reveal a failure. Implementation detail: the `-s` strategies all route through `_simulate_signature_union_driver(...)`, which:
+  - Non-`-s` variants: the batching policy runs the “full suite” for the batch (via `get_batch_signature_durations()`), then triggers bisection per failing signature-group as soon as that signature-group job finishes (“streaming detection”).
+  - `-s` variants: the batching policy runs a **subset suite** for the batch and triggers bisection only when that subset would reveal a failure. Implementation detail: the `-s` strategies all route through `_simulate_signature_union_driver(...)`, which:
     - Builds the subset suite as the union of signature-groups Mozilla actually ran for revisions in the batch (`perf_jobs_per_revision_details_rectified.jsonl`).
     - Detects a regressor in that batch only if the subset suite intersects that regressor’s failing signature-groups (`alert_summary_fail_perf_sigs.csv` → `sig_groups.jsonl`).
-    - Invokes `bisect_fn(..., is_batch_root=False)` because the “batch root” suite has already been run by the batching policy.
+    - Anchors bisection ranges using the last revision where each signature-group was previously exercised.
 
 ### TWB / TWB-s - Time-Window Batching
 - **Trigger rule (TWB)**: partition the stream into fixed wall-clock windows of size `batch_hours` based on commit timestamps.
   - Commits with `ts` in `[window_start, window_end)` are collected into the same batch.
   - When the window ends, we flush and schedule the initial run at `window_end` (not at the last commit time).
-- **Initial suite (TWB)**: the bisection strategy runs the batch root suite (typically “full suite”) at the flush time with `is_batch_root=True`.
+- **Initial suite (TWB)**: the batching policy runs the “full suite” at the flush time and triggers bisection per failing signature-group job completion.
 - **Why this matters**: window end alignment can introduce “waiting time” (extra latency) for commits near the beginning of a window, but it also prevents tiny batches during bursty periods.
 
 - **TWB-s**: same window boundaries, but the initial run is a subset suite:
   - **Subset construction**: union of signature-groups actually tested by Mozilla across the revisions in the window.
   - **Detection semantics**: a regressor in the window is only detected when the subset suite overlaps at least one of its failing signature-groups; otherwise, no bisection is triggered for that regressor at that window boundary.
-  - **Bisection call**: when detection happens, bisection is invoked with `is_batch_root=False` (because the subset suite already ran).
+  - **Bisection trigger**: when detection happens, per-signature-group bisections start from that signature-group job’s completion time.
 
 ### FSB / FSB-s - Fixed-Size Batching
 - **Trigger rule (FSB)**: group commits into contiguous chunks of size `batch_size`.

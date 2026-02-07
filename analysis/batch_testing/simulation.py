@@ -12,8 +12,8 @@ Key references:
   - `analysis/batch_testing/README.md` for a detailed explanation of each
     strategy and the shared execution model.
   - `analysis/batch_testing/batch_strats.py` for batching implementations.
-  - `analysis/batch_testing/bisection_strats.py` for bisection implementations,
-    metadata loading, and the central test executor.
+  - `analysis/batch_testing/bisection_strats.py` for perf metadata loading and
+    the central test executor used by all strategies.
 
 The Optuna mode (`run_evaluation_mopt`) tunes batching parameters. For TKRB it
 also tunes `bisection_strats.TKRB_TOP_K`.
@@ -49,13 +49,6 @@ from batch_strats import (
 )
 
 from bisection_strats import (
-    time_ordered_bisect,
-    exhaustive_parallel,
-    risk_weighted_adaptive_bisect,
-    risk_weighted_adaptive_bisect_log_survival,
-    topk_risk_first_bisect,
-    sequential_walk_backward_bisect,
-    sequential_walk_forward_bisect,
     TestExecutor,
     run_test_suite,
     configure_bisection_defaults,
@@ -163,13 +156,15 @@ BATCHING_STRATEGIES = [
 ]
 
 BISECTION_STRATEGIES = [
-    ("TOB",  time_ordered_bisect),
-    ("PAR",  exhaustive_parallel),
-    ("RWAB", risk_weighted_adaptive_bisect),
-    ("RWAB-LS", risk_weighted_adaptive_bisect_log_survival),
-    ("TKRB", topk_risk_first_bisect),
-    ("SWB",  sequential_walk_backward_bisect),
-    ("SWF",  sequential_walk_forward_bisect),
+    # Bisection strategies are implemented as per-signature-group processes in
+    # `batch_strats.py`. Here we pass a stable string id through to batching sims.
+    ("TOB", "TOB"),
+    ("PAR", "PAR"),
+    ("RWAB", "RWAB"),
+    ("RWAB-LS", "RWAB-LS"),
+    ("TKRB", "TKRB"),
+    ("SWB", "SWB"),
+    ("SWF", "SWF"),
 ]
 
 # Seed will be finalized in main(), but we also provide a
@@ -965,7 +960,7 @@ def run_evaluation_mopt(
         )
         baseline = simulate_twsb_with_bisect(
             base_commits_for_context,
-            exhaustive_parallel,
+            "PAR",
             None,
             WORKER_POOLS,
         )
@@ -1521,7 +1516,7 @@ def run_final_test_unified(
     baseline_final = {}
     if baseline_selected:
         baseline_final = simulate_twsb_with_bisect(
-            base_commits_final, exhaustive_parallel, None, WORKER_POOLS
+            base_commits_final, "PAR", None, WORKER_POOLS
         )
         baseline_final = convert_result_minutes_to_hours(baseline_final)
 

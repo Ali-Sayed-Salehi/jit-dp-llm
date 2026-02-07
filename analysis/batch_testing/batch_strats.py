@@ -1140,7 +1140,33 @@ class _TKRBProcess(_SigGroupBisectProcess):
         raise RuntimeError(f"TKRBProcess: unexpected op {op!r}")
 
 
-_SIG_GROUP_BISECT_PROCESS_BY_FN_NAME = {
+_CANONICAL_BISECTION_IDS = ("TOB", "PAR", "RWAB", "RWAB-LS", "TKRB", "SWB", "SWF")
+
+
+def _bisection_strategy_key(bisect_fn) -> str:
+    """
+    Normalize the user-provided bisection selector.
+
+    The simulator accepts either:
+      - a canonical bisection id string (preferred): "TOB", "PAR", "RWAB", "RWAB-LS", ...
+      - (legacy) a bisection function object, in which case we key off `__name__`.
+    """
+    if isinstance(bisect_fn, str):
+        return bisect_fn.strip()
+    return getattr(bisect_fn, "__name__", str(bisect_fn))
+
+
+_SIG_GROUP_BISECT_PROCESS_BY_ID = {
+    # Canonical ids used by `simulation.py`.
+    "TOB": _TOBProcess,
+    "PAR": _PARProcess,
+    "RWAB": _RWABProcess,
+    "RWAB-LS": _RWABLSProcess,
+    "TKRB": _TKRBProcess,
+    "SWB": _SWBProcess,
+    "SWF": _SWFProcess,
+    # Backward-compat: older code passed bisection function objects and we keyed
+    # off their `__name__` from `bisection_strats.py`.
     "time_ordered_bisect": _TOBProcess,
     "exhaustive_parallel": _PARProcess,
     "risk_weighted_adaptive_bisect": _RWABProcess,
@@ -1149,6 +1175,19 @@ _SIG_GROUP_BISECT_PROCESS_BY_FN_NAME = {
     "sequential_walk_backward_bisect": _SWBProcess,
     "sequential_walk_forward_bisect": _SWFProcess,
 }
+
+
+def _resolve_sig_group_bisect_process_cls(bisect_fn):
+    key = _bisection_strategy_key(bisect_fn)
+    proc_cls = _SIG_GROUP_BISECT_PROCESS_BY_ID.get(key)
+    if proc_cls is None:
+        proc_cls = _SIG_GROUP_BISECT_PROCESS_BY_ID.get(key.upper())
+    if proc_cls is None:
+        raise ValueError(
+            "Unsupported bisect strategy for streaming per-signature bisection: "
+            f"{bisect_fn!r} (key={key!r}). Use one of: {', '.join(_CANONICAL_BISECTION_IDS)}."
+        )
+    return proc_cls
 
 
 def _run_streaming_suite_and_bisect_per_sig_group(
@@ -1319,13 +1358,7 @@ def _run_streaming_suite_and_bisect_per_sig_group(
                     defect_locals.add(int(gidx) - start_idx)
 
             batch_slice = commits[start_idx : batch_end_idx + 1]
-            proc_cls = _SIG_GROUP_BISECT_PROCESS_BY_FN_NAME.get(
-                getattr(bisect_fn, "__name__", str(bisect_fn))
-            )
-            if proc_cls is None:
-                raise ValueError(
-                    f"Unsupported bisect_fn for streaming per-signature bisection: {bisect_fn}"
-                )
+            proc_cls = _resolve_sig_group_bisect_process_cls(bisect_fn)
 
             proc = proc_cls(batch_slice, defect_locals, gid, executor, metrics, push_event)
             proc.start(t)
@@ -1454,13 +1487,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
     # Track last time each signature-group was exercised (revision index).
     last_seen_index_by_sig = {}
 
-    proc_cls = _SIG_GROUP_BISECT_PROCESS_BY_FN_NAME.get(
-        getattr(bisect_fn, "__name__", str(bisect_fn))
-    )
-    if proc_cls is None:
-        raise ValueError(
-            f"Unsupported bisect_fn for streaming per-signature bisection: {bisect_fn}"
-        )
+    proc_cls = _resolve_sig_group_bisect_process_cls(bisect_fn)
 
     for idx, c in enumerate(commits):
         # As regressors land, add them to the mapping used for per-sig bisection.
