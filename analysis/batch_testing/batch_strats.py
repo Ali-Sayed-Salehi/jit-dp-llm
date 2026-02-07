@@ -2528,3 +2528,493 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
+
+
+def _stable_pool_iteration_order(pool_sizes: dict) -> list[str]:
+    if not isinstance(pool_sizes, dict) or not pool_sizes:
+        return []
+    preferred = ["android", "windows", "linux", "mac", "default"]
+    out = []
+    for k in preferred:
+        if k in pool_sizes and k not in out:
+            out.append(k)
+    for k in sorted(pool_sizes.keys()):
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def _full_suite_durations_for_pool(executor: TestExecutor, pool: str):
+    suite = get_batch_signature_durations()
+    if not suite:
+        return []
+    out = []
+    for gid, dur in suite:
+        if executor.pool_for_signature_group(gid) == pool:
+            out.append((gid, dur))
+    return out
+
+
+def _subset_suite_durations_for_pool(executor: TestExecutor, pool: str, batch_commits):
+    suite_sig_ids = _union_tested_signature_group_ids_for_commits(batch_commits)
+    if not suite_sig_ids:
+        return []
+    filtered = []
+    for gid in suite_sig_ids:
+        if executor.pool_for_signature_group(gid) == pool:
+            filtered.append(int(gid))
+    if not filtered:
+        return []
+    return get_signature_durations_for_ids(sorted(set(filtered)))
+
+
+def simulate_lab_with_bisect(commits, bisect_fn, queue_pressure_threshold_min, num_workers):
+    """
+    Load-Aware Batching (LAB).
+
+    Maintain an independent contiguous commit batch per worker pool. As commits
+    stream in, we estimate *queue pressure* for each pool as the predicted wait
+    time (in minutes) for a newly-submitted job at that pool (post-build).
+
+    Trigger rule (per pool):
+      - If queue_pressure_minutes <= queue_pressure_threshold_min, flush that
+        pool's current commit batch and run *all* full-suite signature-groups
+        routed to that pool.
+    """
+    threshold_min = float(queue_pressure_threshold_min)
+    if threshold_min < 0.0:
+        raise ValueError(
+            f"LAB queue_pressure_threshold_min must be non-negative; got {queue_pressure_threshold_min!r}"
+        )
+
+    logger.info(
+        "simulate_lab_with_bisect: %d commits, queue_threshold_min=%.2f, bisect_fn=%s",
+        len(commits),
+        threshold_min,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            if pressure_min > threshold_min:
+                continue
+
+            durations = _full_suite_durations_for_pool(executor, pool)
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=None,
+            )
+            start_idx_by_pool[pool] = idx + 1
+
+    # Flush leftover commits per pool at the timestamp of the last commit.
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        durations = _full_suite_durations_for_pool(executor, pool)
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=None,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_lab_s_with_bisect(commits, bisect_fn, queue_pressure_threshold_min, num_workers):
+    """
+    LAB with subset suite detection (LAB-s).
+
+    Same per-pool flush rule as LAB, but each flushed pool batch runs a subset
+    suite: the union of signature-groups observed within that pool's commit
+    batch, filtered to the pool. Detection depends on overlap with failing
+    signature-groups, and bisection ranges are anchored by per-signature-group
+    last-seen indices (like other "-s" variants).
+    """
+    threshold_min = float(queue_pressure_threshold_min)
+    if threshold_min < 0.0:
+        raise ValueError(
+            f"LAB-s queue_pressure_threshold_min must be non-negative; got {queue_pressure_threshold_min!r}"
+        )
+
+    logger.info(
+        "simulate_lab_s_with_bisect: %d commits, queue_threshold_min=%.2f, bisect_fn=%s",
+        len(commits),
+        threshold_min,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    executor = TestExecutor(num_workers)
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            if pressure_min > threshold_min:
+                continue
+
+            batch_commits = commits[start_idx : idx + 1]
+            durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+            start_idx_by_pool[pool] = idx + 1
+
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        batch_commits = commits[start_idx:]
+        durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    Load-Aware Risk-Adaptive Batching (LARAB).
+
+    Similar to RASB, but batching is performed independently per worker pool and
+    a batch is flushed only when both:
+      - accumulated batch failure probability >= risk_threshold, and
+      - queue pressure for that pool <= queue_pressure_threshold_min.
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_threshold, queue_pressure_threshold_min)`.
+    """
+    try:
+        risk_threshold, queue_threshold_min = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB params must be a tuple (risk_threshold, queue_pressure_threshold_min); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_threshold = float(risk_threshold)
+    queue_threshold_min = float(queue_threshold_min)
+    if risk_threshold < 0.0 or risk_threshold > 1.0:
+        raise ValueError(
+            f"LARAB risk_threshold must be in [0,1]; got {risk_threshold!r}"
+        )
+    if queue_threshold_min < 0.0:
+        raise ValueError(
+            "LARAB queue_pressure_threshold_min must be non-negative; "
+            f"got {queue_threshold_min!r}"
+        )
+
+    logger.info(
+        "simulate_larab_with_bisect: %d commits, risk_threshold=%.4f, queue_threshold_min=%.2f, bisect_fn=%s",
+        len(commits),
+        risk_threshold,
+        queue_threshold_min,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    log_survival_by_pool = {p: 0.0 for p in pools}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            log_survival_by_pool[pool] = _accumulate_log_survival(
+                log_survival_by_pool[pool], p
+            )
+            fail_prob = _combined_probability_from_log_survival(log_survival_by_pool[pool])
+            if fail_prob < risk_threshold:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            if pressure_min > queue_threshold_min:
+                continue
+
+            durations = _full_suite_durations_for_pool(executor, pool)
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=None,
+            )
+            start_idx_by_pool[pool] = idx + 1
+            log_survival_by_pool[pool] = 0.0
+
+    # Flush leftovers per pool at the last commit timestamp.
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        durations = _full_suite_durations_for_pool(executor, pool)
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=None,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_larab_s_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    LARAB with subset suite detection (LARAB-s).
+
+    Uses the same per-pool trigger as LARAB, but each flushed pool batch runs a
+    subset suite (union of observed signature-groups in that pool batch).
+    """
+    try:
+        risk_threshold, queue_threshold_min = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB-s params must be a tuple (risk_threshold, queue_pressure_threshold_min); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_threshold = float(risk_threshold)
+    queue_threshold_min = float(queue_threshold_min)
+    if risk_threshold < 0.0 or risk_threshold > 1.0:
+        raise ValueError(
+            f"LARAB-s risk_threshold must be in [0,1]; got {risk_threshold!r}"
+        )
+    if queue_threshold_min < 0.0:
+        raise ValueError(
+            "LARAB-s queue_pressure_threshold_min must be non-negative; "
+            f"got {queue_threshold_min!r}"
+        )
+
+    logger.info(
+        "simulate_larab_s_with_bisect: %d commits, risk_threshold=%.4f, queue_threshold_min=%.2f, bisect_fn=%s",
+        len(commits),
+        risk_threshold,
+        queue_threshold_min,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+    executor = TestExecutor(num_workers)
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    log_survival_by_pool = {p: 0.0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            log_survival_by_pool[pool] = _accumulate_log_survival(
+                log_survival_by_pool[pool], p
+            )
+            fail_prob = _combined_probability_from_log_survival(log_survival_by_pool[pool])
+            if fail_prob < risk_threshold:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            if pressure_min > queue_threshold_min:
+                continue
+
+            batch_commits = commits[start_idx : idx + 1]
+            durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+            start_idx_by_pool[pool] = idx + 1
+            log_survival_by_pool[pool] = 0.0
+
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        batch_commits = commits[start_idx:]
+        durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )

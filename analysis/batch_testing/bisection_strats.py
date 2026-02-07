@@ -995,6 +995,59 @@ class TestExecutor:
         # )
         return finish_time
 
+    def pool_for_signature_group(self, signature_group_id=None) -> str:
+        """
+        Resolve the worker pool key a job will run on for a given signature-group id.
+
+        This mirrors the routing logic used by `schedule()`:
+          - If `signature_group_id` is None, route to `self.default_pool`.
+          - Otherwise, map via platform metadata and fall back to `self.default_pool`
+            when the derived pool key is not present in `self.pool_sizes`.
+        """
+        if signature_group_id is None:
+            return self.default_pool
+
+        pool = _get_worker_pool_for_signature_group(signature_group_id)
+        if pool not in self.pool_sizes:
+            pool = self.default_pool
+        return pool
+
+    def predict_queue_pressure_minutes(self, requested_start_time, pool: str | None = None) -> float:
+        """
+        Predict queue pressure for a given pool at a given suite submission time.
+
+        Queue pressure is defined as the predicted wait time (in minutes) for a
+        *single new job* that becomes ready at the suite "ready time":
+
+            ready_time = requested_start_time + build_time
+
+        and is routed to the specified worker pool.
+
+        This is computed from the pool's earliest worker free time (based on
+        already-scheduled work):
+
+            pressure = max(earliest_free_time - ready_time, 0)
+
+        If the pool has not scheduled any jobs yet, pressure is 0.
+        """
+        if pool is None:
+            pool_key = self.default_pool
+        else:
+            pool_key = str(pool).strip()
+            if not pool_key:
+                pool_key = self.default_pool
+        if pool_key not in self.pool_sizes:
+            pool_key = self.default_pool
+
+        heap = self._worker_heaps.get(pool_key)
+        if not heap:
+            return 0.0
+
+        ready_time = requested_start_time + timedelta(minutes=float(_build_time_minutes))
+        earliest_free_time = heap[0][0]
+        wait_min = (earliest_free_time - ready_time).total_seconds() / 60.0
+        return float(wait_min) if wait_min > 0.0 else 0.0
+
 
 def run_test_suite(executor: TestExecutor, requested_start_time, durations_minutes):
     """

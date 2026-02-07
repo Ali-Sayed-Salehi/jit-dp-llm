@@ -45,6 +45,10 @@ from batch_strats import (
     simulate_rapb_la_s_with_bisect,
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
+    simulate_lab_with_bisect,
+    simulate_lab_s_with_bisect,
+    simulate_larab_with_bisect,
+    simulate_larab_s_with_bisect,
     simulate_twsb_with_bisect,
 )
 
@@ -74,6 +78,9 @@ RAPB_AGING_PER_HOUR = 0.05
 LINEAR_RISK_BUDGET = 1.0
 RATB_THRESHOLD = 0.5
 RATB_TIME_WINDOW_HOURS = 4
+LAB_QUEUE_PRESSURE_THRESHOLD_MIN = 30.0
+LARAB_RISK_THRESHOLD = RASB_THRESHOLD
+LARAB_QUEUE_PRESSURE_THRESHOLD_MIN = 30.0
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 RANDOM_SEED = 42
@@ -153,6 +160,10 @@ BATCHING_STRATEGIES = [
     ("RAPB-la-s", simulate_rapb_la_s_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
     ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
+    ("LAB", simulate_lab_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
+    ("LAB-s", simulate_lab_s_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
+    ("LARAB", simulate_larab_with_bisect, (LARAB_RISK_THRESHOLD, LARAB_QUEUE_PRESSURE_THRESHOLD_MIN)),
+    ("LARAB-s", simulate_larab_s_with_bisect, (LARAB_RISK_THRESHOLD, LARAB_QUEUE_PRESSURE_THRESHOLD_MIN)),
 ]
 
 BISECTION_STRATEGIES = [
@@ -1118,6 +1129,16 @@ def run_evaluation_mopt(
                     thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
                     param = (thr, tw)
+                elif normalized_batch_name == "LAB":
+                    param = trial.suggest_float(
+                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN", 0.0, 24.0 * 60.0
+                    )
+                elif normalized_batch_name == "LARAB":
+                    thr = trial.suggest_float("LARAB_RISK_THRESHOLD", 0.10, 0.95)
+                    qp = trial.suggest_float(
+                        "LARAB_QUEUE_PRESSURE_THRESHOLD_MIN", 0.0, 24.0 * 60.0
+                    )
+                    param = (thr, qp)
                 else:
                     logger.warning(
                         "Unknown batching strategy name %s (normalized=%s); returning inf",
@@ -1186,6 +1207,13 @@ def run_evaluation_mopt(
                         params["RATB_THRESHOLD"],
                         params["RATB_TIME_WINDOW_HOURS"],
                     )
+                elif normalized_batch_name == "LAB":
+                    param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
+                elif normalized_batch_name == "LARAB":
+                    param = (
+                        params["LARAB_RISK_THRESHOLD"],
+                        params["LARAB_QUEUE_PRESSURE_THRESHOLD_MIN"],
+                    )
                 else:
                     logger.warning(
                         "Unknown batching strategy name %s (normalized=%s); skipping pareto entry",
@@ -1222,6 +1250,15 @@ def run_evaluation_mopt(
                     best_param_dict = {
                         "RATB_THRESHOLD": param[0],
                         "RATB_TIME_WINDOW_HOURS": param[1],
+                    }
+                elif normalized_batch_name == "LAB":
+                    best_param_dict = {
+                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN": param,
+                    }
+                elif normalized_batch_name == "LARAB":
+                    best_param_dict = {
+                        "LARAB_RISK_THRESHOLD": param[0],
+                        "LARAB_QUEUE_PRESSURE_THRESHOLD_MIN": param[1],
                     }
                 else:
                     continue
@@ -1600,6 +1637,13 @@ def run_final_test_unified(
             param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
+            )
+        elif normalized_batch_name == "LARAB":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params["LARAB_RISK_THRESHOLD"],
+                best_params["LARAB_QUEUE_PRESSURE_THRESHOLD_MIN"],
             )
         elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB
