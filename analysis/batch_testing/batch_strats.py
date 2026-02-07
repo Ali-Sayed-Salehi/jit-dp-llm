@@ -1168,13 +1168,19 @@ def _run_streaming_suite_and_bisect_per_sig_group(
 
     This models "streaming detection": we don't wait for the entire suite to finish
     before starting bisection for signature-groups that fail early.
+
+    When `last_seen_idx_by_sig` is provided (used by the "-s" batching variants),
+    a signature-group may be exercised in a later batch than the one where a
+    regressor landed; in that case, detection/bisection ranges are anchored on the
+    last index where that signature-group was previously exercised.
     """
     if batch_end_idx < batch_start_idx:
         return
     if not suite_durations:
         return
 
-    # Map: sig_group_id -> set[global_commit_idx] of regressors in THIS batch that fail it.
+    # Map: sig_group_id -> set[global_commit_idx] of regressors that would cause
+    # this suite's signature-group job to fail.
     suite_sig_ids = set()
     for gid, _dur in suite_durations:
         try:
@@ -1182,10 +1188,30 @@ def _run_streaming_suite_and_bisect_per_sig_group(
         except (TypeError, ValueError):
             continue
 
+    # In "-s" modes, batches run a per-batch subset suite, and a signature-group
+    # may not be exercised in the same batch where a regressor lands. When that
+    # signature-group is exercised later, we still need to detect and bisect
+    # regressors that occurred since the last time that group was tested. The
+    # `last_seen_idx_by_sig` map tracks those last-tested indices.
+    scan_start_idx = int(batch_start_idx)
+    if last_seen_idx_by_sig is not None and suite_sig_ids:
+        # We scan from the earliest "unknown" index among the signature-groups in
+        # this suite. This preserves correctness when groups have been absent for
+        # multiple batches (i.e., their last_seen is < batch_start_idx).
+        scan_start_idx = min(
+            int(last_seen_idx_by_sig.get(gid, -1)) + 1 for gid in suite_sig_ids
+        )
+        scan_start_idx = max(0, min(int(scan_start_idx), int(batch_start_idx)))
+
     regressors_by_sig = {}
-    for idx in range(batch_start_idx, batch_end_idx + 1):
+    for idx in range(scan_start_idx, batch_end_idx + 1):
         c = commits[idx]
         if not c.get("true_label"):
+            continue
+        # Avoid re-counting regressors already found by earlier bisections in
+        # this simulation run.
+        cid = c.get("commit_id")
+        if cid is not None and cid in metrics.found_regressors:
             continue
         fail_sigs = get_failing_signature_groups_for_revision(c["commit_id"])
         if not fail_sigs:
