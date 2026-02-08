@@ -847,13 +847,6 @@ def lookup_bisection(name):
 
 
 # ------------------- BEST-OVERALL LOGIC -------------------
-BEST_OVERALL_FIELDS = [
-    "tests_saved_vs_baseline_pct",
-    "mean_time_to_culprit_saved_vs_baseline_pct",
-    "max_time_to_culprit_saved_vs_baseline_pct",
-]
-
-
 def _overall_improvement_score(entry):
     """
     Overall improvement score:
@@ -868,38 +861,103 @@ def _overall_improvement_score(entry):
     return tests_saved + (mean_ttc + max_ttc) / 2.0
 
 
-def _is_better_or_equal_to_baseline(entry):
+def _timeliness_improvement_score(entry):
     """
-    Returns True if this combo is at least as good as baseline
-    on all tracked metrics (i.e., no negative improvements).
+    Timeliness improvement score:
+        (mean_time_to_culprit_saved_vs_baseline_pct
+         + max_time_to_culprit_saved_vs_baseline_pct) / 2
     """
-    return all(entry.get(f, 0.0) >= 0.0 for f in BEST_OVERALL_FIELDS)
+    mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    return (mean_ttc + max_ttc) / 2.0
 
 
-def choose_best_overall_from_items(items):
+def _is_pareto_efficient_combo(entry):
     """
-    items: list of (name, entry_dict)
+    "Pareto-efficient" in this simulator's output means:
+      - tests_saved_vs_baseline_pct > 0, and
+      - _timeliness_improvement_score(entry) > 0
+    """
+    tests_saved = entry.get("tests_saved_vs_baseline_pct", 0.0)
+    timeliness_score = _timeliness_improvement_score(entry)
+    return (tests_saved > 0.0) and (timeliness_score > 0.0)
 
-    Logic:
-      1. Prefer combos that are >= baseline on all metrics
-         (no negative saved_vs_baseline_pct*).
-      2. If none, fall back to all combos.
-      3. Within the pool, pick the one with the highest overall improvement score.
-      4. If the best score <= 0, return "NA".
+
+def rank_overall_and_pareto_combos(items):
+    """
+    Rank combos for output summaries.
+
+    Parameters
+    ----------
+    items:
+        list of (name, entry_dict)
+
+    Returns
+    -------
+    (overall_ranked, pareto_ranked)
+
+    overall_ranked:
+        List of combo names from best to worst:
+          1) Pareto-efficient combos first, sorted by tests_saved_vs_baseline_pct
+             (descending).
+          2) Then all remaining combos, sorted by _overall_improvement_score
+             (descending).
+    pareto_ranked:
+        List of only pareto-efficient combos, sorted by tests_saved_vs_baseline_pct
+        (descending).
     """
     if not items:
-        return "NA"
+        return [], []
 
-    # First, separate "all-metrics-non-worse" combos
-    non_worse = [(name, v) for name, v in items if _is_better_or_equal_to_baseline(v)]
-    candidate_pool = non_worse if non_worse else items
+    rows = []
+    for name, entry in items:
+        try:
+            tests_saved = float(entry.get("tests_saved_vs_baseline_pct", 0.0))
+        except (TypeError, ValueError):
+            tests_saved = 0.0
+        try:
+            timeliness_score = float(_timeliness_improvement_score(entry))
+        except (TypeError, ValueError):
+            timeliness_score = 0.0
+        try:
+            overall_score = float(_overall_improvement_score(entry))
+        except (TypeError, ValueError):
+            overall_score = 0.0
+        rows.append(
+            {
+                "name": name,
+                "tests_saved": tests_saved,
+                "timeliness_score": timeliness_score,
+                "overall_score": overall_score,
+                "pareto_efficient": _is_pareto_efficient_combo(entry),
+            }
+        )
 
-    best_name, best_entry = max(
-        candidate_pool, key=lambda kv: _overall_improvement_score(kv[1])
+    pareto_rows = [r for r in rows if r["pareto_efficient"]]
+    pareto_rows_sorted = sorted(
+        pareto_rows,
+        key=lambda r: (
+            -r["tests_saved"],
+            -r["timeliness_score"],
+            -r["overall_score"],
+            r["name"],
+        ),
     )
-    if _overall_improvement_score(best_entry) <= 0.0:
-        return "NA"
-    return best_name
+
+    remaining_rows = [r for r in rows if not r["pareto_efficient"]]
+    remaining_rows_sorted = sorted(
+        remaining_rows,
+        key=lambda r: (
+            -r["overall_score"],
+            -r["tests_saved"],
+            -r["timeliness_score"],
+            r["name"],
+        ),
+    )
+
+    pareto_ranked = [r["name"] for r in pareto_rows_sorted]
+    overall_ranked = pareto_ranked + [r["name"] for r in remaining_rows_sorted]
+    return overall_ranked, pareto_ranked
 
 
 # ------------------- MOPT (Optuna, continuous search) -------------------
@@ -1540,9 +1598,9 @@ def run_evaluation_mopt(
     )
 
     # Best overall vs baseline (centralized logic)
-    out_eval["best_overall_improvement_over_baseline"] = choose_best_overall_from_items(
-        combo_items
-    )
+    overall_ranked, pareto_ranked = rank_overall_and_pareto_combos(combo_items)
+    out_eval["best_overall_improvement_over_baseline"] = overall_ranked
+    out_eval["pareto-efficient_combos"] = pareto_ranked
 
     return {
         "eval_output": out_eval,
@@ -1671,6 +1729,7 @@ def run_final_test_unified(
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
             "best_overall_improvement_over_baseline",
+            "pareto-efficient_combos",
             "num_test_workers",
             "worker_pools",
         ):
@@ -1792,6 +1851,7 @@ def run_final_test_unified(
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
             "best_overall_improvement_over_baseline",
+            "pareto-efficient_combos",
             "num_test_workers",
         ):
             continue
@@ -1816,14 +1876,15 @@ def run_final_test_unified(
             eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
         )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
-        final_results["best_overall_improvement_over_baseline"] = (
-            choose_best_overall_from_items(eligible)
-        )
+        overall_ranked, pareto_ranked = rank_overall_and_pareto_combos(eligible)
+        final_results["best_overall_improvement_over_baseline"] = overall_ranked
+        final_results["pareto-efficient_combos"] = pareto_ranked
     else:
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
-        final_results["best_overall_improvement_over_baseline"] = "NA"
+        final_results["best_overall_improvement_over_baseline"] = []
+        final_results["pareto-efficient_combos"] = []
 
     # Save FINAL
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
