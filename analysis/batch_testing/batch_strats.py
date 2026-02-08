@@ -2159,30 +2159,47 @@ def simulate_rapb_with_bisect(commits, bisect_fn, params, num_workers):
     # Build batches using the same trigger rule as RAPB-s, but run the full suite.
     batches = []
     start = 0
-    entry_times = []
-    current_batch_indices = []
+    # We maintain an incremental log-survival mass for the batch:
+    #
+    #   log_survival(t) = Σ log((1 - p_i) * exp(-a * wait_i(t)))
+    #                  = Σ log(1 - p_i) - a * Σ wait_i(t)
+    #
+    # Instead of recomputing over the whole batch each commit (O(n^2)), we
+    # update by decaying the existing mass when time advances by Δt:
+    #
+    #   log_survival := log_survival - a * batch_size * Δt
+    #
+    # then add the new commit's base term log(1 - p_new).
+    log_survival = 0.0
+    batch_size = 0
+    last_ts = None
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
-        current_batch_indices.append(idx)
-        entry_times.append(now_ts)
+        if batch_size == 0:
+            start = idx
+            log_survival = 0.0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            # If survival is already 0 (log=-inf), further decay doesn't change it.
+            if not (math.isinf(log_survival) and float(log_survival) < 0.0):
+                log_survival = float(log_survival) - float(aging_rate) * float(batch_size) * float(delta_hours)
+            last_ts = now_ts
 
-        log_survival = 0.0
-        for commit_idx, entered_at in zip(current_batch_indices, entry_times):
-            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
-            base_risk = float(commits[commit_idx]["risk"])
-            decay = math.exp(-aging_rate * wait_hours)
-            aged_p = 1.0 - (1.0 - base_risk) * decay
-            log_survival = _accumulate_log_survival(log_survival, aged_p)
+        base_risk = float(c["risk"])
+        log_survival = _accumulate_log_survival(log_survival, base_risk)
+        batch_size += 1
 
         fail_prob = _combined_probability_from_log_survival(log_survival)
         if fail_prob >= threshold_T:
             batches.append((start, idx, now_ts))
             start = idx + 1
-            entry_times = []
-            current_batch_indices = []
+            log_survival = 0.0
+            batch_size = 0
+            last_ts = None
 
-    if start < len(commits):
+    if batch_size > 0 and start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     for batch_start_idx, batch_end_idx, flush_time in batches:
@@ -2227,30 +2244,35 @@ def simulate_rapb_s_with_bisect(commits, bisect_fn, params, num_workers):
         return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
-    entry_times = []
-    current_batch_indices = []
+    log_survival = 0.0
+    batch_size = 0
+    last_ts = None
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
-        current_batch_indices.append(idx)
-        entry_times.append(now_ts)
+        if batch_size == 0:
+            start = idx
+            log_survival = 0.0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            if not (math.isinf(log_survival) and float(log_survival) < 0.0):
+                log_survival = float(log_survival) - float(aging_rate) * float(batch_size) * float(delta_hours)
+            last_ts = now_ts
 
-        log_survival = 0.0
-        for commit_idx, entered_at in zip(current_batch_indices, entry_times):
-            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
-            base_risk = float(commits[commit_idx]["risk"])
-            decay = math.exp(-aging_rate * wait_hours)
-            aged_p = 1.0 - (1.0 - base_risk) * decay
-            log_survival = _accumulate_log_survival(log_survival, aged_p)
+        base_risk = float(c["risk"])
+        log_survival = _accumulate_log_survival(log_survival, base_risk)
+        batch_size += 1
 
         fail_prob = _combined_probability_from_log_survival(log_survival)
         if fail_prob >= threshold_T:
             batches.append((start, idx, now_ts))
             start = idx + 1
-            entry_times = []
-            current_batch_indices = []
+            log_survival = 0.0
+            batch_size = 0
+            last_ts = None
 
-    if start < len(commits):
+    if batch_size > 0 and start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
@@ -2301,29 +2323,48 @@ def simulate_rapb_la_with_bisect(commits, bisect_fn, params, num_workers):
     # Build batches using the same trigger rule as RAPB-la-s, but run the full suite.
     batches = []
     start = 0
-    entry_times = []
-    current_batch_indices = []
+    # Maintain an O(1) incremental representation of:
+    #
+    #   risk_sum(t) = Σ aged_p_i(t),
+    #   aged_p_i(t) = 1 - (1 - p_i) * exp(-a * wait_i(t)).
+    #
+    # Let:
+    #   S(t) = Σ (1 - p_i) * exp(-a * wait_i(t)) = Σ (1 - aged_p_i(t))
+    # Then:
+    #   risk_sum(t) = batch_size - S(t)
+    #
+    # When time advances by Δt, each term in S is multiplied by exp(-aΔt).
+    # When a new commit arrives, we add its term (1 - p_new) (since wait=0).
+    survival_sum = 0.0
+    batch_size = 0
+    last_ts = None
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
-        current_batch_indices.append(idx)
-        entry_times.append(now_ts)
+        if batch_size == 0:
+            start = idx
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            if float(aging_rate) != 0.0 and survival_sum != 0.0:
+                survival_sum = float(survival_sum) * float(math.exp(-float(aging_rate) * float(delta_hours)))
+            last_ts = now_ts
 
-        risk_sum = 0.0
-        for commit_idx, entered_at in zip(current_batch_indices, entry_times):
-            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
-            base_risk = float(commits[commit_idx]["risk"])
-            decay = math.exp(-aging_rate * wait_hours)
-            aged_p = 1.0 - (1.0 - base_risk) * decay
-            risk_sum += aged_p
+        base_risk = float(c["risk"])
+        survival_sum = float(survival_sum) + float(1.0 - base_risk)
+        batch_size += 1
+        risk_sum = float(batch_size) - float(survival_sum)
 
         if risk_sum >= risk_budget_T:
             batches.append((start, idx, now_ts))
             start = idx + 1
-            entry_times = []
-            current_batch_indices = []
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = None
 
-    if start < len(commits):
+    if batch_size > 0 and start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     for batch_start_idx, batch_end_idx, flush_time in batches:
@@ -2368,29 +2409,36 @@ def simulate_rapb_la_s_with_bisect(commits, bisect_fn, params, num_workers):
         return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
 
     start = 0
-    entry_times = []
-    current_batch_indices = []
+    survival_sum = 0.0
+    batch_size = 0
+    last_ts = None
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
-        current_batch_indices.append(idx)
-        entry_times.append(now_ts)
+        if batch_size == 0:
+            start = idx
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            if float(aging_rate) != 0.0 and survival_sum != 0.0:
+                survival_sum = float(survival_sum) * float(math.exp(-float(aging_rate) * float(delta_hours)))
+            last_ts = now_ts
 
-        risk_sum = 0.0
-        for commit_idx, entered_at in zip(current_batch_indices, entry_times):
-            wait_hours = max(0.0, (now_ts - entered_at).total_seconds() / 3600.0)
-            base_risk = float(commits[commit_idx]["risk"])
-            decay = math.exp(-aging_rate * wait_hours)
-            aged_p = 1.0 - (1.0 - base_risk) * decay
-            risk_sum += aged_p
+        base_risk = float(c["risk"])
+        survival_sum = float(survival_sum) + float(1.0 - base_risk)
+        batch_size += 1
+        risk_sum = float(batch_size) - float(survival_sum)
 
         if risk_sum >= risk_budget_T:
             batches.append((start, idx, now_ts))
             start = idx + 1
-            entry_times = []
-            current_batch_indices = []
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = None
 
-    if start < len(commits):
+    if batch_size > 0 and start < len(commits):
         batches.append((start, len(commits) - 1, commits[-1]["ts"]))
 
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
@@ -2464,7 +2512,6 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
         if current_batch_start_idx is None:
             current_batch_start_idx = idx
             batch_start_time = c_ts
-            continue
 
         # First, risk-triggered flush: include c then flush.
         if risk >= threshold:
@@ -2493,7 +2540,7 @@ def simulate_ratb_with_bisect(commits, bisect_fn, params, num_workers):
 
         # Otherwise, apply TWB-style time-window rule.
         batch_end = batch_start_time + window_delta
-        if c_ts >= batch_end:
+        if c_ts >= batch_end and idx > int(current_batch_start_idx):
             # Flush the existing batch (without c) at the time-window boundary.
             durations = get_batch_signature_durations()
             _run_streaming_suite_and_bisect_per_sig_group(
@@ -2572,7 +2619,6 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
 
         if idx == start:
             batch_start_time = c_ts
-            continue
 
         if risk >= threshold:
             batches.append((start, idx, c_ts))
@@ -2582,7 +2628,7 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
             continue
 
         batch_end_time = batch_start_time + window_delta
-        if c_ts >= batch_end_time:
+        if c_ts >= batch_end_time and idx > int(start):
             batches.append((start, idx - 1, batch_end_time))
             start = idx
             batch_start_time = c_ts

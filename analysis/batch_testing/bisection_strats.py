@@ -380,17 +380,30 @@ def _load_perf_jobs_per_revision():
     Load:
       - perf_jobs_per_revision_details_rectified.jsonl => REVISION_TESTED_SIG_GROUP_IDS
 
-    The JSON file can be either:
-      * a JSON-lines file (one JSON object per line), or
-      * a single JSON list of objects.
-    Each object is expected to have:
+    The file at `PERF_JOBS_PER_REV_JSON` must be JSONL: one JSON object per line.
+
+    Each JSON object is expected to contain:
       - 'revision': str
-      - 'signature_group_ids': list[int]
+      - 'signature_group_ids': list of values convertible to int
+
+    Any invalid/non-integer signature-group ids within a list are skipped
+    (they do not cause the entire revision to be dropped).
     """
     global REVISION_TESTED_SIG_GROUP_IDS
 
     if REVISION_TESTED_SIG_GROUP_IDS:
         return
+
+    def _coerce_sig_group_ids(raw):
+        if not isinstance(raw, (list, tuple)):
+            return []
+        out = []
+        for item in raw:
+            try:
+                out.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return out
 
     mapping = {}
     try:
@@ -399,6 +412,23 @@ def _load_perf_jobs_per_revision():
             PERF_JOBS_PER_REV_JSON,
         )
         with open(PERF_JOBS_PER_REV_JSON, "r", encoding="utf-8") as f:
+            # Guard against accidentally passing a single JSON array file.
+            first_non_ws = ""
+            while True:
+                ch = f.read(1)
+                if ch == "":
+                    break
+                if not ch.isspace():
+                    first_non_ws = ch
+                    break
+            f.seek(0)
+
+            if first_non_ws == "[":
+                raise RuntimeError(
+                    f"{PERF_JOBS_PER_REV_JSON} appears to be a JSON array. "
+                    "This loader expects JSONL (one JSON object per line)."
+                )
+
             for line in f:
                 line = line.strip()
                 if not line:
@@ -415,13 +445,9 @@ def _load_perf_jobs_per_revision():
                 if not isinstance(obj, dict):
                     continue
                 rev = obj.get("revision")
-                sig_group_ids = obj.get("signature_group_ids") or []
                 if not rev:
                     continue
-                try:
-                    sig_group_ids_int = [int(s) for s in sig_group_ids]
-                except (TypeError, ValueError):
-                    sig_group_ids_int = []
+                sig_group_ids_int = _coerce_sig_group_ids(obj.get("signature_group_ids") or [])
                 mapping[rev] = sig_group_ids_int
     except FileNotFoundError as exc:
         raise FileNotFoundError(

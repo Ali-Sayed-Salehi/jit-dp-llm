@@ -546,9 +546,7 @@ def build_commits_from_all_with_raw_preds(
     This avoids per-trial re-reading of the prediction JSON during Optuna runs.
 
     Returns:
-      (commits_sorted, predicted_indices)
-    where predicted_indices are indices in commits_sorted for commits that
-    have a non-zero predicted risk.
+      commits_sorted
     """
     logger.debug(
         "Building commits from %s with lower_cutoff=%s upper_cutoff=%s (preds_raw size=%d)",
@@ -593,13 +591,11 @@ def build_commits_from_all_with_raw_preds(
             )
 
     commits.sort(key=lambda x: x["ts"])
-    predicted_indices = [i for i, c in enumerate(commits) if c.get("risk", 0.0) > 0.0]
     logger.debug(
-        "Finished building commit list: %d commits within window (%d predicted)",
+        "Finished building commit list: %d commits within window",
         len(commits),
-        len(predicted_indices),
     )
-    return commits, predicted_indices
+    return commits
 
 
 def parse_hg_date(date_field):
@@ -972,7 +968,6 @@ def run_evaluation_mopt(
     dry_run=False,
     preds_raw=None,
     base_commits_for_context=None,
-    predicted_indices=None,
     lower_cutoff=None,
     upper_cutoff=None,
 ):
@@ -1021,7 +1016,6 @@ def run_evaluation_mopt(
         preds_raw = load_predictions_raw(INPUT_JSON_EVAL)
     if (
         base_commits_for_context is None
-        or predicted_indices is None
         or lower_cutoff is None
     ):
         dynamic_oldest, dynamic_newest = get_cutoff_from_input(
@@ -1029,7 +1023,7 @@ def run_evaluation_mopt(
         )
         lower_cutoff = dynamic_oldest or DEFAULT_CUTOFF
         upper_cutoff = dynamic_newest
-        base_commits_for_context, predicted_indices = build_commits_from_all_with_raw_preds(
+        base_commits_for_context = build_commits_from_all_with_raw_preds(
             ALL_COMMITS_PATH,
             preds_raw,
             lower_cutoff,
@@ -1620,7 +1614,6 @@ def run_final_test_unified(
     run_exhaustive_testing_et=True,
     preds_raw_final=None,
     base_commits_final=None,
-    predicted_indices_final=None,
     final_lower=None,
     final_upper=None,
 ):
@@ -1649,7 +1642,6 @@ def run_final_test_unified(
         preds_raw_final = load_predictions_raw(INPUT_JSON_FINAL)
     if (
         base_commits_final is None
-        or predicted_indices_final is None
         or final_lower is None
     ):
         final_oldest, final_newest = get_cutoff_from_input(
@@ -1659,7 +1651,7 @@ def run_final_test_unified(
         final_upper = final_newest
 
         # ET + Baseline on FINAL window
-        base_commits_final, predicted_indices_final = build_commits_from_all_with_raw_preds(
+        base_commits_final = build_commits_from_all_with_raw_preds(
             ALL_COMMITS_PATH,
             preds_raw_final,
             final_lower,
@@ -2026,7 +2018,7 @@ def main():
     eval_oldest, eval_newest = get_cutoff_from_input(ALL_COMMITS_PATH, eval_preds_raw)
     eval_lower = eval_oldest or DEFAULT_CUTOFF
     eval_upper = eval_newest
-    eval_commits, eval_predicted_indices = build_commits_from_all_with_raw_preds(
+    eval_commits = build_commits_from_all_with_raw_preds(
         ALL_COMMITS_PATH,
         eval_preds_raw,
         eval_lower,
@@ -2043,7 +2035,7 @@ def main():
     )
     final_lower = final_oldest or DEFAULT_CUTOFF
     final_upper = final_newest
-    final_commits, final_predicted_indices = build_commits_from_all_with_raw_preds(
+    final_commits = build_commits_from_all_with_raw_preds(
         ALL_COMMITS_PATH,
         final_preds_raw,
         final_lower,
@@ -2101,7 +2093,6 @@ def main():
             run_exhaustive_testing_et=run_et,
             preds_raw_final=final_preds_raw,
             base_commits_final=final_commits,
-            predicted_indices_final=final_predicted_indices,
             final_lower=final_lower,
             final_upper=final_upper,
         )
@@ -2119,7 +2110,6 @@ def main():
         dry_run=DRY_RUN,
         preds_raw=eval_preds_raw,
         base_commits_for_context=eval_commits,
-        predicted_indices=eval_predicted_indices,
         lower_cutoff=eval_lower,
         upper_cutoff=eval_upper,
     )
@@ -2142,7 +2132,6 @@ def main():
         run_exhaustive_testing_et=run_et,
         preds_raw_final=final_preds_raw,
         base_commits_final=final_commits,
-        predicted_indices_final=final_predicted_indices,
         final_lower=final_lower,
         final_upper=final_upper,
     )
