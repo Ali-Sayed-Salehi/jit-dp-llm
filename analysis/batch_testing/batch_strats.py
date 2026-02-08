@@ -2673,6 +2673,9 @@ def simulate_lab_with_bisect(commits, bisect_fn, queue_pressure_threshold_min, n
 
     pools = _stable_pool_iteration_order(executor.pool_sizes)
     start_idx_by_pool = {p: 0 for p in pools}
+    # Cache per-pool full-suite durations: this is constant across the run and
+    # can otherwise dominate wall-clock time when LAB flushes frequently.
+    durations_by_pool = {p: _full_suite_durations_for_pool(executor, p) for p in pools}
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
@@ -2684,7 +2687,7 @@ def simulate_lab_with_bisect(commits, bisect_fn, queue_pressure_threshold_min, n
             if pressure_min > threshold_min:
                 continue
 
-            durations = _full_suite_durations_for_pool(executor, pool)
+            durations = durations_by_pool.get(pool) or []
             if not durations:
                 continue
 
@@ -2707,7 +2710,7 @@ def simulate_lab_with_bisect(commits, bisect_fn, queue_pressure_threshold_min, n
         start_idx = int(start_idx_by_pool[pool])
         if start_idx >= len(commits):
             continue
-        durations = _full_suite_durations_for_pool(executor, pool)
+        durations = durations_by_pool.get(pool) or []
         if not durations:
             continue
         _run_streaming_suite_and_bisect_per_sig_group(
@@ -2900,6 +2903,9 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
     pools = _stable_pool_iteration_order(executor.pool_sizes)
     start_idx_by_pool = {p: 0 for p in pools}
     log_survival_by_pool = {p: 0.0 for p in pools}
+    # Cache per-pool full-suite durations: this is constant across the run and
+    # avoids repeatedly filtering the full suite on every flush.
+    durations_by_pool = {p: _full_suite_durations_for_pool(executor, p) for p in pools}
 
     for idx, c in enumerate(commits):
         now_ts = c["ts"]
@@ -2933,7 +2939,7 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
             if score < _LARAB_SCORE_THRESHOLD:
                 continue
 
-            durations = _full_suite_durations_for_pool(executor, pool)
+            durations = durations_by_pool.get(pool) or []
             if not durations:
                 continue
 
@@ -2957,7 +2963,7 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
         start_idx = int(start_idx_by_pool[pool])
         if start_idx >= len(commits):
             continue
-        durations = _full_suite_durations_for_pool(executor, pool)
+        durations = durations_by_pool.get(pool) or []
         if not durations:
             continue
         _run_streaming_suite_and_bisect_per_sig_group(
