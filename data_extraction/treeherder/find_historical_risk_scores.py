@@ -17,8 +17,13 @@ Risk definition:
     revision's failing signature list (deduplicated within the revision).
   - A group's "repeat count" is the number of distinct revisions (after cutoff)
     in which it appears.
-  - Counts are normalized to (0, 1) such that the most frequent group receives
-    the highest risk and groups that never appear receive the lowest risk.
+  - Convert counts into strictly-(0, 1) "probability-like" values:
+      * Default (`--risk-method beta`): treat each historical revision as a
+        trial and compute a Beta-Bernoulli posterior mean
+          p = (count + alpha) / (n_revisions + alpha + beta).
+        If `--prior-beta` is omitted, beta is auto-selected from the data so the
+        long tail of zero-count groups is not driven to ~0.
+      * Optional (`--risk-method max_norm`): normalize by the maximum count.
 
 Output (JSONL):
   - datasets/mozilla_perf/historical_risk_per_signature_group.jsonl
@@ -299,11 +304,49 @@ def write_risk_jsonl(
     out_path: str,
     all_group_ids: list[int],
     group_counts: Counter[int],
+    *,
+    risk_method: str,
     epsilon: float,
+    num_revisions_considered: int,
+    prior_alpha: float,
+    prior_beta: float | None,
 ) -> None:
     max_count = max(group_counts.values(), default=0)
-    if not (0.0 < epsilon < 0.5):
+    if not (0.0 < float(epsilon) < 0.5):
         raise ValueError(f"--epsilon must be in (0, 0.5); got {epsilon}")
+
+    method = str(risk_method or "").strip().lower()
+    if method not in {"beta", "max_norm"}:
+        raise ValueError(f"--risk-method must be one of: beta, max_norm (got {risk_method!r})")
+
+    n = int(num_revisions_considered)
+    if n < 0:
+        raise ValueError(f"num_revisions_considered must be >= 0 (got {n})")
+
+    alpha = float(prior_alpha)
+    if alpha <= 0.0:
+        raise ValueError(f"--prior-alpha must be > 0 (got {prior_alpha})")
+
+    beta = None if prior_beta is None else float(prior_beta)
+    if beta is not None and beta <= 0.0:
+        raise ValueError(f"--prior-beta must be > 0 (got {prior_beta})")
+
+    # Auto-select beta for the beta method so that:
+    #   sum_g risk_g == (total failing group occurrences) / (num revisions)
+    # which keeps the tail non-trivial while keeping risk values probability-like.
+    if method == "beta" and beta is None:
+        total_occ = int(sum(int(v) for v in group_counts.values()))
+        g = int(len(all_group_ids))
+        if n > 0 and total_occ > 0 and g > 0:
+            denom = (total_occ + alpha * g) * (n / float(total_occ))
+            beta = denom - n - alpha
+        else:
+            # Degenerate case: no history. Fall back to a conservative prior.
+            beta = 1000.0
+
+        if beta <= 0.0:
+            # Extremely small histories can produce non-positive beta; clamp.
+            beta = 1.0
 
     out_dir = os.path.dirname(out_path)
     if out_dir:
@@ -312,11 +355,23 @@ def write_risk_jsonl(
     with open(out_path, "w", encoding="utf-8") as f:
         for gid in all_group_ids:
             count = int(group_counts.get(gid, 0))
-            if max_count > 0:
-                risk = epsilon + (1.0 - 2.0 * epsilon) * (count / float(max_count))
+            if method == "max_norm":
+                if max_count > 0:
+                    risk = epsilon + (1.0 - 2.0 * epsilon) * (count / float(max_count))
+                else:
+                    # No historical failures found; assign all groups the lowest risk.
+                    risk = float(epsilon)
             else:
-                # No historical failures found; assign all groups the lowest risk.
-                risk = float(epsilon)
+                # Beta-Bernoulli posterior mean with a strong "rare failure" prior:
+                #   risk = E[p | count successes in n trials]
+                # The trial definition here is "a revision in the historical window".
+                assert beta is not None
+                denom = n + alpha + beta
+                if denom <= 0:
+                    risk = float(epsilon)
+                else:
+                    risk = (count + alpha) / float(denom)
+
             # Guardrails: enforce (0, 1) strictly.
             if risk <= 0.0:
                 risk = float(epsilon)
@@ -377,6 +432,35 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--risk-method",
+        choices=["beta", "max_norm"],
+        default="beta",
+        help=(
+            "How to convert historical counts into probabilities. "
+            "`beta` (default) produces probability-like values using a Beta prior; "
+            "`max_norm` reproduces the old max-count normalization."
+        ),
+    )
+    parser.add_argument(
+        "--prior-alpha",
+        type=float,
+        default=1.0,
+        help=(
+            "Beta prior alpha (>0) used for `--risk-method beta`. "
+            "Larger values raise the floor for unseen groups and reduce skew."
+        ),
+    )
+    parser.add_argument(
+        "--prior-beta",
+        type=float,
+        default=None,
+        help=(
+            "Beta prior beta (>0) used for `--risk-method beta`. "
+            "If omitted, the script auto-selects beta from the data to keep the "
+            "tail non-trivial while keeping values probability-like."
+        ),
+    )
+    parser.add_argument(
         "--epsilon",
         type=float,
         default=1e-6,
@@ -410,25 +494,55 @@ def main() -> int:
         revision_to_sigs, revision_to_ts, sig_to_group, eval_window_start
     )
 
-    write_risk_jsonl(args.output, all_group_ids, group_counts, args.epsilon)
-
-    missing_revs = len(revisions) - len(revision_to_ts)
-    considered_revs = sum(
-        1
+    considered_revs = [
+        rev
         for rev in revisions
         if (rev in revision_to_ts and revision_to_ts[rev] < eval_window_start)
+    ]
+
+    total_occ = int(sum(int(v) for v in group_counts.values()))
+    used_beta = args.prior_beta
+    if str(args.risk_method).strip().lower() == "beta" and used_beta is None:
+        n = len(considered_revs)
+        g = len(all_group_ids)
+        alpha = float(args.prior_alpha)
+        if n > 0 and total_occ > 0 and g > 0:
+            denom = (total_occ + alpha * g) * (n / float(total_occ))
+            used_beta = denom - n - alpha
+        else:
+            used_beta = 1000.0
+        if used_beta <= 0.0:
+            used_beta = 1.0
+
+    write_risk_jsonl(
+        args.output,
+        all_group_ids,
+        group_counts,
+        risk_method=args.risk_method,
+        epsilon=args.epsilon,
+        num_revisions_considered=len(considered_revs),
+        prior_alpha=args.prior_alpha,
+        prior_beta=used_beta,
     )
+
+    missing_revs = len(revisions) - len(revision_to_ts)
     print(f"eval_window_start: {eval_window_start.isoformat()}")
     print(f"alert_summary revisions (unique): {len(revisions)}")
     print(f"revisions missing timestamp in all_commits.jsonl: {missing_revs}")
-    print(f"revisions considered for history (ts < eval_window_start): {considered_revs}")
+    print(f"revisions considered for history (ts < eval_window_start): {len(considered_revs)}")
     print(f"sig_groups loaded: {len(all_group_ids)}")
     print(f"signature->group mappings: {len(sig_to_group)}")
-    print(f"groups with nonzero historical count: {len([g for g in all_group_ids if group_counts.get(g, 0) > 0])}")
+    print(
+        f"groups with nonzero historical count: "
+        f"{len([g for g in all_group_ids if group_counts.get(g, 0) > 0])}"
+    )
+    print(f"total failing group occurrences (dedup per revision): {total_occ}")
+    print(
+        f"risk_method: {args.risk_method} (alpha={args.prior_alpha}, beta={used_beta})"
+    )
     print(f"output: {args.output}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
