@@ -58,6 +58,69 @@ def _combined_probability_from_log_survival(log_survival: float) -> float:
         return 1.0
     return float(1.0 - math.exp(float(log_survival)))
 
+_LARAB_SCORE_THRESHOLD = 1.0
+# Controls the "units" of queue pressure in the unified LARAB score. This is
+# intentionally a fixed constant (not tuned) so Optuna only needs to search
+# over multiplier weights.
+_LARAB_QUEUE_PRESSURE_SCALE_MIN = 30.0
+
+
+def _larab_flush_score(
+    log_survival: float,
+    queue_pressure_min: float,
+    risk_multiplier: float,
+    queue_pressure_multiplier: float,
+    queue_pressure_scale_min: float = _LARAB_QUEUE_PRESSURE_SCALE_MIN,
+) -> float:
+    """
+    Unified LARAB flush score that combines:
+      - cumulative risk via log-survival mass, and
+      - queue pressure (minutes) via a log-scaled penalty.
+
+    Definitions
+    -----------
+    Let the batch "survival" probability be:
+
+        survival = Π(1 - risk_i)
+
+    We track:
+
+        log_survival = Σ log(1 - risk_i)
+
+    and define a cumulative-risk "hazard" term:
+
+        hazard = -log_survival = -log(survival) = -log(1 - fail_prob)
+
+    which is approximately Σ risk_i for small risks.
+
+    Queue pressure is penalized as:
+
+        load = log1p(queue_pressure_min / queue_pressure_scale_min)
+
+    Score
+    -----
+        score = risk_multiplier * hazard - queue_pressure_multiplier * load
+
+    The strategy flushes when `score >= _LARAB_SCORE_THRESHOLD`.
+    """
+    if math.isinf(log_survival) and float(log_survival) < 0.0:
+        hazard = float("inf")
+    else:
+        hazard = -float(log_survival)
+        if hazard < 0.0:
+            hazard = 0.0
+
+    q = float(queue_pressure_min)
+    if q < 0.0:
+        q = 0.0
+
+    scale = float(queue_pressure_scale_min)
+    if scale <= 0.0:
+        scale = 1e-9
+    load = math.log1p(q / scale)
+
+    return float(risk_multiplier) * hazard - float(queue_pressure_multiplier) * load
+
 
 def _percentile_linear(sorted_values, p: float) -> float:
     """
@@ -2774,40 +2837,49 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
     Load-Aware Risk-Adaptive Batching (LARAB).
 
     Similar to RASB, but batching is performed independently per worker pool and
-    a batch is flushed only when both:
-      - accumulated batch failure probability >= risk_threshold, and
-      - queue pressure for that pool <= queue_pressure_threshold_min.
+    a batch is flushed using a *single* unified score that combines:
+      - cumulative risk (via log-survival mass), and
+      - predicted queue pressure for that pool.
+
+    Concretely, we compute a flush score:
+
+        score = risk_multiplier * (-log_survival) - queue_pressure_multiplier * log1p(queue_pressure / scale)
+
+    and flush when:
+
+        score >= _LARAB_SCORE_THRESHOLD
+
+    This avoids optimizing separate risk/pressure thresholds; Optuna only tunes
+    the multipliers.
 
     Parameters
     ----------
     params:
-        Tuple `(risk_threshold, queue_pressure_threshold_min)`.
+        Tuple `(risk_multiplier, queue_pressure_multiplier)`.
     """
     try:
-        risk_threshold, queue_threshold_min = params
+        risk_multiplier, queue_pressure_multiplier = params
     except Exception as exc:
         raise TypeError(
-            "LARAB params must be a tuple (risk_threshold, queue_pressure_threshold_min); "
+            "LARAB params must be a tuple (risk_multiplier, queue_pressure_multiplier); "
             f"got {params!r}"
         ) from exc
 
-    risk_threshold = float(risk_threshold)
-    queue_threshold_min = float(queue_threshold_min)
-    if risk_threshold < 0.0 or risk_threshold > 1.0:
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
         raise ValueError(
-            f"LARAB risk_threshold must be in [0,1]; got {risk_threshold!r}"
-        )
-    if queue_threshold_min < 0.0:
-        raise ValueError(
-            "LARAB queue_pressure_threshold_min must be non-negative; "
-            f"got {queue_threshold_min!r}"
+            "LARAB queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
         )
 
     logger.info(
-        "simulate_larab_with_bisect: %d commits, risk_threshold=%.4f, queue_threshold_min=%.2f, bisect_fn=%s",
+        "simulate_larab_with_bisect: %d commits, risk_multiplier=%.4f, queue_pressure_multiplier=%.4f, bisect_fn=%s",
         len(commits),
-        risk_threshold,
-        queue_threshold_min,
+        risk_multiplier,
+        queue_pressure_multiplier,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -2840,12 +2912,25 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
             log_survival_by_pool[pool] = _accumulate_log_survival(
                 log_survival_by_pool[pool], p
             )
-            fail_prob = _combined_probability_from_log_survival(log_survival_by_pool[pool])
-            if fail_prob < risk_threshold:
+
+            log_survival = log_survival_by_pool[pool]
+            # Fast path: if the risk-only contribution can't meet the threshold,
+            # adding a non-negative queue penalty cannot help.
+            if math.isinf(log_survival) and float(log_survival) < 0.0:
+                base_score = float("inf")
+            else:
+                base_score = risk_multiplier * (-float(log_survival))
+            if base_score < _LARAB_SCORE_THRESHOLD:
                 continue
 
             pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
-            if pressure_min > queue_threshold_min:
+            score = _larab_flush_score(
+                log_survival,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
                 continue
 
             durations = _full_suite_durations_for_pool(executor, pool)
@@ -2901,34 +2986,33 @@ def simulate_larab_s_with_bisect(commits, bisect_fn, params, num_workers):
     """
     LARAB with subset suite detection (LARAB-s).
 
-    Uses the same per-pool trigger as LARAB, but each flushed pool batch runs a
-    subset suite (union of observed signature-groups in that pool batch).
+    Uses the same per-pool trigger as LARAB (unified risk+pressure score), but
+    each flushed pool batch runs a subset suite (union of observed
+    signature-groups in that pool batch).
     """
     try:
-        risk_threshold, queue_threshold_min = params
+        risk_multiplier, queue_pressure_multiplier = params
     except Exception as exc:
         raise TypeError(
-            "LARAB-s params must be a tuple (risk_threshold, queue_pressure_threshold_min); "
+            "LARAB-s params must be a tuple (risk_multiplier, queue_pressure_multiplier); "
             f"got {params!r}"
         ) from exc
 
-    risk_threshold = float(risk_threshold)
-    queue_threshold_min = float(queue_threshold_min)
-    if risk_threshold < 0.0 or risk_threshold > 1.0:
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB-s risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
         raise ValueError(
-            f"LARAB-s risk_threshold must be in [0,1]; got {risk_threshold!r}"
-        )
-    if queue_threshold_min < 0.0:
-        raise ValueError(
-            "LARAB-s queue_pressure_threshold_min must be non-negative; "
-            f"got {queue_threshold_min!r}"
+            "LARAB-s queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
         )
 
     logger.info(
-        "simulate_larab_s_with_bisect: %d commits, risk_threshold=%.4f, queue_threshold_min=%.2f, bisect_fn=%s",
+        "simulate_larab_s_with_bisect: %d commits, risk_multiplier=%.4f, queue_pressure_multiplier=%.4f, bisect_fn=%s",
         len(commits),
-        risk_threshold,
-        queue_threshold_min,
+        risk_multiplier,
+        queue_pressure_multiplier,
         getattr(bisect_fn, "__name__", str(bisect_fn)),
     )
 
@@ -2962,12 +3046,22 @@ def simulate_larab_s_with_bisect(commits, bisect_fn, params, num_workers):
             log_survival_by_pool[pool] = _accumulate_log_survival(
                 log_survival_by_pool[pool], p
             )
-            fail_prob = _combined_probability_from_log_survival(log_survival_by_pool[pool])
-            if fail_prob < risk_threshold:
+            log_survival = log_survival_by_pool[pool]
+            if math.isinf(log_survival) and float(log_survival) < 0.0:
+                base_score = float("inf")
+            else:
+                base_score = risk_multiplier * (-float(log_survival))
+            if base_score < _LARAB_SCORE_THRESHOLD:
                 continue
 
             pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
-            if pressure_min > queue_threshold_min:
+            score = _larab_flush_score(
+                log_survival,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
                 continue
 
             batch_commits = commits[start_idx : idx + 1]
