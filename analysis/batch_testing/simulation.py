@@ -275,6 +275,23 @@ def get_args():
         ),
     )
     parser.add_argument(
+        "--baseline-opt-metric-multplier",
+        "--baseline-opt-metric-multiplier",
+        "--baseline_opt_metric_multplier",
+        "--baseline_opt_metric_multiplier",
+        type=float,
+        default=1.0,
+        dest="baseline_opt_metric_multplier",
+        help=(
+            "Multiplier applied to the baseline timeliness metric when selecting a "
+            "single Pareto-optimal point per combo. We first filter Pareto points "
+            "to those with timeliness_metric <= (baseline_timeliness_metric * multiplier) "
+            "and pick the one with the fewest tests (tie-break by timeliness). If "
+            "none satisfy, we fall back to the point with the smallest timeliness "
+            "metric (tie-break by tests). Default: 1.0."
+        ),
+    )
+    parser.add_argument(
         "--input-json-eval",
         default=os.path.join(
             REPO_ROOT,
@@ -860,6 +877,7 @@ def run_evaluation_mopt(
     INPUT_JSON_EVAL,
     n_trials,
     optimize_for_timeliness_metric="max_time_to_culprit_hr",
+    baseline_opt_metric_multplier=1.0,
     selected_batching=None,
     selected_bisection=None,
     run_exhaustive_testing_et=True,
@@ -891,10 +909,11 @@ def run_evaluation_mopt(
         ) from e
 
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
         INPUT_JSON_EVAL,
         n_trials,
         optimize_for_timeliness_metric,
+        float(baseline_opt_metric_multplier),
     )
 
     selected_batching_set = (
@@ -971,13 +990,18 @@ def run_evaluation_mopt(
     def pick_best(pareto, baseline_timeliness_local):
         if not pareto:
             return None
+        baseline_threshold = None
+        if baseline_timeliness_local is not None:
+            baseline_threshold = _float_or_inf(baseline_timeliness_local) * float(
+                baseline_opt_metric_multplier
+            )
         feas = [
             r
             for r in pareto
             if (
-                baseline_timeliness_local is None
+                baseline_threshold is None
                 or _float_or_inf(r.get(optimize_for_timeliness_metric))
-                <= _float_or_inf(baseline_timeliness_local)
+                <= baseline_threshold
             )
         ]
         if feas:
@@ -1002,6 +1026,7 @@ def run_evaluation_mopt(
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
         "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
+        "mopt_baseline_opt_metric_multplier": float(baseline_opt_metric_multplier),
     }
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
@@ -1730,9 +1755,15 @@ def main():
     timeliness_metric_key = resolve_timeliness_metric_key(
         getattr(args, "optimize_for_timeliness_metric", DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC)
     )
+    baseline_opt_metric_multplier = float(getattr(args, "baseline_opt_metric_multplier", 1.0))
+    if baseline_opt_metric_multplier <= 0.0:
+        raise ValueError(
+            f"--baseline-opt-metric-multplier must be > 0; got {baseline_opt_metric_multplier!r}"
+        )
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
         "optimize_for_timeliness_metric=%s, "
+        "baseline_opt_metric_multplier=%.4f, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
@@ -1742,6 +1773,7 @@ def main():
         args.final_only,
         str(args.num_test_workers),
         timeliness_metric_key,
+        baseline_opt_metric_multplier,
         int(getattr(args, "workers_android", 0)),
         int(getattr(args, "workers_windows", 0)),
         int(getattr(args, "workers_linux", 0)),
@@ -1916,6 +1948,7 @@ def main():
         INPUT_JSON_EVAL,
         n_trials=args.mopt_trials,
         optimize_for_timeliness_metric=timeliness_metric_key,
+        baseline_opt_metric_multplier=baseline_opt_metric_multplier,
         selected_batching=selected_batching,
         selected_bisection=selected_bisection,
         run_exhaustive_testing_et=run_et,
