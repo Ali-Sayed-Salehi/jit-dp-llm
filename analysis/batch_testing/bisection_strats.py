@@ -43,6 +43,9 @@ SIG_GROUPS_JSONL = os.path.join(
 ALL_SIGNATURES_JSONL = os.path.join(
     REPO_ROOT, "datasets", "mozilla_perf", "all_signatures.jsonl"
 )
+HISTORICAL_RISK_PER_SIG_GROUP_JSONL = os.path.join(
+    REPO_ROOT, "datasets", "mozilla_perf", "historical_risk_per_signature_group.jsonl"
+)
 
 # ---------- Central test executor capacity (per-platform worker pools) ----------
 
@@ -85,6 +88,8 @@ REVISION_FAIL_SIG_IDS = {}
 REVISION_TESTED_SIG_GROUP_IDS = {}
 # list[int] of signature_group_ids for the "full" batch test suite
 BATCH_SIG_GROUP_IDS = []
+# signature_group_id -> historical_repeat_count
+SIG_GROUP_HISTORICAL_REPEAT_COUNT = {}
 
 _warned_missing_sig_group_duration_ids = set()
 _warned_missing_sig_group_pool_ids = set()
@@ -93,6 +98,88 @@ _warned_unknown_machine_platform_values = set()
 TKRB_TOP_K = 1
 
 logger = logging.getLogger(__name__)
+
+def _load_historical_repeat_counts():
+    """
+    Load:
+      - historical_risk_per_signature_group.jsonl => SIG_GROUP_HISTORICAL_REPEAT_COUNT
+
+    Expected JSONL rows:
+      {"Sig_group_id": 11, "historical_repeat_count": 1}
+    """
+    global SIG_GROUP_HISTORICAL_REPEAT_COUNT
+
+    if SIG_GROUP_HISTORICAL_REPEAT_COUNT:
+        return
+
+    mapping = {}
+    try:
+        logger.info(
+            "Loading historical repeat counts per signature-group from %s",
+            HISTORICAL_RISK_PER_SIG_GROUP_JSONL,
+        )
+        with open(HISTORICAL_RISK_PER_SIG_GROUP_JSONL, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSONL line in %s: %s",
+                        HISTORICAL_RISK_PER_SIG_GROUP_JSONL,
+                        line[:200],
+                    )
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                gid = (
+                    obj.get("Sig_group_id")
+                    if "Sig_group_id" in obj
+                    else obj.get("signature_group_id", obj.get("sig_group_id"))
+                )
+                if gid is None:
+                    continue
+                try:
+                    gid_int = int(gid)
+                except (TypeError, ValueError):
+                    continue
+
+                raw_count = obj.get("historical_repeat_count", obj.get("repeat_count", 0))
+                try:
+                    count_int = int(raw_count)
+                except (TypeError, ValueError):
+                    count_int = 0
+                if count_int < 0:
+                    count_int = 0
+
+                mapping[gid_int] = count_int
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "historical_risk_per_signature_group.jsonl not found at "
+            f"{HISTORICAL_RISK_PER_SIG_GROUP_JSONL}"
+        ) from exc
+
+    SIG_GROUP_HISTORICAL_REPEAT_COUNT = mapping
+    if not SIG_GROUP_HISTORICAL_REPEAT_COUNT:
+        raise RuntimeError(
+            f"No historical repeat counts loaded from {HISTORICAL_RISK_PER_SIG_GROUP_JSONL}"
+        )
+    logger.info(
+        "Loaded historical repeat counts for %d signature-groups",
+        len(SIG_GROUP_HISTORICAL_REPEAT_COUNT),
+    )
+
+
+def get_historical_repeat_counts_by_sig_group():
+    """
+    Return mapping:
+      signature_group_id -> historical_repeat_count
+    """
+    _load_historical_repeat_counts()
+    return SIG_GROUP_HISTORICAL_REPEAT_COUNT
 
 def configure_bisection_defaults(
     default_test_duration_min=None,

@@ -45,6 +45,7 @@ from batch_strats import (
     simulate_rapb_la_s_with_bisect,
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
+    simulate_hats_with_bisect,
     simulate_lab_with_bisect,
     simulate_lab_s_with_bisect,
     simulate_larab_with_bisect,
@@ -78,6 +79,10 @@ RAPB_AGING_PER_HOUR = 0.05
 LINEAR_RISK_BUDGET = 1.0
 RATB_THRESHOLD = 0.5
 RATB_TIME_WINDOW_HOURS = 4
+HATS_RISK_BUDGET = 1.0
+HATS_BASE_RISK_PER_COMMIT = 0.001
+HATS_REPEAT_RISK_SCALE = 0.02
+HATS_REPEAT_RISK_POWER = 1.0
 LAB_QUEUE_PRESSURE_THRESHOLD_MIN = 30.0
 # LARAB uses a unified (risk, queue) score with a fixed score threshold. We
 # only tune multiplier weights (no separate risk/pressure thresholds).
@@ -159,6 +164,16 @@ BATCHING_STRATEGIES = [
     ("RAPB-la-s", simulate_rapb_la_s_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
     ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
+    (
+        "HATS",
+        simulate_hats_with_bisect,
+        (
+            HATS_RISK_BUDGET,
+            HATS_BASE_RISK_PER_COMMIT,
+            HATS_REPEAT_RISK_SCALE,
+            HATS_REPEAT_RISK_POWER,
+        ),
+    ),
     ("LAB", simulate_lab_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
     ("LAB-s", simulate_lab_s_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
     ("LARAB", simulate_larab_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
@@ -1123,6 +1138,14 @@ def run_evaluation_mopt(
                     thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
                     param = (thr, tw)
+                elif normalized_batch_name == "HATS":
+                    budget = trial.suggest_float("HATS_RISK_BUDGET", 0.25, 6.0)
+                    base = trial.suggest_float(
+                        "HATS_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
+                    )
+                    scale = trial.suggest_float("HATS_REPEAT_RISK_SCALE", 0.0, 0.1)
+                    power = trial.suggest_float("HATS_REPEAT_RISK_POWER", 0.5, 3.0)
+                    param = (budget, base, scale, power)
                 elif normalized_batch_name == "LAB":
                     param = trial.suggest_float(
                         "LAB_QUEUE_PRESSURE_THRESHOLD_MIN", 0.0, 24.0 * 60.0
@@ -1199,6 +1222,13 @@ def run_evaluation_mopt(
                         params["RATB_THRESHOLD"],
                         params["RATB_TIME_WINDOW_HOURS"],
                     )
+                elif normalized_batch_name == "HATS":
+                    param = (
+                        params["HATS_RISK_BUDGET"],
+                        params["HATS_BASE_RISK_PER_COMMIT"],
+                        params["HATS_REPEAT_RISK_SCALE"],
+                        params["HATS_REPEAT_RISK_POWER"],
+                    )
                 elif normalized_batch_name == "LAB":
                     param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
                 elif normalized_batch_name == "LARAB":
@@ -1242,6 +1272,13 @@ def run_evaluation_mopt(
                     best_param_dict = {
                         "RATB_THRESHOLD": param[0],
                         "RATB_TIME_WINDOW_HOURS": param[1],
+                    }
+                elif normalized_batch_name == "HATS":
+                    best_param_dict = {
+                        "HATS_RISK_BUDGET": param[0],
+                        "HATS_BASE_RISK_PER_COMMIT": param[1],
+                        "HATS_REPEAT_RISK_SCALE": param[2],
+                        "HATS_REPEAT_RISK_POWER": param[3],
                     }
                 elif normalized_batch_name == "LAB":
                     best_param_dict = {
@@ -1636,6 +1673,15 @@ def run_final_test_unified(
             param = (
                 best_params["LARAB_RISK_MULTIPLIER"],
                 best_params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
+            )
+        elif normalized_batch_name == "HATS":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params["HATS_RISK_BUDGET"],
+                best_params["HATS_BASE_RISK_PER_COMMIT"],
+                best_params["HATS_REPEAT_RISK_SCALE"],
+                best_params["HATS_REPEAT_RISK_POWER"],
             )
         elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB

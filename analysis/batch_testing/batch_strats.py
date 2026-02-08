@@ -2593,6 +2593,232 @@ def simulate_ratb_s_with_bisect(commits, bisect_fn, params, num_workers):
     return _simulate_signature_union_driver(commits, bisect_fn, batches, num_workers)
 
 
+def _hats_per_commit_risk(
+    historical_repeat_count: int,
+    base_risk_per_commit: float,
+    repeat_risk_scale: float,
+    repeat_risk_power: float,
+) -> float:
+    """
+    Convert a signature-group historical repeat count into a per-commit risk increment.
+
+    Definitions
+    -----------
+    Let `r` be the historical repeat count for a signature-group.
+
+    We define a per-commit increment:
+
+        inc(r) = base + scale * (log1p(r) ** power)
+
+    The cumulative "historical risk" for a signature-group since its last test is:
+
+        cumulative = Σ inc(r)   (one increment per streamed commit)
+
+    HATS flushes (tests) a signature-group when its cumulative risk reaches a
+    shared threshold/budget (see `simulate_hats_with_bisect`).
+
+    This mapping is designed so that:
+      - groups with r=0 still accumulate risk (via `base`), but slowly, and
+      - groups with larger repeat counts accumulate risk faster and are tested more often.
+
+    The parameters (base/scale/power/threshold) are intended to be tunable via Optuna.
+    """
+    r = int(historical_repeat_count) if historical_repeat_count is not None else 0
+    if r < 0:
+        r = 0
+    x = math.log1p(r)
+    return float(base_risk_per_commit) + float(repeat_risk_scale) * (x ** float(repeat_risk_power))
+
+
+def simulate_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    History-aware Test Selection (HATS).
+
+    HATS maintains an independent cumulative historical-risk score per
+    signature-group. As commits stream in, each signature-group's cumulative
+    score increases by a per-commit increment derived from its historical
+    repeat count (loaded from:
+      datasets/mozilla_perf/historical_risk_per_signature_group.jsonl).
+
+    When a signature-group's cumulative score reaches a shared threshold, we
+    "flush" that signature-group: schedule a suite run that exercises *only*
+    that signature-group on the most recent commit and, if it fails, invoke
+    the chosen bisection strategy restricted to the commits since the last
+    time that signature-group was exercised.
+
+    Parameters
+    ----------
+    params:
+        Tuple:
+          (risk_budget, base_risk_per_commit, repeat_risk_scale, repeat_risk_power)
+    """
+    if not isinstance(params, tuple) or len(params) != 4:
+        raise ValueError(
+            "HATS expects params=(risk_budget, base_risk_per_commit, repeat_risk_scale, repeat_risk_power); "
+            f"got {params!r}"
+        )
+    risk_budget, base_risk_per_commit, repeat_risk_scale, repeat_risk_power = params
+
+    risk_budget = float(risk_budget)
+    base_risk_per_commit = float(base_risk_per_commit)
+    repeat_risk_scale = float(repeat_risk_scale)
+    repeat_risk_power = float(repeat_risk_power)
+
+    if risk_budget <= 0.0:
+        raise ValueError(f"HATS risk_budget must be > 0; got {risk_budget!r}")
+    if base_risk_per_commit < 0.0:
+        raise ValueError(
+            f"HATS base_risk_per_commit must be >= 0; got {base_risk_per_commit!r}"
+        )
+    if repeat_risk_scale < 0.0:
+        raise ValueError(
+            f"HATS repeat_risk_scale must be >= 0; got {repeat_risk_scale!r}"
+        )
+    if repeat_risk_power <= 0.0:
+        raise ValueError(
+            f"HATS repeat_risk_power must be > 0; got {repeat_risk_power!r}"
+        )
+
+    logger.info(
+        "simulate_hats_with_bisect: %d commits, risk_budget=%.4f, base=%.6f, scale=%.6f, power=%.4f, bisect_fn=%s",
+        len(commits),
+        risk_budget,
+        base_risk_per_commit,
+        repeat_risk_scale,
+        repeat_risk_power,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        metrics = _StreamingMetrics(0, [], {}, set())
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    # The signature-groups we schedule for HATS should match the simulator's
+    # current "full suite" definition (potentially restricted via
+    # configure_full_suite_signatures_union()).
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("HATS: empty signature-group suite; cannot run simulation.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+
+    interval_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(r, base_risk_per_commit, repeat_risk_scale, repeat_risk_power)
+        # Ensure every group accumulates some positive risk so it can be tested.
+        if inc <= 0.0:
+            inc = 1e-12
+        interval = int(math.ceil(risk_budget / inc))
+        if interval < 1:
+            interval = 1
+        interval_by_gid[int(gid)] = interval
+
+    # Generate flush events by simulating independent per-sig-group counters,
+    # but do it efficiently by using fixed intervals (in commit-count space)
+    # and a heap over next flush indices.
+    last_idx = len(commits) - 1
+    heap = []
+    for gid, interval in interval_by_gid.items():
+        next_flush_idx = int(interval) - 1
+        if next_flush_idx < last_idx:
+            heapq.heappush(heap, (next_flush_idx, int(gid)))
+
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+    last_seen_idx_by_sig = {}
+
+    while heap:
+        flush_idx, gid = heapq.heappop(heap)
+        flush_idx = int(flush_idx)
+        if flush_idx >= last_idx:
+            # We always do a single "drain" flush at the final commit to cover
+            # the tail of the stream for all signature-groups.
+            break
+
+        gids = [int(gid)]
+        while heap and int(heap[0][0]) == flush_idx:
+            _idx2, gid2 = heapq.heappop(heap)
+            gids.append(int(gid2))
+
+        flush_time = commits[flush_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in gids if g in duration_by_gid]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                0,
+                flush_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_idx_by_sig,
+            )
+
+        for g in gids:
+            interval = interval_by_gid.get(int(g))
+            if interval is None:
+                continue
+            next_flush_idx = flush_idx + int(interval)
+            if next_flush_idx < last_idx:
+                heapq.heappush(heap, (next_flush_idx, int(g)))
+
+    # Drain flush at the final commit for any signature-group that has untested
+    # commits since its last exercise.
+    pending_gids = [
+        int(gid) for gid in sig_group_ids if int(last_seen_idx_by_sig.get(int(gid), -1)) < last_idx
+    ]
+    if pending_gids:
+        flush_time = commits[last_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in pending_gids if g in duration_by_gid]
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            suite_durations,
+            0,
+            last_idx,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_idx_by_sig,
+        )
+
+    logger.info(
+        "simulate_hats_with_bisect: finished; total_tests_run=%d",
+        metrics.total_tests_run,
+    )
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
 def _stable_pool_iteration_order(pool_sizes: dict) -> list[str]:
     if not isinstance(pool_sizes, dict) or not pool_sizes:
         return []
