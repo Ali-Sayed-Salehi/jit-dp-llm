@@ -849,10 +849,8 @@ def lookup_bisection(name):
 # ------------------- BEST-OVERALL LOGIC -------------------
 BEST_OVERALL_FIELDS = [
     "tests_saved_vs_baseline_pct",
-    "mean_feedback_time_saved_vs_baseline_pct",
     "mean_time_to_culprit_saved_vs_baseline_pct",
     "max_time_to_culprit_saved_vs_baseline_pct",
-    "cpu_time_saved_vs_baseline_pct",
 ]
 
 
@@ -860,16 +858,14 @@ def _overall_improvement_score(entry):
     """
     Overall improvement score:
         tests_saved_vs_baseline_pct
-        + (mean_feedback_time_saved_vs_baseline_pct
-           + mean_time_to_culprit_saved_vs_baseline_pct
-           + max_time_to_culprit_saved_vs_baseline_pct) / 3
+        + (mean_time_to_culprit_saved_vs_baseline_pct
+           + max_time_to_culprit_saved_vs_baseline_pct) / 2
     """
     tests_saved = entry.get("tests_saved_vs_baseline_pct", 0.0)
-    mean_fb = entry.get("mean_feedback_time_saved_vs_baseline_pct", 0.0)
     mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
     max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
     # CPU time is tracked separately but not included in this aggregate score.
-    return tests_saved + (mean_fb + mean_ttc + max_ttc) / 3.0
+    return tests_saved + (mean_ttc + max_ttc) / 2.0
 
 
 def _is_better_or_equal_to_baseline(entry):
@@ -1544,7 +1540,7 @@ def run_evaluation_mopt(
     )
 
     # Best overall vs baseline (centralized logic)
-    out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(
+    out_eval["best_overall_improvement_over_baseline"] = choose_best_overall_from_items(
         combo_items
     )
 
@@ -1674,7 +1670,7 @@ def run_final_test_unified(
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
-            "bet_overall_improvement_over_baseline",
+            "best_overall_improvement_over_baseline",
             "num_test_workers",
             "worker_pools",
         ):
@@ -1795,7 +1791,7 @@ def run_final_test_unified(
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
-            "bet_overall_improvement_over_baseline",
+            "best_overall_improvement_over_baseline",
             "num_test_workers",
         ):
             continue
@@ -1820,14 +1816,14 @@ def run_final_test_unified(
             eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
         )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
-        final_results["bet_overall_improvement_over_baseline"] = (
+        final_results["best_overall_improvement_over_baseline"] = (
             choose_best_overall_from_items(eligible)
         )
     else:
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
-        final_results["bet_overall_improvement_over_baseline"] = "NA"
+        final_results["best_overall_improvement_over_baseline"] = "NA"
 
     # Save FINAL
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
