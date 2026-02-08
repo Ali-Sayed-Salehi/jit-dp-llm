@@ -2819,6 +2819,346 @@ def simulate_hats_with_bisect(commits, bisect_fn, params, num_workers):
     )
 
 
+def _rahats_commit_hazard_increment(commit_risk: float) -> float:
+    """
+    Map a commit's predicted risk p in [0,1] to an additive hazard increment.
+
+    We use the standard log-survival hazard:
+
+        hazard_inc = -log(1 - p)
+
+    which behaves like p for small risks, but grows rapidly as p -> 1.
+    """
+    try:
+        p = float(commit_risk)
+    except (TypeError, ValueError):
+        p = 0.0
+    if p <= 0.0:
+        return 0.0
+    if p >= 1.0:
+        p = 1.0 - 1e-12
+    return float(-math.log1p(-p))
+
+
+def _rahats_prefix_commit_hazard(commits) -> list[float]:
+    """
+    Build prefix sums of commit hazard increments:
+      prefix[i] = Σ_{k=0..i} hazard_inc(commit_risk_k)
+    """
+    out = []
+    s = 0.0
+    for c in commits:
+        s += _rahats_commit_hazard_increment(c.get("risk", 0.0))
+        out.append(float(s))
+    return out
+
+
+def _rahats_next_flush_idx(
+    last_test_idx: int,
+    last_idx: int,
+    commit_hazard_prefix: list[float],
+    hist_inc_per_commit: float,
+    hist_multiplier: float,
+    commit_multiplier: float,
+    risk_budget: float,
+) -> int | None:
+    """
+    Given a signature-group last tested at `last_test_idx`, find the next commit
+    index where its combined (history + commit-risk) score reaches `risk_budget`.
+
+    Score over (last_test_idx, j]:
+      hist_term   = hist_multiplier  * hist_inc_per_commit * (j - last_test_idx)
+      commit_term = commit_multiplier * (H[j] - H[last_test_idx])
+      total = hist_term + commit_term
+
+    Returns the smallest such j in [last_test_idx+1, last_idx], or last_idx if
+    the budget is not reached before the stream ends.
+    """
+    if last_test_idx >= last_idx:
+        return None
+
+    hist_inc = float(hist_inc_per_commit)
+    if hist_inc < 0.0:
+        hist_inc = 0.0
+
+    hm = float(hist_multiplier)
+    cm = float(commit_multiplier)
+    if hm < 0.0:
+        hm = 0.0
+    if cm < 0.0:
+        cm = 0.0
+    if hm == 0.0 and cm == 0.0:
+        return None
+
+    budget = float(risk_budget)
+    if budget <= 0.0:
+        return int(last_test_idx + 1)
+
+    base_h = 0.0 if last_test_idx < 0 else float(commit_hazard_prefix[last_test_idx])
+
+    def score(j: int) -> float:
+        n = int(j) - int(last_test_idx)
+        commit_h = float(commit_hazard_prefix[j]) - base_h
+        if commit_h < 0.0:
+            commit_h = 0.0
+        return hm * hist_inc * float(n) + cm * commit_h
+
+    lo = int(last_test_idx + 1)
+    hi = int(last_idx)
+
+    if score(lo) >= budget:
+        return lo
+    if score(hi) < budget:
+        return hi
+
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if score(mid) >= budget:
+            hi = mid
+        else:
+            lo = mid + 1
+    return int(lo)
+
+
+def simulate_rahats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    Risk-aware History-aware Test Selection (RAHATS).
+
+    Like HATS, this strategy maintains a per-signature-group cumulative
+    *historical* risk (derived from historical repeat counts). Additionally, it
+    incorporates a cumulative *commit* risk score derived from the stream's
+    per-commit predicted risks (like other risk-aware strategies).
+
+    Total score (per signature-group) is the sum of two terms:
+      - Historical term: grows linearly with commits since last test at a rate
+        determined by the group's repeat count.
+      - Commit-risk term: grows with the cumulative commit hazard since the
+        group's last test (shared across signature-groups, but scaled by a
+        tunable weight).
+
+    Flush rule (per signature-group):
+      flush when total_score >= risk_budget, then run that signature-group and
+      (if it fails) bisect only the commits since it was last exercised.
+
+    Parameters
+    ----------
+    params:
+        Tuple:
+          (
+            risk_budget,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+            hist_multiplier,
+            commit_multiplier,
+          )
+    """
+    if not isinstance(params, tuple) or len(params) != 6:
+        raise ValueError(
+            "RAHATS expects params=(risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, "
+            "hist_repeat_risk_power, hist_multiplier, commit_multiplier); "
+            f"got {params!r}"
+        )
+    (
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+    ) = params
+
+    risk_budget = float(risk_budget)
+    hist_base_risk_per_commit = float(hist_base_risk_per_commit)
+    hist_repeat_risk_scale = float(hist_repeat_risk_scale)
+    hist_repeat_risk_power = float(hist_repeat_risk_power)
+    hist_multiplier = float(hist_multiplier)
+    commit_multiplier = float(commit_multiplier)
+
+    if risk_budget <= 0.0:
+        raise ValueError(f"RAHATS risk_budget must be > 0; got {risk_budget!r}")
+    if hist_base_risk_per_commit < 0.0:
+        raise ValueError(
+            f"RAHATS hist_base_risk_per_commit must be >= 0; got {hist_base_risk_per_commit!r}"
+        )
+    if hist_repeat_risk_scale < 0.0:
+        raise ValueError(
+            f"RAHATS hist_repeat_risk_scale must be >= 0; got {hist_repeat_risk_scale!r}"
+        )
+    if hist_repeat_risk_power <= 0.0:
+        raise ValueError(
+            f"RAHATS hist_repeat_risk_power must be > 0; got {hist_repeat_risk_power!r}"
+        )
+    if hist_multiplier < 0.0:
+        raise ValueError(
+            f"RAHATS hist_multiplier must be >= 0; got {hist_multiplier!r}"
+        )
+    if commit_multiplier < 0.0:
+        raise ValueError(
+            f"RAHATS commit_multiplier must be >= 0; got {commit_multiplier!r}"
+        )
+    if hist_multiplier == 0.0 and commit_multiplier == 0.0:
+        raise ValueError(
+            "RAHATS requires at least one non-zero weight (hist_multiplier or commit_multiplier)."
+        )
+
+    logger.info(
+        "simulate_rahats_with_bisect: %d commits, budget=%.4f, hist(base=%.6f scale=%.6f power=%.4f mult=%.4f), commit(mult=%.4f), bisect_fn=%s",
+        len(commits),
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        metrics = _StreamingMetrics(0, [], {}, set())
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("RAHATS: empty signature-group suite; cannot run simulation.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+    commit_hazard_prefix = _rahats_prefix_commit_hazard(commits)
+
+    hist_inc_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(
+            r,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+        )
+        # Ensure groups can still accumulate history if commit_multiplier==0.
+        if inc <= 0.0:
+            inc = 1e-12
+        hist_inc_by_gid[int(gid)] = float(inc)
+
+    last_idx = len(commits) - 1
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+    last_seen_idx_by_sig = {}
+
+    # Heap items: (next_flush_idx, gid)
+    heap = []
+    for gid in sig_group_ids:
+        nxt = _rahats_next_flush_idx(
+            -1,
+            last_idx,
+            commit_hazard_prefix,
+            hist_inc_by_gid[int(gid)],
+            hist_multiplier,
+            commit_multiplier,
+            risk_budget,
+        )
+        if nxt is None:
+            continue
+        if int(nxt) < last_idx:
+            heapq.heappush(heap, (int(nxt), int(gid)))
+
+    while heap:
+        flush_idx, gid = heapq.heappop(heap)
+        flush_idx = int(flush_idx)
+        if flush_idx >= last_idx:
+            break
+
+        gids = [int(gid)]
+        while heap and int(heap[0][0]) == flush_idx:
+            _idx2, gid2 = heapq.heappop(heap)
+            gids.append(int(gid2))
+
+        flush_time = commits[flush_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in gids if g in duration_by_gid]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                0,
+                flush_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_idx_by_sig,
+            )
+
+        for g in gids:
+            last_test_idx = int(last_seen_idx_by_sig.get(int(g), flush_idx))
+            nxt = _rahats_next_flush_idx(
+                last_test_idx,
+                last_idx,
+                commit_hazard_prefix,
+                hist_inc_by_gid[int(g)],
+                hist_multiplier,
+                commit_multiplier,
+                risk_budget,
+            )
+            if nxt is None:
+                continue
+            if int(nxt) < last_idx:
+                heapq.heappush(heap, (int(nxt), int(g)))
+
+    # Drain flush at the final commit to cover any pending tail per signature-group.
+    pending_gids = [
+        int(gid)
+        for gid in sig_group_ids
+        if int(last_seen_idx_by_sig.get(int(gid), -1)) < last_idx
+    ]
+    if pending_gids:
+        flush_time = commits[last_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in pending_gids if g in duration_by_gid]
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            suite_durations,
+            0,
+            last_idx,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_idx_by_sig,
+        )
+
+    logger.info(
+        "simulate_rahats_with_bisect: finished; total_tests_run=%d",
+        metrics.total_tests_run,
+    )
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
 def _stable_pool_iteration_order(pool_sizes: dict) -> list[str]:
     if not isinstance(pool_sizes, dict) or not pool_sizes:
         return []

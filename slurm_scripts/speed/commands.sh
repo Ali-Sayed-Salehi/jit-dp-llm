@@ -46,12 +46,13 @@ echo "Running script ..."
 # --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
 # --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_opt_mean_ttc/batch_eval_mopt.json \
 # --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_opt_mean_ttc/batch_test_mopt.json \
-# --build-time-minutes 98 \
+# --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
-# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s \
+# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s,HATS,RAHATS \
 # --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
 # --optimize-for-timeliness-metric mean_ttc \
+# --baseline-opt-metric-multplier 2 \
 # --workers-android 60 \
 # --workers-windows 120 \
 # --workers-linux 100 \

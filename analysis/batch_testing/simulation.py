@@ -46,6 +46,7 @@ from batch_strats import (
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
     simulate_hats_with_bisect,
+    simulate_rahats_with_bisect,
     simulate_lab_with_bisect,
     simulate_lab_s_with_bisect,
     simulate_larab_with_bisect,
@@ -83,6 +84,12 @@ HATS_RISK_BUDGET = 1.0
 HATS_BASE_RISK_PER_COMMIT = 0.001
 HATS_REPEAT_RISK_SCALE = 0.02
 HATS_REPEAT_RISK_POWER = 1.0
+RAHATS_RISK_BUDGET = 1.0
+RAHATS_HIST_BASE_RISK_PER_COMMIT = 0.001
+RAHATS_HIST_REPEAT_RISK_SCALE = 0.02
+RAHATS_HIST_REPEAT_RISK_POWER = 1.0
+RAHATS_HIST_MULTIPLIER = 1.0
+RAHATS_COMMIT_MULTIPLIER = 1.0
 LAB_QUEUE_PRESSURE_THRESHOLD_MIN = 30.0
 # LARAB uses a unified (risk, queue) score with a fixed score threshold. We
 # only tune multiplier weights (no separate risk/pressure thresholds).
@@ -172,6 +179,18 @@ BATCHING_STRATEGIES = [
             HATS_BASE_RISK_PER_COMMIT,
             HATS_REPEAT_RISK_SCALE,
             HATS_REPEAT_RISK_POWER,
+        ),
+    ),
+    (
+        "RAHATS",
+        simulate_rahats_with_bisect,
+        (
+            RAHATS_RISK_BUDGET,
+            RAHATS_HIST_BASE_RISK_PER_COMMIT,
+            RAHATS_HIST_REPEAT_RISK_SCALE,
+            RAHATS_HIST_REPEAT_RISK_POWER,
+            RAHATS_HIST_MULTIPLIER,
+            RAHATS_COMMIT_MULTIPLIER,
         ),
     ),
     ("LAB", simulate_lab_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
@@ -1146,6 +1165,19 @@ def run_evaluation_mopt(
                     scale = trial.suggest_float("HATS_REPEAT_RISK_SCALE", 0.0, 0.1)
                     power = trial.suggest_float("HATS_REPEAT_RISK_POWER", 0.5, 3.0)
                     param = (budget, base, scale, power)
+                elif normalized_batch_name == "RAHATS":
+                    # Keep RAHATS risk budget fixed for a better-conditioned Optuna
+                    # search. Otherwise the budget becomes largely redundant with
+                    # scaling both multipliers.
+                    budget = float(RAHATS_RISK_BUDGET)
+                    hbase = trial.suggest_float(
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
+                    )
+                    hscale = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1)
+                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0)
+                    hm = trial.suggest_float("RAHATS_HIST_MULTIPLIER", 0.0, 6.0)
+                    cm = trial.suggest_float("RAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
+                    param = (budget, hbase, hscale, hpower, hm, cm)
                 elif normalized_batch_name == "LAB":
                     param = trial.suggest_float(
                         "LAB_QUEUE_PRESSURE_THRESHOLD_MIN", 0.0, 24.0 * 60.0
@@ -1229,6 +1261,15 @@ def run_evaluation_mopt(
                         params["HATS_REPEAT_RISK_SCALE"],
                         params["HATS_REPEAT_RISK_POWER"],
                     )
+                elif normalized_batch_name == "RAHATS":
+                    param = (
+                        float(RAHATS_RISK_BUDGET),
+                        params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
+                        params["RAHATS_HIST_REPEAT_RISK_SCALE"],
+                        params["RAHATS_HIST_REPEAT_RISK_POWER"],
+                        params["RAHATS_HIST_MULTIPLIER"],
+                        params["RAHATS_COMMIT_MULTIPLIER"],
+                    )
                 elif normalized_batch_name == "LAB":
                     param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
                 elif normalized_batch_name == "LARAB":
@@ -1279,6 +1320,15 @@ def run_evaluation_mopt(
                         "HATS_BASE_RISK_PER_COMMIT": param[1],
                         "HATS_REPEAT_RISK_SCALE": param[2],
                         "HATS_REPEAT_RISK_POWER": param[3],
+                    }
+                elif normalized_batch_name == "RAHATS":
+                    best_param_dict = {
+                        "RAHATS_RISK_BUDGET": float(RAHATS_RISK_BUDGET),
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
+                        "RAHATS_HIST_REPEAT_RISK_SCALE": param[2],
+                        "RAHATS_HIST_REPEAT_RISK_POWER": param[3],
+                        "RAHATS_HIST_MULTIPLIER": param[4],
+                        "RAHATS_COMMIT_MULTIPLIER": param[5],
                     }
                 elif normalized_batch_name == "LAB":
                     best_param_dict = {
@@ -1682,6 +1732,17 @@ def run_final_test_unified(
                 best_params["HATS_BASE_RISK_PER_COMMIT"],
                 best_params["HATS_REPEAT_RISK_SCALE"],
                 best_params["HATS_REPEAT_RISK_POWER"],
+            )
+        elif normalized_batch_name == "RAHATS":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params.get("RAHATS_RISK_BUDGET", float(RAHATS_RISK_BUDGET)),
+                best_params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
+                best_params["RAHATS_HIST_REPEAT_RISK_SCALE"],
+                best_params["RAHATS_HIST_REPEAT_RISK_POWER"],
+                best_params["RAHATS_HIST_MULTIPLIER"],
+                best_params["RAHATS_COMMIT_MULTIPLIER"],
             )
         elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB
