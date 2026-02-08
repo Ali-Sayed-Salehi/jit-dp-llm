@@ -602,9 +602,12 @@ def parse_hg_date(date_field):
     """
     Parse the `date` field from the mozilla perf `all_commits.jsonl` dataset.
 
-    Supports:
-      - `[unix_ts, offset_seconds]` pairs (Mercurial-style), and
-      - ISO-8601 datetime strings.
+    This simulator expects Mercurial-style `[unix_ts, offset_seconds]` pairs,
+    where `offset_seconds` is seconds west of UTC.
+
+    Note: we intentionally do *not* accept ISO-8601 datetime strings here. That
+    keeps the timestamp contract strict and avoids subtle timezone bugs caused
+    by mixing offset-aware and offset-naive datetimes.
     """
     if isinstance(date_field, list) and len(date_field) == 2:
         unix_ts, offset_seconds_west = date_field
@@ -612,10 +615,8 @@ def parse_hg_date(date_field):
         # Python's timezone offset is seconds east of UTC, so we negate.
         tz = timezone(timedelta(seconds=-int(offset_seconds_west)))
         return datetime.fromtimestamp(float(unix_ts), tz=tz)
-    if isinstance(date_field, str):
-        return datetime.fromisoformat(date_field)
     raise TypeError(
-        f"Unsupported hg date_field type {type(date_field)!r}; expected list[ts, offset] or ISO string."
+        f"Unsupported hg date_field type {type(date_field)!r}; expected [unix_ts, offset_seconds] list."
     )
 
 
