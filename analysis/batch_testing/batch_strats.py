@@ -2895,16 +2895,6 @@ def simulate_hats_with_bisect(commits, bisect_fn, params, num_workers):
     )
 
 
-def simulate_hats_la_with_bisect(commits, bisect_fn, params, num_workers):
-    """
-    HATS with linear aggregation (HATS-la).
-
-    This variant is kept as a separate strategy id for consistency with other
-    "-la" strategies. It uses the same linear per-commit accumulation as HATS.
-    """
-    return simulate_hats_with_bisect(commits, bisect_fn, params, num_workers)
-
-
 def _rahats_commit_hazard_increment(commit_risk: float) -> float:
     """
     Map a commit's predicted risk p in [0,1] to an additive hazard increment.
@@ -3024,6 +3014,126 @@ def _rahats_next_flush_idx(
         if commit_mass < 0.0:
             commit_mass = 0.0
         return hm * hist_inc * float(n) + cm * commit_mass
+
+    lo = int(last_test_idx + 1)
+    hi = int(last_idx)
+
+    if score(lo) >= budget:
+        return lo
+    if score(hi) < budget:
+        return hi
+
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if score(mid) >= budget:
+            hi = mid
+        else:
+            lo = mid + 1
+    return int(lo)
+
+
+def _arahats_time_hours_and_prefix(commits) -> tuple[list[float], list[float]]:
+    """
+    Build:
+      - time_hours[i] = hours since commits[0]["ts"] (monotonic non-decreasing)
+      - time_prefix[i] = Σ_{k=0..i} time_hours[k]
+
+    The monotonic guarantee is important so ARAHATS's flush-score remains
+    monotone in commit index, enabling binary search.
+    """
+    if not commits:
+        return [], []
+
+    t0 = commits[0]["ts"]
+    time_hours = []
+    time_prefix = []
+    s = 0.0
+    prev = 0.0
+
+    for c in commits:
+        ts = c["ts"]
+        h = max(0.0, float((ts - t0).total_seconds()) / 3600.0)
+        if h < prev:
+            h = prev
+        prev = float(h)
+        time_hours.append(float(h))
+        s += float(h)
+        time_prefix.append(float(s))
+
+    return time_hours, time_prefix
+
+
+def _arahats_next_flush_idx(
+    last_test_idx: int,
+    last_idx: int,
+    commit_mass_prefix: list[float],
+    time_hours: list[float],
+    time_prefix: list[float],
+    hist_inc_per_commit: float,
+    hist_multiplier: float,
+    commit_multiplier: float,
+    aging_per_hour: float,
+    risk_budget: float,
+) -> int | None:
+    """
+    Like `_rahats_next_flush_idx`, but the combined score includes a time-based
+    "age" term inspired by RAPB.
+
+    Score over (last_test_idx, j]:
+      hist_term   = hist_multiplier  * hist_inc_per_commit * (j - last_test_idx)
+      commit_term = commit_multiplier * (C[j] - C[last_test_idx])
+
+      age_term    = aging_per_hour * Σ_{k=last_test_idx+1..j} (t_j - t_k)
+
+      total = hist_term + commit_term + age_term
+
+    Where:
+      - `C` is `commit_mass_prefix` (hazard prefix for ARAHATS, linear risk for ARAHATS-la),
+      - `t_i` is `time_hours[i]` (hours since the first commit).
+
+    Returns the smallest such j in [last_test_idx+1, last_idx], or last_idx if
+    the budget is not reached before the stream ends.
+    """
+    if last_test_idx >= last_idx:
+        return None
+
+    hist_inc = float(hist_inc_per_commit)
+    if hist_inc < 0.0:
+        hist_inc = 0.0
+
+    hm = float(hist_multiplier)
+    cm = float(commit_multiplier)
+    a = float(aging_per_hour)
+    if hm < 0.0:
+        hm = 0.0
+    if cm < 0.0:
+        cm = 0.0
+    if a < 0.0:
+        a = 0.0
+    if hm == 0.0 and cm == 0.0 and a == 0.0:
+        return None
+
+    budget = float(risk_budget)
+    if budget <= 0.0:
+        return int(last_test_idx + 1)
+
+    base_mass = 0.0 if last_test_idx < 0 else float(commit_mass_prefix[last_test_idx])
+    base_time_sum = 0.0 if last_test_idx < 0 else float(time_prefix[last_test_idx])
+
+    def score(j: int) -> float:
+        n = int(j) - int(last_test_idx)
+
+        commit_mass = float(commit_mass_prefix[j]) - base_mass
+        if commit_mass < 0.0:
+            commit_mass = 0.0
+
+        # Σ wait_k = Σ (t_j - t_k) = n * t_j - Σ t_k
+        sum_t = float(time_prefix[j]) - base_time_sum
+        wait_sum = float(n) * float(time_hours[j]) - sum_t
+        if wait_sum < 0.0:
+            wait_sum = 0.0
+
+        return hm * hist_inc * float(n) + cm * commit_mass + a * wait_sum
 
     lo = int(last_test_idx + 1)
     hi = int(last_idx)
@@ -3281,13 +3391,266 @@ def simulate_rahats_with_bisect(commits, bisect_fn, params, num_workers):
     )
 
 
+def simulate_arahats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    Aged Risk-aware History-aware Test Selection (ARAHATS).
+
+    Extends RAHATS by adding an *age* term inspired by RAPB: commits become
+    more urgent the longer they've been waiting (in wall-clock time).
+
+    Total score (per signature-group) over (last_test_idx, j]:
+      - Historical term: grows linearly with commits since last test at a rate
+        determined by the group's repeat count (same as RAHATS).
+      - Commit-risk term: grows with cumulative commit hazard since last test
+        (same as RAHATS).
+      - Age term: grows with the sum of per-commit waiting times
+        Σ (t_j - t_k), scaled by `aging_per_hour`.
+
+    Flush rule (per signature-group):
+      flush when total_score >= risk_budget, then run that signature-group and
+      (if it fails) bisect only the commits since it was last exercised.
+
+    Parameters
+    ----------
+    params:
+        Tuple:
+          (
+            risk_budget,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+            hist_multiplier,
+            commit_multiplier,
+            aging_per_hour,
+          )
+    """
+    if not isinstance(params, tuple) or len(params) != 7:
+        raise ValueError(
+            "ARAHATS expects params=(risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, "
+            "hist_repeat_risk_power, hist_multiplier, commit_multiplier, aging_per_hour); "
+            f"got {params!r}"
+        )
+    (
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        aging_per_hour,
+    ) = params
+
+    risk_budget = float(risk_budget)
+    hist_base_risk_per_commit = float(hist_base_risk_per_commit)
+    hist_repeat_risk_scale = float(hist_repeat_risk_scale)
+    hist_repeat_risk_power = float(hist_repeat_risk_power)
+    hist_multiplier = float(hist_multiplier)
+    commit_multiplier = float(commit_multiplier)
+    aging_per_hour = float(aging_per_hour)
+
+    if risk_budget <= 0.0:
+        raise ValueError(f"ARAHATS risk_budget must be > 0; got {risk_budget!r}")
+    if hist_base_risk_per_commit < 0.0:
+        raise ValueError(
+            f"ARAHATS hist_base_risk_per_commit must be >= 0; got {hist_base_risk_per_commit!r}"
+        )
+    if hist_repeat_risk_scale < 0.0:
+        raise ValueError(
+            f"ARAHATS hist_repeat_risk_scale must be >= 0; got {hist_repeat_risk_scale!r}"
+        )
+    if hist_repeat_risk_power <= 0.0:
+        raise ValueError(
+            f"ARAHATS hist_repeat_risk_power must be > 0; got {hist_repeat_risk_power!r}"
+        )
+    if hist_multiplier < 0.0:
+        raise ValueError(
+            f"ARAHATS hist_multiplier must be >= 0; got {hist_multiplier!r}"
+        )
+    if commit_multiplier < 0.0:
+        raise ValueError(
+            f"ARAHATS commit_multiplier must be >= 0; got {commit_multiplier!r}"
+        )
+    if aging_per_hour < 0.0:
+        raise ValueError(
+            f"ARAHATS aging_per_hour must be >= 0; got {aging_per_hour!r}"
+        )
+    if hist_multiplier == 0.0 and commit_multiplier == 0.0 and aging_per_hour == 0.0:
+        raise ValueError(
+            "ARAHATS requires at least one non-zero weight (hist_multiplier, commit_multiplier, or aging_per_hour)."
+        )
+
+    logger.info(
+        "simulate_arahats_with_bisect: %d commits, budget=%.4f, hist(base=%.6f scale=%.6f power=%.4f mult=%.4f), commit(mult=%.4f), aging_per_hour=%.6f, bisect_fn=%s",
+        len(commits),
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        aging_per_hour,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        metrics = _StreamingMetrics(0, [], {}, set())
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("ARAHATS: empty signature-group suite; cannot run simulation.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+    commit_hazard_prefix = _rahats_prefix_commit_hazard(commits)
+    time_hours, time_prefix = _arahats_time_hours_and_prefix(commits)
+
+    hist_inc_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(
+            r,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+        )
+        # Ensure groups can still accumulate history if commit_multiplier==0.
+        if inc <= 0.0:
+            inc = 1e-12
+        hist_inc_by_gid[int(gid)] = float(inc)
+
+    last_idx = len(commits) - 1
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+    last_seen_idx_by_sig = {}
+
+    # Heap items: (next_flush_idx, gid)
+    heap = []
+    for gid in sig_group_ids:
+        nxt = _arahats_next_flush_idx(
+            -1,
+            last_idx,
+            commit_hazard_prefix,
+            time_hours,
+            time_prefix,
+            hist_inc_by_gid[int(gid)],
+            hist_multiplier,
+            commit_multiplier,
+            aging_per_hour,
+            risk_budget,
+        )
+        if nxt is None:
+            continue
+        if int(nxt) < last_idx:
+            heapq.heappush(heap, (int(nxt), int(gid)))
+
+    while heap:
+        flush_idx, gid = heapq.heappop(heap)
+        flush_idx = int(flush_idx)
+        if flush_idx >= last_idx:
+            break
+
+        gids = [int(gid)]
+        while heap and int(heap[0][0]) == flush_idx:
+            _idx2, gid2 = heapq.heappop(heap)
+            gids.append(int(gid2))
+
+        flush_time = commits[flush_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in gids if g in duration_by_gid]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                0,
+                flush_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_idx_by_sig,
+            )
+
+        for g in gids:
+            last_test_idx = int(last_seen_idx_by_sig.get(int(g), flush_idx))
+            nxt = _arahats_next_flush_idx(
+                last_test_idx,
+                last_idx,
+                commit_hazard_prefix,
+                time_hours,
+                time_prefix,
+                hist_inc_by_gid[int(g)],
+                hist_multiplier,
+                commit_multiplier,
+                aging_per_hour,
+                risk_budget,
+            )
+            if nxt is None:
+                continue
+            if int(nxt) < last_idx:
+                heapq.heappush(heap, (int(nxt), int(g)))
+
+    # Drain flush at the final commit to cover any pending tail per signature-group.
+    pending_gids = [
+        int(gid)
+        for gid in sig_group_ids
+        if int(last_seen_idx_by_sig.get(int(gid), -1)) < last_idx
+    ]
+    if pending_gids:
+        flush_time = commits[last_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in pending_gids if g in duration_by_gid]
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            suite_durations,
+            0,
+            last_idx,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_idx_by_sig,
+        )
+
+    logger.info(
+        "simulate_arahats_with_bisect: finished; total_tests_run=%d",
+        metrics.total_tests_run,
+    )
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
 def simulate_rahats_la_with_bisect(commits, bisect_fn, params, num_workers):
     """
     RAHATS with linear aggregation (RAHATS-la).
 
     Same as RAHATS, but the commit-risk term uses a linear prefix sum of the
     per-commit predicted risks (Σ risk_i) rather than log-survival hazard
-    increments. The historical term is also linearly aggregated, so both risk
+    increments. The historical term is already linearly aggregated, so both risk
     terms use linear aggregation.
 
     Parameters
@@ -3497,6 +3860,245 @@ def simulate_rahats_la_with_bisect(commits, bisect_fn, params, num_workers):
 
     logger.info(
         "simulate_rahats_la_with_bisect: finished; total_tests_run=%d",
+        metrics.total_tests_run,
+    )
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_arahats_la_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    ARAHATS with linear aggregation (ARAHATS-la).
+
+    Same as ARAHATS, but the commit-risk term uses a linear prefix sum of the
+    per-commit predicted risks (Σ risk_i) rather than log-survival hazard
+    increments.
+
+    Parameters
+    ----------
+    params:
+        Tuple:
+          (
+            risk_budget,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+            hist_multiplier,
+            commit_multiplier,
+            aging_per_hour,
+          )
+    """
+    if not isinstance(params, tuple) or len(params) != 7:
+        raise ValueError(
+            "ARAHATS-la expects params=(risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, "
+            "hist_repeat_risk_power, hist_multiplier, commit_multiplier, aging_per_hour); "
+            f"got {params!r}"
+        )
+    (
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        aging_per_hour,
+    ) = params
+
+    risk_budget = float(risk_budget)
+    hist_base_risk_per_commit = float(hist_base_risk_per_commit)
+    hist_repeat_risk_scale = float(hist_repeat_risk_scale)
+    hist_repeat_risk_power = float(hist_repeat_risk_power)
+    hist_multiplier = float(hist_multiplier)
+    commit_multiplier = float(commit_multiplier)
+    aging_per_hour = float(aging_per_hour)
+
+    if risk_budget <= 0.0:
+        raise ValueError(f"ARAHATS-la risk_budget must be > 0; got {risk_budget!r}")
+    if hist_base_risk_per_commit < 0.0:
+        raise ValueError(
+            f"ARAHATS-la hist_base_risk_per_commit must be >= 0; got {hist_base_risk_per_commit!r}"
+        )
+    if hist_repeat_risk_scale < 0.0:
+        raise ValueError(
+            f"ARAHATS-la hist_repeat_risk_scale must be >= 0; got {hist_repeat_risk_scale!r}"
+        )
+    if hist_repeat_risk_power <= 0.0:
+        raise ValueError(
+            f"ARAHATS-la hist_repeat_risk_power must be > 0; got {hist_repeat_risk_power!r}"
+        )
+    if hist_multiplier < 0.0:
+        raise ValueError(
+            f"ARAHATS-la hist_multiplier must be >= 0; got {hist_multiplier!r}"
+        )
+    if commit_multiplier < 0.0:
+        raise ValueError(
+            f"ARAHATS-la commit_multiplier must be >= 0; got {commit_multiplier!r}"
+        )
+    if aging_per_hour < 0.0:
+        raise ValueError(
+            f"ARAHATS-la aging_per_hour must be >= 0; got {aging_per_hour!r}"
+        )
+    if hist_multiplier == 0.0 and commit_multiplier == 0.0 and aging_per_hour == 0.0:
+        raise ValueError(
+            "ARAHATS-la requires at least one non-zero weight (hist_multiplier, commit_multiplier, or aging_per_hour)."
+        )
+
+    logger.info(
+        "simulate_arahats_la_with_bisect: %d commits, budget=%.4f, hist(base=%.6f scale=%.6f power=%.4f mult=%.4f), commit(mult=%.4f), aging_per_hour=%.6f, bisect_fn=%s",
+        len(commits),
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        aging_per_hour,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        metrics = _StreamingMetrics(0, [], {}, set())
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("ARAHATS-la: empty signature-group suite; cannot run simulation.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+    commit_risk_prefix = _rahats_prefix_commit_risk_sum(commits)
+    time_hours, time_prefix = _arahats_time_hours_and_prefix(commits)
+
+    hist_inc_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(
+            r,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+        )
+        if inc <= 0.0:
+            inc = 1e-12
+        hist_inc_by_gid[int(gid)] = float(inc)
+
+    last_idx = len(commits) - 1
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+    last_seen_idx_by_sig = {}
+
+    heap = []
+    for gid in sig_group_ids:
+        nxt = _arahats_next_flush_idx(
+            -1,
+            last_idx,
+            commit_risk_prefix,
+            time_hours,
+            time_prefix,
+            hist_inc_by_gid[int(gid)],
+            hist_multiplier,
+            commit_multiplier,
+            aging_per_hour,
+            risk_budget,
+        )
+        if nxt is None:
+            continue
+        if int(nxt) < last_idx:
+            heapq.heappush(heap, (int(nxt), int(gid)))
+
+    while heap:
+        flush_idx, gid = heapq.heappop(heap)
+        flush_idx = int(flush_idx)
+        if flush_idx >= last_idx:
+            break
+
+        gids = [int(gid)]
+        while heap and int(heap[0][0]) == flush_idx:
+            _idx2, gid2 = heapq.heappop(heap)
+            gids.append(int(gid2))
+
+        flush_time = commits[flush_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in gids if g in duration_by_gid]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                0,
+                flush_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_idx_by_sig,
+            )
+
+        for g in gids:
+            last_test_idx = int(last_seen_idx_by_sig.get(int(g), flush_idx))
+            nxt = _arahats_next_flush_idx(
+                last_test_idx,
+                last_idx,
+                commit_risk_prefix,
+                time_hours,
+                time_prefix,
+                hist_inc_by_gid[int(g)],
+                hist_multiplier,
+                commit_multiplier,
+                aging_per_hour,
+                risk_budget,
+            )
+            if nxt is None:
+                continue
+            if int(nxt) < last_idx:
+                heapq.heappush(heap, (int(nxt), int(g)))
+
+    pending_gids = [
+        int(gid)
+        for gid in sig_group_ids
+        if int(last_seen_idx_by_sig.get(int(gid), -1)) < last_idx
+    ]
+    if pending_gids:
+        flush_time = commits[last_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in pending_gids if g in duration_by_gid]
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            suite_durations,
+            0,
+            last_idx,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_idx_by_sig,
+        )
+
+    logger.info(
+        "simulate_arahats_la_with_bisect: finished; total_tests_run=%d",
         metrics.total_tests_run,
     )
     return build_results(

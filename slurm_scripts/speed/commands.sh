@@ -49,7 +49,7 @@ echo "Running script ..."
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
-# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s,HATS,RAHATS \
+# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s,HATS,RAHATS,RAHATS-la,ARAHATS,ARAHATS-la \
 # --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
 # --optimize-for-timeliness-metric max_ttc \
 # --baseline-opt-metric-multplier 2 \
