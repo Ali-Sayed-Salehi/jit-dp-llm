@@ -24,10 +24,13 @@ The simulator models two kinds of test runs:
 1. **Full suite run** (“batch root”):
    - Represents a batch test run that executes a “full suite” of perf signature-groups.
    - In code: `get_batch_signature_durations()` defines the “full suite” (all signature-groups, optionally restricted to the cutoff-window union via `configure_full_suite_signatures_union()`).
+   - Note: `simulation.py` restricts the full suite by default to the union of signature-groups that appear at least once within the EVAL+FINAL cutoff windows.
 
 2. **Per-signature-group run** (“bisection step”):
    - Represents a follow-up interval/prefix test for a *single failing signature-group* (one job per logical run).
-   - In code: bisection steps schedule `get_signature_durations_for_ids([sig_group_id])` from `batch_strats.py`.
+   - In code: bisection steps schedule a single signature-group job via
+     `get_signature_durations_for_ids([sig_group_id])` (from `bisection_strats.py`),
+     invoked by the per-signature-group bisection processes in `batch_strats.py`.
 
 Each **logical run** (full suite or targeted) consumes “CPU cost” equal to the number of signature-groups in its suite, and occupies worker capacity according to the suite’s per-job durations.
 
@@ -61,6 +64,39 @@ Each simulation run (for a single batching×bisection combo) produces a dict of 
 - `mean_time_to_culprit_hr`: mean time-to-culprit across detected true regressors.
 - `max_time_to_culprit_hr`: worst-case time-to-culprit across detected true regressors.
 - `p90_time_to_culprit_hr` / `p95_time_to_culprit_hr` / `p99_time_to_culprit_hr`: percentile time-to-culprit values computed over the same time-to-culprit distribution.
+- `num_regressors_total`: number of true regressors in the simulated window.
+- `num_regressors_found`: number of true regressors that were identified as culprits by the strategy combo.
+- `found_all_regressors`: whether `num_regressors_found == num_regressors_total`.
+
+## Running the Simulator (`simulation.py`)
+
+The main entrypoint is `analysis/batch_testing/simulation.py`. It runs:
+
+- **EVAL (Optuna tuning)** on `--input-json-eval`, then
+- **FINAL replay** of the selected configurations on `--input-json-final`.
+
+Useful flags:
+
+- `--batching` / `--bisection`: filter to specific strategies (CSV list, or `all` / `none`).
+- `--mopt-trials`: reduce for quick iterations.
+- `--skip-exhaustive-testing`: skip the very expensive ET baseline.
+- `--dry-run`: when no explicit filters are provided, run the baseline plus at most two random combos.
+
+Notes:
+
+- The script performs a sanity check that failing signature-groups are covered by the perf-jobs dataset (`validate_failing_signatures_coverage`) and will raise if coverage is inconsistent.
+
+Example (quick run of one combo):
+
+```bash
+python analysis/batch_testing/simulation.py \
+  --input-json-eval analysis/batch_testing/final_test_results_perf_codebert_eval.json \
+  --input-json-final analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
+  --batching ARAHATS-la \
+  --bisection PAR \
+  --mopt-trials 5 \
+  --skip-exhaustive-testing
+```
 
 ## Batching Strategies (`batch_strats.py`)
 
@@ -71,6 +107,8 @@ Batching strategies determine when to “flush” a batch and call a bisection s
 
 ### Common mechanics (flush boundaries, suites, and the “-s” variants)
 For all strategies, the batching policy defines **batch boundaries**: contiguous slices of the commit stream. When a boundary is reached, the policy schedules an initial “batch test” and (if needed) launches bisection to localize culprits within that slice.
+
+- **Note on streaming per-signature-group policies**: `HATS`, `RAHATS`, and `ARAHATS` are included in the batching grid even though they do not form one global batch at a time. Instead, they maintain independent per-signature-group state and “flush” individual signature-groups when their score reaches a shared budget.
 
 - **What “flush” means**: the strategy decides a `(batch_start_idx, batch_end_idx, batch_end_time)` and considers the commits in that interval as one unit of work.
 - **When the initial run starts**:
@@ -163,7 +201,44 @@ For all strategies, the batching policy defines **batch boundaries**: contiguous
   - The “batch end time” passed to bisection is the completion time of the per-revision subset suite for `i`.
 - **Intuition**: models a more continuous “test what was run on each revision” world; detection timing is driven by which signature-groups happen to be exercised over time.
 
-## Bisection Strategies (`bisection_strats.py`)
+### HATS - History-aware Test Selection
+- **Parameters**: `params = (risk_budget, base_risk_per_commit, repeat_risk_scale, repeat_risk_power)`.
+- **Idea**: maintain an independent cumulative *historical* risk score per signature-group, derived from its historical repeat count.
+- **Trigger rule (per signature-group)**: as commits stream in, the score grows by a fixed per-commit increment `inc(r)` based on the group’s repeat count `r`. Flush (run that signature-group) when the score reaches `risk_budget`.
+- **Initial run**: a single signature-group job (not a full suite). If it fails, bisect only the commits since that signature-group was last exercised.
+
+### RAHATS / RAHATS-la - Risk-aware History-aware Test Selection
+- **Parameters**: `params = (risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, hist_repeat_risk_power, hist_multiplier, commit_multiplier)`.
+- **Idea**: extend HATS by adding a commit-risk term derived from the stream’s per-commit predicted risks.
+- **Trigger rule (per signature-group)**: flush when a combined score reaches `risk_budget`:
+  - `hist_term`: grows with commits since last test at a rate based on the group’s repeat count, scaled by `hist_multiplier`.
+  - `commit_term`: grows with cumulative commit-risk mass since last test, scaled by `commit_multiplier`.
+- **RAHATS vs RAHATS-la**: RAHATS uses log-survival “hazard” mass for the commit term (`-log(1 - p)`), while RAHATS-la uses a linear risk sum (`Σ p`).
+
+### ARAHATS / ARAHATS-la - *Aged* Risk-aware History-aware Test Selection
+- **Parameters**: `params = (risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, hist_repeat_risk_power, hist_multiplier, commit_multiplier, aging_per_hour)`.
+- **Idea**: extend RAHATS with an additional “age” term so commits become more urgent the longer they’ve been waiting (in wall-clock time).
+- **Trigger rule (per signature-group)**: flush when `hist_term + commit_term + age_term >= risk_budget`, where:
+  - `age_term` grows with the sum of per-commit waiting times `Σ(t_now - t_commit)` since that signature-group’s last test, scaled by `aging_per_hour`.
+- **ARAHATS vs ARAHATS-la**: ARAHATS uses log-survival hazard mass for the commit term; ARAHATS-la uses a linear risk sum.
+
+### LAB / LAB-s - Load-Aware Batching (per worker pool)
+- **Parameters**: `queue_pressure_threshold_min` (minutes).
+- **Idea**: maintain an independent contiguous commit batch per worker pool (android/windows/linux/mac). Use predicted queue pressure to decide when to flush each pool.
+- **Trigger rule (per pool)**: if `queue_pressure_minutes <= queue_pressure_threshold_min`, flush that pool’s current batch.
+- **Initial run**:
+  - `LAB`: run the pool’s share of the full suite (all signature-groups routed to that pool).
+  - `LAB-s`: run a subset suite (union of signature-groups observed in that pool’s batch, filtered to the pool); detection depends on overlap with failing signature-groups (like other `-s` variants).
+
+### LARAB / LARAB-la (+ `-s` variants) - Load-Aware Risk-Adaptive Batching (per worker pool)
+- **Parameters**: `params = (risk_multiplier, queue_pressure_multiplier)`.
+- **Idea**: like RASB, but batching is independent per pool and the flush decision uses a single unified score combining cumulative risk and queue pressure.
+- **Trigger rule (per pool)**: flush when:
+  - `LARAB`: `risk_multiplier * hazard - queue_pressure_multiplier * load >= 1.0`, where `hazard = -Σ log(1 - p)` and `load = log1p(queue_pressure / scale)`.
+  - `LARAB-la`: same, but uses `risk_sum = Σ p` instead of hazard.
+- **`-s` variants**: `LARAB-s` and `LARAB-la-s` run subset suites per pool batch (union of observed signature-groups in that pool batch), with overlap-based detection and last-seen anchored bisection ranges.
+
+## Bisection Strategies (`batch_strats.py`)
 
 All bisection strategies share:
 
