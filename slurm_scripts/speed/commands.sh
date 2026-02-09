@@ -49,9 +49,14 @@ echo "Running script ..."
 # --build-time-minutes 98 \
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
-# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s \
+# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s \
 # --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
-# --optimize-for-timeliness-metric mean_ttc
+# --optimize-for-timeliness-metric mean_ttc \
+# --workers-android 60 \
+# --workers-windows 120 \
+# --workers-linux 100 \
+# --workers-mac 250
+
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
 
@@ -111,6 +116,9 @@ echo "Running script ..."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/rectify_job_count_per_revision.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/filter_perf_llm_struc.py
+
+python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/find_historical_risk_scores.py \
+--eval-preds-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_eval.json
 
 
 echo "Script finished"
