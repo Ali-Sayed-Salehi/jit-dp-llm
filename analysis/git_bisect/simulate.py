@@ -244,22 +244,53 @@ def build_bug_id_index(bugs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return bugs_by_id
 
 
-def _positive_probability_from_predicted_class(
-    prediction: int, confidence: float, label_order: List[str]
-) -> float:
+def _parse_binary_label(value: Any) -> int:
+    """
+    Parse a binary class label from common encodings.
+
+    Supported:
+      - 0/1 integers (or integer-valued floats)
+      - booleans (False -> 0, True -> 1)
+    """
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        if value in (0, 1):
+            return int(value)
+        raise ValueError(f"Expected binary label 0/1, got {value}")
+    if isinstance(value, float):
+        if value.is_integer() and int(value) in (0, 1):
+            return int(value)
+        raise ValueError(f"Expected binary label 0/1, got {value}")
+    raise ValueError(f"Expected binary label type, got {type(value).__name__}")
+
+
+def _positive_probability_from_predicted_class(prediction: Any, confidence: Any) -> float:
     """
     Convert (predicted class, confidence) into P(POSITIVE).
 
-    The predictions files store `confidence` as the probability of the predicted
-    class, not necessarily P(POSITIVE).
+    Assumption (per repo risk-prediction JSONs): class `1` is always POSITIVE and
+    class `0` is always NEGATIVE. `confidence` is stored as the probability of the
+    *predicted* class.
     """
-    if len(label_order) != 2:
-        raise ValueError(f"Expected binary label_order, got {label_order}")
-    if label_order[0] == "NEGATIVE" and label_order[1] == "POSITIVE":
-        return float(confidence) if int(prediction) == 1 else 1.0 - float(confidence)
-    if label_order[0] == "POSITIVE" and label_order[1] == "NEGATIVE":
-        return float(confidence) if int(prediction) == 0 else 1.0 - float(confidence)
-    raise ValueError(f"Unexpected label_order={label_order}; expected POSITIVE/NEGATIVE")
+    pred = _parse_binary_label(prediction)
+    conf = float(confidence)
+    if conf < 0.0 or conf > 1.0:
+        raise ValueError(f"confidence must be in [0,1], got {conf}")
+    return conf if pred == 1 else 1.0 - conf
+
+
+def _positive_probability_from_positive_confidence(confidence: Any) -> float:
+    """
+    Return P(POSITIVE) from a stored positive-class confidence score.
+
+    Some risk-prediction JSONs store `confidence` as P(POSITIVE) directly, with
+    `prediction` derived from thresholding this value.
+    """
+    conf = float(confidence)
+    if conf < 0.0 or conf > 1.0:
+        raise ValueError(f"confidence must be in [0,1], got {conf}")
+    return conf
 
 
 def load_risk_predictions(path: str) -> Dict[str, float]:
@@ -270,21 +301,27 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
     with open(path, "r", encoding="utf-8") as f:
         blob = json.load(f)
 
-    samples = blob.get("results")
-    if not samples:
-        samples = blob.get("samples")
-    if not samples:
+    if not isinstance(blob, dict):
+        raise ValueError(f"Expected top-level object in {path}, got {type(blob).__name__}")
+
+    samples = blob.get("samples")
+    results = blob.get("results")
+
+    rows: List[Dict[str, Any]]
+    confidence_mode: str
+    if isinstance(samples, list) and samples:
+        rows = samples
+        confidence_mode = "predicted_class"
+    elif isinstance(results, list) and results:
+        rows = results
+        confidence_mode = "positive_class"
+    else:
         raise ValueError(
-            f"No prediction rows found in {path}: expected a non-empty `results`, `samples`, or `sample` list."
+            f"No prediction rows found in {path}: expected a non-empty `samples` or `results` list."
         )
-    label_order = blob.get("label_order") or ["NEGATIVE", "POSITIVE"]
-    if not isinstance(samples, list):
-        raise ValueError(f"Expected `results`/`samples` list in {path}")
-    if not isinstance(label_order, list):
-        raise ValueError(f"Expected `label_order` list in {path}")
 
     risk_by_commit: Dict[str, float] = {}
-    for i, sample in enumerate(samples):
+    for i, sample in enumerate(rows):
         if not isinstance(sample, dict):
             raise ValueError(
                 f"Invalid sample at index {i} in {path}: expected object, got {type(sample).__name__}"
@@ -292,16 +329,17 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
         commit_id = sample.get("commit_id")
         if not commit_id:
             raise ValueError(f"Invalid sample at index {i} in {path}: missing `commit_id`")
-        prediction = sample.get("prediction")
         confidence = sample.get("confidence")
-        if prediction is None or confidence is None:
-            raise ValueError(
-                f"Invalid sample at index {i} in {path}: missing `prediction` and/or `confidence`"
-            )
+        if confidence is None:
+            raise ValueError(f"Invalid sample at index {i} in {path}: missing `confidence`")
 
-        risk_by_commit[str(commit_id)] = _positive_probability_from_predicted_class(
-            int(prediction), float(confidence), label_order
-        )
+        if confidence_mode == "predicted_class":
+            prediction = sample.get("prediction")
+            if prediction is None:
+                raise ValueError(f"Invalid sample at index {i} in {path}: missing `prediction`")
+            risk_by_commit[str(commit_id)] = _positive_probability_from_predicted_class(prediction, confidence)
+        else:
+            risk_by_commit[str(commit_id)] = _positive_probability_from_positive_confidence(confidence)
 
     return risk_by_commit
 
