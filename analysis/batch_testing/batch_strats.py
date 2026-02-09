@@ -122,6 +122,36 @@ def _larab_flush_score(
     return float(risk_multiplier) * hazard - float(queue_pressure_multiplier) * load
 
 
+def _larab_flush_score_linear(
+    risk_sum: float,
+    queue_pressure_min: float,
+    risk_multiplier: float,
+    queue_pressure_multiplier: float,
+    queue_pressure_scale_min: float = _LARAB_QUEUE_PRESSURE_SCALE_MIN,
+) -> float:
+    """
+    Unified LARAB flush score using *linear* cumulative risk:
+
+        risk_sum = Σ risk_i
+        load = log1p(queue_pressure_min / queue_pressure_scale_min)
+        score = risk_multiplier * risk_sum - queue_pressure_multiplier * load
+    """
+    rs = float(risk_sum)
+    if rs < 0.0:
+        rs = 0.0
+
+    q = float(queue_pressure_min)
+    if q < 0.0:
+        q = 0.0
+
+    scale = float(queue_pressure_scale_min)
+    if scale <= 0.0:
+        scale = 1e-9
+    load = math.log1p(q / scale)
+
+    return float(risk_multiplier) * rs - float(queue_pressure_multiplier) * load
+
+
 def _percentile_linear(sorted_values, p: float) -> float:
     """
     Compute the p-th percentile (0-100) using linear interpolation.
@@ -2865,6 +2895,16 @@ def simulate_hats_with_bisect(commits, bisect_fn, params, num_workers):
     )
 
 
+def simulate_hats_la_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    HATS with linear aggregation (HATS-la).
+
+    This variant is kept as a separate strategy id for consistency with other
+    "-la" strategies. It uses the same linear per-commit accumulation as HATS.
+    """
+    return simulate_hats_with_bisect(commits, bisect_fn, params, num_workers)
+
+
 def _rahats_commit_hazard_increment(commit_risk: float) -> float:
     """
     Map a commit's predicted risk p in [0,1] to an additive hazard increment.
@@ -2899,10 +2939,41 @@ def _rahats_prefix_commit_hazard(commits) -> list[float]:
     return out
 
 
+def _rahats_commit_risk_increment(commit_risk: float) -> float:
+    """
+    Map a commit's predicted risk to a non-negative linear increment.
+
+    The simulator generally treats commit risk as a probability in [0,1], but
+    we defensively clamp to that range and coerce non-numeric values to 0.
+    """
+    try:
+        p = float(commit_risk)
+    except (TypeError, ValueError):
+        p = 0.0
+    if p <= 0.0:
+        return 0.0
+    if p >= 1.0:
+        return 1.0
+    return float(p)
+
+
+def _rahats_prefix_commit_risk_sum(commits) -> list[float]:
+    """
+    Build prefix sums of per-commit predicted risk scores:
+      prefix[i] = Σ_{k=0..i} risk_k
+    """
+    out = []
+    s = 0.0
+    for c in commits:
+        s += _rahats_commit_risk_increment(c.get("risk", 0.0))
+        out.append(float(s))
+    return out
+
+
 def _rahats_next_flush_idx(
     last_test_idx: int,
     last_idx: int,
-    commit_hazard_prefix: list[float],
+    commit_mass_prefix: list[float],
     hist_inc_per_commit: float,
     hist_multiplier: float,
     commit_multiplier: float,
@@ -2914,8 +2985,13 @@ def _rahats_next_flush_idx(
 
     Score over (last_test_idx, j]:
       hist_term   = hist_multiplier  * hist_inc_per_commit * (j - last_test_idx)
-      commit_term = commit_multiplier * (H[j] - H[last_test_idx])
+      commit_term = commit_multiplier * (C[j] - C[last_test_idx])
       total = hist_term + commit_term
+
+    Where:
+      - `C` is `commit_mass_prefix`, a prefix sum of non-negative commit-risk
+        mass (e.g., hazard increments for RAHATS, or linear risk scores for
+        RAHATS-la).
 
     Returns the smallest such j in [last_test_idx+1, last_idx], or last_idx if
     the budget is not reached before the stream ends.
@@ -2940,14 +3016,14 @@ def _rahats_next_flush_idx(
     if budget <= 0.0:
         return int(last_test_idx + 1)
 
-    base_h = 0.0 if last_test_idx < 0 else float(commit_hazard_prefix[last_test_idx])
+    base_mass = 0.0 if last_test_idx < 0 else float(commit_mass_prefix[last_test_idx])
 
     def score(j: int) -> float:
         n = int(j) - int(last_test_idx)
-        commit_h = float(commit_hazard_prefix[j]) - base_h
-        if commit_h < 0.0:
-            commit_h = 0.0
-        return hm * hist_inc * float(n) + cm * commit_h
+        commit_mass = float(commit_mass_prefix[j]) - base_mass
+        if commit_mass < 0.0:
+            commit_mass = 0.0
+        return hm * hist_inc * float(n) + cm * commit_mass
 
     lo = int(last_test_idx + 1)
     hi = int(last_idx)
@@ -3193,6 +3269,234 @@ def simulate_rahats_with_bisect(commits, bisect_fn, params, num_workers):
 
     logger.info(
         "simulate_rahats_with_bisect: finished; total_tests_run=%d",
+        metrics.total_tests_run,
+    )
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_rahats_la_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RAHATS with linear aggregation (RAHATS-la).
+
+    Same as RAHATS, but the commit-risk term uses a linear prefix sum of the
+    per-commit predicted risks (Σ risk_i) rather than log-survival hazard
+    increments. The historical term is also linearly aggregated, so both risk
+    terms use linear aggregation.
+
+    Parameters
+    ----------
+    params:
+        Tuple:
+          (
+            risk_budget,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+            hist_multiplier,
+            commit_multiplier,
+          )
+    """
+    if not isinstance(params, tuple) or len(params) != 6:
+        raise ValueError(
+            "RAHATS-la expects params=(risk_budget, hist_base_risk_per_commit, hist_repeat_risk_scale, "
+            "hist_repeat_risk_power, hist_multiplier, commit_multiplier); "
+            f"got {params!r}"
+        )
+    (
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+    ) = params
+
+    risk_budget = float(risk_budget)
+    hist_base_risk_per_commit = float(hist_base_risk_per_commit)
+    hist_repeat_risk_scale = float(hist_repeat_risk_scale)
+    hist_repeat_risk_power = float(hist_repeat_risk_power)
+    hist_multiplier = float(hist_multiplier)
+    commit_multiplier = float(commit_multiplier)
+
+    if risk_budget <= 0.0:
+        raise ValueError(f"RAHATS-la risk_budget must be > 0; got {risk_budget!r}")
+    if hist_base_risk_per_commit < 0.0:
+        raise ValueError(
+            f"RAHATS-la hist_base_risk_per_commit must be >= 0; got {hist_base_risk_per_commit!r}"
+        )
+    if hist_repeat_risk_scale < 0.0:
+        raise ValueError(
+            f"RAHATS-la hist_repeat_risk_scale must be >= 0; got {hist_repeat_risk_scale!r}"
+        )
+    if hist_repeat_risk_power <= 0.0:
+        raise ValueError(
+            f"RAHATS-la hist_repeat_risk_power must be > 0; got {hist_repeat_risk_power!r}"
+        )
+    if hist_multiplier < 0.0:
+        raise ValueError(
+            f"RAHATS-la hist_multiplier must be >= 0; got {hist_multiplier!r}"
+        )
+    if commit_multiplier < 0.0:
+        raise ValueError(
+            f"RAHATS-la commit_multiplier must be >= 0; got {commit_multiplier!r}"
+        )
+    if hist_multiplier == 0.0 and commit_multiplier == 0.0:
+        raise ValueError(
+            "RAHATS-la requires at least one non-zero weight (hist_multiplier or commit_multiplier)."
+        )
+
+    logger.info(
+        "simulate_rahats_la_with_bisect: %d commits, budget=%.4f, hist(base=%.6f scale=%.6f power=%.4f mult=%.4f), commit(mult=%.4f), bisect_fn=%s",
+        len(commits),
+        risk_budget,
+        hist_base_risk_per_commit,
+        hist_repeat_risk_scale,
+        hist_repeat_risk_power,
+        hist_multiplier,
+        commit_multiplier,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        metrics = _StreamingMetrics(0, [], {}, set())
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("RAHATS-la: empty signature-group suite; cannot run simulation.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+    commit_risk_prefix = _rahats_prefix_commit_risk_sum(commits)
+
+    hist_inc_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(
+            r,
+            hist_base_risk_per_commit,
+            hist_repeat_risk_scale,
+            hist_repeat_risk_power,
+        )
+        # Ensure groups can still accumulate history if commit_multiplier==0.
+        if inc <= 0.0:
+            inc = 1e-12
+        hist_inc_by_gid[int(gid)] = float(inc)
+
+    last_idx = len(commits) - 1
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+    last_seen_idx_by_sig = {}
+
+    # Heap items: (next_flush_idx, gid)
+    heap = []
+    for gid in sig_group_ids:
+        nxt = _rahats_next_flush_idx(
+            -1,
+            last_idx,
+            commit_risk_prefix,
+            hist_inc_by_gid[int(gid)],
+            hist_multiplier,
+            commit_multiplier,
+            risk_budget,
+        )
+        if nxt is None:
+            continue
+        if int(nxt) < last_idx:
+            heapq.heappush(heap, (int(nxt), int(gid)))
+
+    while heap:
+        flush_idx, gid = heapq.heappop(heap)
+        flush_idx = int(flush_idx)
+        if flush_idx >= last_idx:
+            break
+
+        gids = [int(gid)]
+        while heap and int(heap[0][0]) == flush_idx:
+            _idx2, gid2 = heapq.heappop(heap)
+            gids.append(int(gid2))
+
+        flush_time = commits[flush_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in gids if g in duration_by_gid]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                0,
+                flush_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_idx_by_sig,
+            )
+
+        for g in gids:
+            last_test_idx = int(last_seen_idx_by_sig.get(int(g), flush_idx))
+            nxt = _rahats_next_flush_idx(
+                last_test_idx,
+                last_idx,
+                commit_risk_prefix,
+                hist_inc_by_gid[int(g)],
+                hist_multiplier,
+                commit_multiplier,
+                risk_budget,
+            )
+            if nxt is None:
+                continue
+            if int(nxt) < last_idx:
+                heapq.heappush(heap, (int(nxt), int(g)))
+
+    # Drain flush at the final commit to cover any pending tail per signature-group.
+    pending_gids = [
+        int(gid)
+        for gid in sig_group_ids
+        if int(last_seen_idx_by_sig.get(int(gid), -1)) < last_idx
+    ]
+    if pending_gids:
+        flush_time = commits[last_idx]["ts"]
+        suite_durations = [(g, duration_by_gid.get(g)) for g in pending_gids if g in duration_by_gid]
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            suite_durations,
+            0,
+            last_idx,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_idx_by_sig,
+        )
+
+    logger.info(
+        "simulate_rahats_la_with_bisect: finished; total_tests_run=%d",
         metrics.total_tests_run,
     )
     return build_results(
@@ -3600,6 +3904,140 @@ def simulate_larab_with_bisect(commits, bisect_fn, params, num_workers):
     )
 
 
+def simulate_larab_la_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    Load-Aware Risk-Adaptive Batching with linear risk aggregation (LARAB-la).
+
+    Same as LARAB, but the cumulative risk term is aggregated linearly:
+
+        risk_sum = Σ risk_i
+
+    rather than via log-survival hazard.
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_multiplier, queue_pressure_multiplier)`.
+    """
+    try:
+        risk_multiplier, queue_pressure_multiplier = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB-la params must be a tuple (risk_multiplier, queue_pressure_multiplier); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB-la risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
+        raise ValueError(
+            "LARAB-la queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
+        )
+
+    logger.info(
+        "simulate_larab_la_with_bisect: %d commits, risk_multiplier=%.4f, queue_pressure_multiplier=%.4f, bisect_fn=%s",
+        len(commits),
+        risk_multiplier,
+        queue_pressure_multiplier,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+    executor = TestExecutor(num_workers)
+    metrics = _StreamingMetrics(0, [], {}, set())
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    risk_sum_by_pool = {p: 0.0 for p in pools}
+    durations_by_pool = {p: _full_suite_durations_for_pool(executor, p) for p in pools}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        if p < 0.0:
+            p = 0.0
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            risk_sum_by_pool[pool] = float(risk_sum_by_pool[pool]) + float(p)
+            risk_sum = float(risk_sum_by_pool[pool])
+            base_score = risk_multiplier * risk_sum
+            if base_score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            score = _larab_flush_score_linear(
+                risk_sum,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            durations = durations_by_pool.get(pool) or []
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=None,
+            )
+            start_idx_by_pool[pool] = idx + 1
+            risk_sum_by_pool[pool] = 0.0
+
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        durations = durations_by_pool.get(pool) or []
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=None,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
 def simulate_larab_s_with_bisect(commits, bisect_fn, params, num_workers):
     """
     LARAB with subset suite detection (LARAB-s).
@@ -3700,6 +4138,135 @@ def simulate_larab_s_with_bisect(commits, bisect_fn, params, num_workers):
             )
             start_idx_by_pool[pool] = idx + 1
             log_survival_by_pool[pool] = 0.0
+
+    flush_time = commits[-1]["ts"]
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+        batch_commits = commits[start_idx:]
+        durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+        if not durations:
+            continue
+        _run_streaming_suite_and_bisect_per_sig_group(
+            commits,
+            durations,
+            start_idx,
+            len(commits) - 1,
+            flush_time,
+            bisect_fn,
+            executor,
+            metrics,
+            last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+        )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_larab_la_s_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    LARAB-la with subset suite detection (LARAB-la-s).
+
+    Uses the same per-pool trigger as LARAB-la (linear cumulative risk + queue
+    pressure score), but each flushed pool batch runs a subset suite (union of
+    observed signature-groups in that pool batch).
+    """
+    try:
+        risk_multiplier, queue_pressure_multiplier = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB-la-s params must be a tuple (risk_multiplier, queue_pressure_multiplier); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB-la-s risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
+        raise ValueError(
+            "LARAB-la-s queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
+        )
+
+    logger.info(
+        "simulate_larab_la_s_with_bisect: %d commits, risk_multiplier=%.4f, queue_pressure_multiplier=%.4f, bisect_fn=%s",
+        len(commits),
+        risk_multiplier,
+        queue_pressure_multiplier,
+        getattr(bisect_fn, "__name__", str(bisect_fn)),
+    )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+    executor = TestExecutor(num_workers)
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    risk_sum_by_pool = {p: 0.0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        if p < 0.0:
+            p = 0.0
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            risk_sum_by_pool[pool] = float(risk_sum_by_pool[pool]) + float(p)
+            risk_sum = float(risk_sum_by_pool[pool])
+            base_score = risk_multiplier * risk_sum
+            if base_score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            score = _larab_flush_score_linear(
+                risk_sum,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            batch_commits = commits[start_idx : idx + 1]
+            durations = _subset_suite_durations_for_pool(executor, pool, batch_commits)
+            if not durations:
+                continue
+
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                durations,
+                start_idx,
+                idx,
+                now_ts,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+            start_idx_by_pool[pool] = idx + 1
+            risk_sum_by_pool[pool] = 0.0
 
     flush_time = commits[-1]["ts"]
     for pool in pools:
