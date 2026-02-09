@@ -1333,7 +1333,12 @@ def _run_streaming_suite_and_bisect_per_sig_group(
         scan_start_idx = min(
             int(last_seen_idx_by_sig.get(gid, -1)) + 1 for gid in suite_sig_ids
         )
-        scan_start_idx = max(0, min(int(scan_start_idx), int(batch_start_idx)))
+        # Clamp to the current slice bounds. Note that `scan_start_idx` can be
+        # greater than `batch_start_idx` in strategies that invoke this helper
+        # over growing prefixes (e.g., per-signature-group streaming policies),
+        # so we must not clamp it to `batch_start_idx` (that would force
+        # repeated rescans from 0 and can dominate wall-clock time).
+        scan_start_idx = max(0, min(int(scan_start_idx), int(batch_end_idx)))
 
     regressors_by_sig = {}
     for idx in range(scan_start_idx, batch_end_idx + 1):

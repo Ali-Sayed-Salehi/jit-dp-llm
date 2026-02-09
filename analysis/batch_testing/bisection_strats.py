@@ -84,6 +84,8 @@ SIG_GROUP_ID_TO_POOL = {}
 SIG_GROUP_DURATIONS = {}
 # revision (commit_id) -> list[int signature_id] (raw failing signatures)
 REVISION_FAIL_SIG_IDS = {}
+# revision (commit_id) -> list[int signature_group_id] (cached derived failing signature-groups)
+REVISION_FAIL_SIG_GROUP_IDS = {}
 # revision (commit_id) -> list[int signature_group_id] actually tested on that revision
 REVISION_TESTED_SIG_GROUP_IDS = {}
 # list[int] of signature_group_ids for the "full" batch test suite
@@ -931,6 +933,10 @@ def get_failing_signature_groups_for_revision(revision):
     This derives group IDs from alert_summary_fail_perf_sigs.csv (signature IDs)
     by mapping each signature via sig_groups.jsonl.
     """
+    cached = REVISION_FAIL_SIG_GROUP_IDS.get(revision)
+    if cached is not None:
+        return cached
+
     _load_perf_metadata()
     _load_sig_groups_mapping()
 
@@ -961,7 +967,9 @@ def get_failing_signature_groups_for_revision(revision):
             extra,
         )
 
-    return sorted(failing_group_ids)
+    out = sorted(failing_group_ids)
+    REVISION_FAIL_SIG_GROUP_IDS[revision] = out
+    return out
 
 class TestExecutor:
     """
