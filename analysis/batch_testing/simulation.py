@@ -12,8 +12,8 @@ Key references:
   - `analysis/batch_testing/README.md` for a detailed explanation of each
     strategy and the shared execution model.
   - `analysis/batch_testing/batch_strats.py` for batching implementations.
-  - `analysis/batch_testing/bisection_strats.py` for bisection implementations,
-    metadata loading, and the central test executor.
+  - `analysis/batch_testing/bisection_strats.py` for perf metadata loading and
+    the central test executor used by all strategies.
 
 The Optuna mode (`run_evaluation_mopt`) tunes batching parameters. For TKRB it
 also tunes `bisection_strats.TKRB_TOP_K`.
@@ -45,17 +45,16 @@ from batch_strats import (
     simulate_rapb_la_s_with_bisect,
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
+    simulate_hats_with_bisect,
+    simulate_rahats_with_bisect,
+    simulate_lab_with_bisect,
+    simulate_lab_s_with_bisect,
+    simulate_larab_with_bisect,
+    simulate_larab_s_with_bisect,
     simulate_twsb_with_bisect,
 )
 
 from bisection_strats import (
-    time_ordered_bisect,
-    exhaustive_parallel,
-    risk_weighted_adaptive_bisect,
-    risk_weighted_adaptive_bisect_log_survival,
-    topk_risk_first_bisect,
-    sequential_walk_backward_bisect,
-    sequential_walk_forward_bisect,
     TestExecutor,
     run_test_suite,
     configure_bisection_defaults,
@@ -81,6 +80,22 @@ RAPB_AGING_PER_HOUR = 0.05
 LINEAR_RISK_BUDGET = 1.0
 RATB_THRESHOLD = 0.5
 RATB_TIME_WINDOW_HOURS = 4
+HATS_RISK_BUDGET = 1.0
+HATS_BASE_RISK_PER_COMMIT = 0.001
+HATS_REPEAT_RISK_SCALE = 0.02
+HATS_REPEAT_RISK_POWER = 1.0
+RAHATS_RISK_BUDGET = 1.0
+RAHATS_HIST_BASE_RISK_PER_COMMIT = 0.001
+RAHATS_HIST_REPEAT_RISK_SCALE = 0.02
+RAHATS_HIST_REPEAT_RISK_POWER = 1.0
+RAHATS_HIST_MULTIPLIER = 1.0
+RAHATS_COMMIT_MULTIPLIER = 1.0
+LAB_QUEUE_PRESSURE_THRESHOLD_MIN = 30.0
+# LARAB uses a unified (risk, queue) score with a fixed score threshold. We
+# only tune multiplier weights (no separate risk/pressure thresholds).
+_LARAB_BASE_HAZARD = -math.log(max(1.0 - float(RASB_THRESHOLD), 1e-12))
+LARAB_RISK_MULTIPLIER = 1.0 / _LARAB_BASE_HAZARD
+LARAB_QUEUE_PRESSURE_MULTIPLIER = 1.0
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 RANDOM_SEED = 42
@@ -94,10 +109,6 @@ BUILD_TIME_MINUTES = BUILD_TIME_HOURS * 60.0
 # Each signature-group job is routed to a pool based on `machine_platform`
 # metadata (see datasets/mozilla_perf/all_signatures.jsonl).
 WORKER_POOLS = dict(bisection_mod.DEFAULT_WORKER_POOLS)
-
-# Number of perf signature-groups to run for each "full suite" batch test step.
-# If this is -1 or larger than the available groups, all groups are used.
-FULL_SUITE_SIGNATURES_PER_RUN = 200
 
 # Global toggle for lightweight, debugging-oriented runs.
 DRY_RUN = False
@@ -160,16 +171,44 @@ BATCHING_STRATEGIES = [
     ("RAPB-la-s", simulate_rapb_la_s_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
     ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
+    (
+        "HATS",
+        simulate_hats_with_bisect,
+        (
+            HATS_RISK_BUDGET,
+            HATS_BASE_RISK_PER_COMMIT,
+            HATS_REPEAT_RISK_SCALE,
+            HATS_REPEAT_RISK_POWER,
+        ),
+    ),
+    (
+        "RAHATS",
+        simulate_rahats_with_bisect,
+        (
+            RAHATS_RISK_BUDGET,
+            RAHATS_HIST_BASE_RISK_PER_COMMIT,
+            RAHATS_HIST_REPEAT_RISK_SCALE,
+            RAHATS_HIST_REPEAT_RISK_POWER,
+            RAHATS_HIST_MULTIPLIER,
+            RAHATS_COMMIT_MULTIPLIER,
+        ),
+    ),
+    ("LAB", simulate_lab_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
+    ("LAB-s", simulate_lab_s_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
+    ("LARAB", simulate_larab_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
+    ("LARAB-s", simulate_larab_s_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
 ]
 
 BISECTION_STRATEGIES = [
-    ("TOB",  time_ordered_bisect),
-    ("PAR",  exhaustive_parallel),
-    ("RWAB", risk_weighted_adaptive_bisect),
-    ("RWAB-LS", risk_weighted_adaptive_bisect_log_survival),
-    ("TKRB", topk_risk_first_bisect),
-    ("SWB",  sequential_walk_backward_bisect),
-    ("SWF",  sequential_walk_forward_bisect),
+    # Bisection strategies are implemented as per-signature-group processes in
+    # `batch_strats.py`. Here we pass a stable string id through to batching sims.
+    ("TOB", "TOB"),
+    ("PAR", "PAR"),
+    ("RWAB", "RWAB"),
+    ("RWAB-LS", "RWAB-LS"),
+    ("TKRB", "TKRB"),
+    ("SWB", "SWB"),
+    ("SWF", "SWF"),
 ]
 
 # Seed will be finalized in main(), but we also provide a
@@ -267,6 +306,23 @@ def get_args():
             "Pareto-point selection (replaces max TTC). Examples: max_ttc (default), "
             "mean_ttc, p95_ttc, p99_ttc, mft (or a full key like "
             "p95_time_to_culprit_hr)."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-opt-metric-multplier",
+        "--baseline-opt-metric-multiplier",
+        "--baseline_opt_metric_multplier",
+        "--baseline_opt_metric_multiplier",
+        type=float,
+        default=1.0,
+        dest="baseline_opt_metric_multplier",
+        help=(
+            "Multiplier applied to the baseline timeliness metric when selecting a "
+            "single Pareto-optimal point per combo. We first filter Pareto points "
+            "to those with timeliness_metric <= (baseline_timeliness_metric * multiplier) "
+            "and pick the one with the fewest tests (tie-break by timeliness). If "
+            "none satisfy, we fall back to the point with the smallest timeliness "
+            "metric (tie-break by tests). Default: 1.0."
         ),
     )
     parser.add_argument(
@@ -368,25 +424,6 @@ def get_args():
             "Worker pool key to use when a signature-group/job cannot be mapped to a "
             "platform (missing signature-group id, missing signature metadata, or "
             "unrecognized machine_platform)."
-        ),
-    )
-    parser.add_argument(
-        "--full-suite-sigs-per-run",
-        type=int,
-        default=FULL_SUITE_SIGNATURES_PER_RUN,
-        help=(
-            "Number of perf signature-groups to run per 'full suite' batch test step "
-            "(-1 means use all groups; positive values cap via random subset)."
-        ),
-    )
-    parser.add_argument(
-        "--dont-use-all-tests-per-batch",
-        action="store_true",
-        help=(
-            "If set, each initial batch test run executes only a random subset "
-            "of perf signature-groups, with size equal to --full-suite-sigs-per-run. "
-            "By default (flag not set), all signature-groups that appear at least "
-            "once within the cutoff window are executed."
         ),
     )
     parser.add_argument(
@@ -669,19 +706,8 @@ def run_exhaustive_testing(commits):
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        # Full suite, but capped to a fixed random subset of signature-groups
-        # if a non-negative cap is configured. A negative value (e.g., -1)
-        # means "use all signature-groups".
-        limit = FULL_SUITE_SIGNATURES_PER_RUN
-        if limit is None:
-            raise RuntimeError(
-                "FULL_SUITE_SIGNATURES_PER_RUN must not be None in "
-                "run_exhaustive_testing; use -1 to indicate 'all signature-groups'."
-            )
-        if isinstance(limit, int) and limit >= 0 and len(BATCH_SIGNATURE_DURATIONS_ET) > limit:
-            durations = random.sample(BATCH_SIGNATURE_DURATIONS_ET, limit)
-        else:
-            durations = BATCH_SIGNATURE_DURATIONS_ET
+        # Full suite: run all signature-groups in sig_group_job_durations.csv.
+        durations = BATCH_SIGNATURE_DURATIONS_ET
         finish_time = run_test_suite(executor, submit_time, durations)
 
         total_tests_run += len(durations)
@@ -821,63 +847,117 @@ def lookup_bisection(name):
 
 
 # ------------------- BEST-OVERALL LOGIC -------------------
-BEST_OVERALL_FIELDS = [
-    "tests_saved_vs_baseline_pct",
-    "mean_feedback_time_saved_vs_baseline_pct",
-    "mean_time_to_culprit_saved_vs_baseline_pct",
-    "max_time_to_culprit_saved_vs_baseline_pct",
-    "cpu_time_saved_vs_baseline_pct",
-]
-
-
 def _overall_improvement_score(entry):
     """
     Overall improvement score:
         tests_saved_vs_baseline_pct
-        + (mean_feedback_time_saved_vs_baseline_pct
-           + mean_time_to_culprit_saved_vs_baseline_pct
-           + max_time_to_culprit_saved_vs_baseline_pct) / 3
+        + (mean_time_to_culprit_saved_vs_baseline_pct
+           + max_time_to_culprit_saved_vs_baseline_pct) / 2
     """
     tests_saved = entry.get("tests_saved_vs_baseline_pct", 0.0)
-    mean_fb = entry.get("mean_feedback_time_saved_vs_baseline_pct", 0.0)
     mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
     max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
     # CPU time is tracked separately but not included in this aggregate score.
-    return tests_saved + (mean_fb + mean_ttc + max_ttc) / 3.0
+    return tests_saved + (mean_ttc + max_ttc) / 2.0
 
 
-def _is_better_or_equal_to_baseline(entry):
+def _timeliness_improvement_score(entry):
     """
-    Returns True if this combo is at least as good as baseline
-    on all tracked metrics (i.e., no negative improvements).
+    Timeliness improvement score:
+        (mean_time_to_culprit_saved_vs_baseline_pct
+         + max_time_to_culprit_saved_vs_baseline_pct) / 2
     """
-    return all(entry.get(f, 0.0) >= 0.0 for f in BEST_OVERALL_FIELDS)
+    mean_ttc = entry.get("mean_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    max_ttc = entry.get("max_time_to_culprit_saved_vs_baseline_pct", 0.0)
+    return (mean_ttc + max_ttc) / 2.0
 
 
-def choose_best_overall_from_items(items):
+def _is_pareto_efficient_combo(entry):
     """
-    items: list of (name, entry_dict)
+    "Pareto-efficient" in this simulator's output means:
+      - tests_saved_vs_baseline_pct > 0, and
+      - _timeliness_improvement_score(entry) > 0
+    """
+    tests_saved = entry.get("tests_saved_vs_baseline_pct", 0.0)
+    timeliness_score = _timeliness_improvement_score(entry)
+    return (tests_saved > 0.0) and (timeliness_score > 0.0)
 
-    Logic:
-      1. Prefer combos that are >= baseline on all metrics
-         (no negative saved_vs_baseline_pct*).
-      2. If none, fall back to all combos.
-      3. Within the pool, pick the one with the highest overall improvement score.
-      4. If the best score <= 0, return "NA".
+
+def rank_overall_and_pareto_combos(items):
+    """
+    Rank combos for output summaries.
+
+    Parameters
+    ----------
+    items:
+        list of (name, entry_dict)
+
+    Returns
+    -------
+    (overall_ranked, pareto_ranked)
+
+    overall_ranked:
+        List of combo names from best to worst:
+          1) Pareto-efficient combos first, sorted by tests_saved_vs_baseline_pct
+             (descending).
+          2) Then all remaining combos, sorted by _overall_improvement_score
+             (descending).
+    pareto_ranked:
+        List of only pareto-efficient combos, sorted by tests_saved_vs_baseline_pct
+        (descending).
     """
     if not items:
-        return "NA"
+        return [], []
 
-    # First, separate "all-metrics-non-worse" combos
-    non_worse = [(name, v) for name, v in items if _is_better_or_equal_to_baseline(v)]
-    candidate_pool = non_worse if non_worse else items
+    rows = []
+    for name, entry in items:
+        try:
+            tests_saved = float(entry.get("tests_saved_vs_baseline_pct", 0.0))
+        except (TypeError, ValueError):
+            tests_saved = 0.0
+        try:
+            timeliness_score = float(_timeliness_improvement_score(entry))
+        except (TypeError, ValueError):
+            timeliness_score = 0.0
+        try:
+            overall_score = float(_overall_improvement_score(entry))
+        except (TypeError, ValueError):
+            overall_score = 0.0
+        rows.append(
+            {
+                "name": name,
+                "tests_saved": tests_saved,
+                "timeliness_score": timeliness_score,
+                "overall_score": overall_score,
+                "pareto_efficient": _is_pareto_efficient_combo(entry),
+            }
+        )
 
-    best_name, best_entry = max(
-        candidate_pool, key=lambda kv: _overall_improvement_score(kv[1])
+    pareto_rows = [r for r in rows if r["pareto_efficient"]]
+    pareto_rows_sorted = sorted(
+        pareto_rows,
+        key=lambda r: (
+            -r["tests_saved"],
+            -r["timeliness_score"],
+            -r["overall_score"],
+            r["name"],
+        ),
     )
-    if _overall_improvement_score(best_entry) <= 0.0:
-        return "NA"
-    return best_name
+
+    remaining_rows = [r for r in rows if not r["pareto_efficient"]]
+    remaining_rows_sorted = sorted(
+        remaining_rows,
+        key=lambda r: (
+            -r["overall_score"],
+            -r["tests_saved"],
+            -r["timeliness_score"],
+            r["name"],
+        ),
+    )
+
+    pareto_ranked = [r["name"] for r in pareto_rows_sorted]
+    overall_ranked = pareto_ranked + [r["name"] for r in remaining_rows_sorted]
+    return overall_ranked, pareto_ranked
 
 
 # ------------------- MOPT (Optuna, continuous search) -------------------
@@ -885,6 +965,7 @@ def run_evaluation_mopt(
     INPUT_JSON_EVAL,
     n_trials,
     optimize_for_timeliness_metric="max_time_to_culprit_hr",
+    baseline_opt_metric_multplier=1.0,
     selected_batching=None,
     selected_bisection=None,
     run_exhaustive_testing_et=True,
@@ -916,10 +997,11 @@ def run_evaluation_mopt(
         ) from e
 
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
         INPUT_JSON_EVAL,
         n_trials,
         optimize_for_timeliness_metric,
+        float(baseline_opt_metric_multplier),
     )
 
     selected_batching_set = (
@@ -965,7 +1047,7 @@ def run_evaluation_mopt(
         )
         baseline = simulate_twsb_with_bisect(
             base_commits_for_context,
-            exhaustive_parallel,
+            "PAR",
             None,
             WORKER_POOLS,
         )
@@ -996,13 +1078,18 @@ def run_evaluation_mopt(
     def pick_best(pareto, baseline_timeliness_local):
         if not pareto:
             return None
+        baseline_threshold = None
+        if baseline_timeliness_local is not None:
+            baseline_threshold = _float_or_inf(baseline_timeliness_local) * float(
+                baseline_opt_metric_multplier
+            )
         feas = [
             r
             for r in pareto
             if (
-                baseline_timeliness_local is None
+                baseline_threshold is None
                 or _float_or_inf(r.get(optimize_for_timeliness_metric))
-                <= _float_or_inf(baseline_timeliness_local)
+                <= baseline_threshold
             )
         ]
         if feas:
@@ -1027,6 +1114,7 @@ def run_evaluation_mopt(
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
         "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
+        "mopt_baseline_opt_metric_multplier": float(baseline_opt_metric_multplier),
     }
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
@@ -1123,6 +1211,35 @@ def run_evaluation_mopt(
                     thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
                     param = (thr, tw)
+                elif normalized_batch_name == "HATS":
+                    budget = trial.suggest_float("HATS_RISK_BUDGET", 0.25, 6.0)
+                    base = trial.suggest_float(
+                        "HATS_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
+                    )
+                    scale = trial.suggest_float("HATS_REPEAT_RISK_SCALE", 0.0, 0.1)
+                    power = trial.suggest_float("HATS_REPEAT_RISK_POWER", 0.5, 3.0)
+                    param = (budget, base, scale, power)
+                elif normalized_batch_name == "RAHATS":
+                    # Keep RAHATS risk budget fixed for a better-conditioned Optuna
+                    # search. Otherwise the budget becomes largely redundant with
+                    # scaling both multipliers.
+                    budget = float(RAHATS_RISK_BUDGET)
+                    hbase = trial.suggest_float(
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
+                    )
+                    hscale = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1)
+                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0)
+                    hm = trial.suggest_float("RAHATS_HIST_MULTIPLIER", 0.0, 6.0)
+                    cm = trial.suggest_float("RAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
+                    param = (budget, hbase, hscale, hpower, hm, cm)
+                elif normalized_batch_name == "LAB":
+                    param = trial.suggest_float(
+                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN", 0.0, 24.0 * 60.0
+                    )
+                elif normalized_batch_name == "LARAB":
+                    rm = trial.suggest_float("LARAB_RISK_MULTIPLIER", 0.25, 6.0)
+                    qm = trial.suggest_float("LARAB_QUEUE_PRESSURE_MULTIPLIER", 0.0, 6.0)
+                    param = (rm, qm)
                 else:
                     logger.warning(
                         "Unknown batching strategy name %s (normalized=%s); returning inf",
@@ -1191,6 +1308,29 @@ def run_evaluation_mopt(
                         params["RATB_THRESHOLD"],
                         params["RATB_TIME_WINDOW_HOURS"],
                     )
+                elif normalized_batch_name == "HATS":
+                    param = (
+                        params["HATS_RISK_BUDGET"],
+                        params["HATS_BASE_RISK_PER_COMMIT"],
+                        params["HATS_REPEAT_RISK_SCALE"],
+                        params["HATS_REPEAT_RISK_POWER"],
+                    )
+                elif normalized_batch_name == "RAHATS":
+                    param = (
+                        float(RAHATS_RISK_BUDGET),
+                        params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
+                        params["RAHATS_HIST_REPEAT_RISK_SCALE"],
+                        params["RAHATS_HIST_REPEAT_RISK_POWER"],
+                        params["RAHATS_HIST_MULTIPLIER"],
+                        params["RAHATS_COMMIT_MULTIPLIER"],
+                    )
+                elif normalized_batch_name == "LAB":
+                    param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
+                elif normalized_batch_name == "LARAB":
+                    param = (
+                        params["LARAB_RISK_MULTIPLIER"],
+                        params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
+                    )
                 else:
                     logger.warning(
                         "Unknown batching strategy name %s (normalized=%s); skipping pareto entry",
@@ -1227,6 +1367,31 @@ def run_evaluation_mopt(
                     best_param_dict = {
                         "RATB_THRESHOLD": param[0],
                         "RATB_TIME_WINDOW_HOURS": param[1],
+                    }
+                elif normalized_batch_name == "HATS":
+                    best_param_dict = {
+                        "HATS_RISK_BUDGET": param[0],
+                        "HATS_BASE_RISK_PER_COMMIT": param[1],
+                        "HATS_REPEAT_RISK_SCALE": param[2],
+                        "HATS_REPEAT_RISK_POWER": param[3],
+                    }
+                elif normalized_batch_name == "RAHATS":
+                    best_param_dict = {
+                        "RAHATS_RISK_BUDGET": float(RAHATS_RISK_BUDGET),
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
+                        "RAHATS_HIST_REPEAT_RISK_SCALE": param[2],
+                        "RAHATS_HIST_REPEAT_RISK_POWER": param[3],
+                        "RAHATS_HIST_MULTIPLIER": param[4],
+                        "RAHATS_COMMIT_MULTIPLIER": param[5],
+                    }
+                elif normalized_batch_name == "LAB":
+                    best_param_dict = {
+                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN": param,
+                    }
+                elif normalized_batch_name == "LARAB":
+                    best_param_dict = {
+                        "LARAB_RISK_MULTIPLIER": param[0],
+                        "LARAB_QUEUE_PRESSURE_MULTIPLIER": param[1],
                     }
                 else:
                     continue
@@ -1433,9 +1598,9 @@ def run_evaluation_mopt(
     )
 
     # Best overall vs baseline (centralized logic)
-    out_eval["bet_overall_improvement_over_baseline"] = choose_best_overall_from_items(
-        combo_items
-    )
+    overall_ranked, pareto_ranked = rank_overall_and_pareto_combos(combo_items)
+    out_eval["best_overall_improvement_over_baseline"] = overall_ranked
+    out_eval["pareto-efficient_combos"] = pareto_ranked
 
     return {
         "eval_output": out_eval,
@@ -1521,7 +1686,7 @@ def run_final_test_unified(
     baseline_final = {}
     if baseline_selected:
         baseline_final = simulate_twsb_with_bisect(
-            base_commits_final, exhaustive_parallel, None, WORKER_POOLS
+            base_commits_final, "PAR", None, WORKER_POOLS
         )
         baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -1563,7 +1728,8 @@ def run_final_test_unified(
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
-            "bet_overall_improvement_over_baseline",
+            "best_overall_improvement_over_baseline",
+            "pareto-efficient_combos",
             "num_test_workers",
             "worker_pools",
         ):
@@ -1605,6 +1771,33 @@ def run_final_test_unified(
             param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
+            )
+        elif normalized_batch_name == "LARAB":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params["LARAB_RISK_MULTIPLIER"],
+                best_params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
+            )
+        elif normalized_batch_name == "HATS":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params["HATS_RISK_BUDGET"],
+                best_params["HATS_BASE_RISK_PER_COMMIT"],
+                best_params["HATS_REPEAT_RISK_SCALE"],
+                best_params["HATS_REPEAT_RISK_POWER"],
+            )
+        elif normalized_batch_name == "RAHATS":
+            if not isinstance(best_params, dict):
+                continue
+            param = (
+                best_params.get("RAHATS_RISK_BUDGET", float(RAHATS_RISK_BUDGET)),
+                best_params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
+                best_params["RAHATS_HIST_REPEAT_RISK_SCALE"],
+                best_params["RAHATS_HIST_REPEAT_RISK_POWER"],
+                best_params["RAHATS_HIST_MULTIPLIER"],
+                best_params["RAHATS_COMMIT_MULTIPLIER"],
             )
         elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB
@@ -1657,7 +1850,8 @@ def run_final_test_unified(
             "best_by_total_tests",
             "best_by_max_ttc",
             "best_by_mean_feedback_time",
-            "bet_overall_improvement_over_baseline",
+            "best_overall_improvement_over_baseline",
+            "pareto-efficient_combos",
             "num_test_workers",
         ):
             continue
@@ -1682,14 +1876,15 @@ def run_final_test_unified(
             eligible, key=lambda kv: kv[1]["mean_feedback_time_hr"]
         )[0]
         # Best overall vs baseline on FINAL window (centralized logic)
-        final_results["bet_overall_improvement_over_baseline"] = (
-            choose_best_overall_from_items(eligible)
-        )
+        overall_ranked, pareto_ranked = rank_overall_and_pareto_combos(eligible)
+        final_results["best_overall_improvement_over_baseline"] = overall_ranked
+        final_results["pareto-efficient_combos"] = pareto_ranked
     else:
         final_results["best_by_total_tests"] = "-"
         final_results["best_by_max_ttc"] = "-"
         final_results["best_by_mean_feedback_time"] = "-"
-        final_results["bet_overall_improvement_over_baseline"] = "NA"
+        final_results["best_overall_improvement_over_baseline"] = []
+        final_results["pareto-efficient_combos"] = []
 
     # Save FINAL
     os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
@@ -1724,27 +1919,31 @@ def main():
     timeliness_metric_key = resolve_timeliness_metric_key(
         getattr(args, "optimize_for_timeliness_metric", DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC)
     )
+    baseline_opt_metric_multplier = float(getattr(args, "baseline_opt_metric_multplier", 1.0))
+    if baseline_opt_metric_multplier <= 0.0:
+        raise ValueError(
+            f"--baseline-opt-metric-multplier must be > 0; got {baseline_opt_metric_multplier!r}"
+        )
     logger.info(
         "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
         "optimize_for_timeliness_metric=%s, "
+        "baseline_opt_metric_multplier=%.4f, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
-        "full_suite_sigs_per_run=%s, dont_use_all_tests_per_batch=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
         args.final_only,
         str(args.num_test_workers),
         timeliness_metric_key,
+        baseline_opt_metric_multplier,
         int(getattr(args, "workers_android", 0)),
         int(getattr(args, "workers_windows", 0)),
         int(getattr(args, "workers_linux", 0)),
         int(getattr(args, "workers_mac", 0)),
         str(getattr(args, "unknown_platform_pool", "")),
         str(getattr(args, "build_time_minutes", None)),
-        str(args.full_suite_sigs_per_run),
-        str(args.dont_use_all_tests_per_batch),
         str(getattr(args, "batching", "all")),
         str(getattr(args, "bisection", "all")),
         str(bool(getattr(args, "skip_exhaustive_testing", False))),
@@ -1753,8 +1952,8 @@ def main():
         RANDOM_SEED,
     )
 
-    # Apply CLI overrides to global WORKER_POOLS and FULL_SUITE_SIGNATURES_PER_RUN
-    global WORKER_POOLS, FULL_SUITE_SIGNATURES_PER_RUN, DRY_RUN
+    # Apply CLI overrides to global WORKER_POOLS
+    global WORKER_POOLS, DRY_RUN
     if args.num_test_workers is not None:
         # Single shared pool (legacy mode)
         WORKER_POOLS = {"default": int(args.num_test_workers)}
@@ -1777,28 +1976,6 @@ def main():
     bad_pools = {k: v for k, v in WORKER_POOLS.items() if int(v) <= 0}
     if bad_pools:
         raise ValueError(f"All worker pool sizes must be positive; got: {bad_pools}")
-    # By default, each initial batch test run executes all signature-groups
-    # that appear at least once within the cutoff window. If the user
-    # passes --dont-use-all-tests-per-batch, we instead cap each run
-    # to a random subset whose size is --full-suite-sigs-per-run.
-    if args.dont_use_all_tests_per_batch:
-        if args.full_suite_sigs_per_run is not None:
-            val = int(args.full_suite_sigs_per_run)
-            if val < 0:
-                FULL_SUITE_SIGNATURES_PER_RUN = -1
-            elif val == 0:
-                raise ValueError(
-                    "--full-suite-sigs-per-run must be a positive integer "
-                    "or -1 to indicate 'use all signature-groups'; got 0."
-                )
-            else:
-                FULL_SUITE_SIGNATURES_PER_RUN = val
-        else:
-            # Fall back to default cap (may itself be -1 or a positive cap).
-            FULL_SUITE_SIGNATURES_PER_RUN = FULL_SUITE_SIGNATURES_PER_RUN
-    else:
-        # Default: no cap; use all signature-groups from the cutoff-window union.
-        FULL_SUITE_SIGNATURES_PER_RUN = -1
 
     DRY_RUN = bool(getattr(args, "dry_run", False))
 
@@ -1808,7 +1985,6 @@ def main():
     # Propagate defaults/knobs to bisection_strats
     configure_bisection_defaults(
         default_test_duration_min=DEFAULT_TEST_DURATION_MIN,
-        full_suite_signatures_per_run=FULL_SUITE_SIGNATURES_PER_RUN,
         build_time_minutes=build_time_minutes,
         unknown_platform_pool=unknown_platform_pool,
     )
@@ -1886,8 +2062,7 @@ def main():
 
     # Restrict the "full suite" batch runs to the union of signature-groups
     # that actually appear at least once within the cutoff windows used
-    # for EVAL and FINAL. Whether we run all of them or a random subset
-    # is controlled by FULL_SUITE_SIGNATURES_PER_RUN.
+    # for EVAL and FINAL.
     cutoff_revs = {
         c["commit_id"] for c in eval_commits
     }.union(
@@ -1937,6 +2112,7 @@ def main():
         INPUT_JSON_EVAL,
         n_trials=args.mopt_trials,
         optimize_for_timeliness_metric=timeliness_metric_key,
+        baseline_opt_metric_multplier=baseline_opt_metric_multplier,
         selected_batching=selected_batching,
         selected_bisection=selected_bisection,
         run_exhaustive_testing_et=run_et,

@@ -38,6 +38,7 @@ tensorboard
 # Other
 javalang
 regex
+optuna
 phabricator @ git+https://github.com/disqus/python-phabricator.git@66190f9065dc68f3bba35c5fcbd0b6baf567b95d
 requests
 treeherder-client
