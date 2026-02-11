@@ -1,8 +1,8 @@
 {
   "task_type": "seq_cls",
   "debug": false,
-  "base_model_path": "/speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/answerdotai/ModernBERT-large",
-  "model_path": "/speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2026-02-05_23-58-24/output/checkpoint-90",
+  "base_model_path": "/speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/snapshots/microsoft/codebert-base",
+  "model_path": "/speed-scratch/a_s87063/repos/jit-dp-llm/llama/training/run_2026-02-05_23-58-24_codebert_new_perf/output/checkpoint-90",
   "dataset_path": "/speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf/perf_llm_struc_no_fw_2_6_18.jsonl",
   "quant": false,
   "threshold": null,
