@@ -1437,7 +1437,7 @@ def main() -> int:
                 window_start=inputs.window_start,
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS_threshold", 0.0, 1.0)
+                "threshold": trial.suggest_float("RWLBS_threshold", 1e-6, 1000.0, log=True)
             },
         ),
         StrategySpec(
@@ -1451,7 +1451,7 @@ def main() -> int:
                 window_start=inputs.window_start,
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS-AD_threshold", 0.0, 1.0),
+                "threshold": trial.suggest_float("RWLBS-AD_threshold", 1e-6, 1000.0, log=True),
                 "alpha": trial.suggest_float("RWLBS-AD_alpha", 0.0, 1.0),
             },
         ),
@@ -1466,7 +1466,7 @@ def main() -> int:
                 window_start=inputs.window_start,
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS-AI_threshold", 0.0, 1.0),
+                "threshold": trial.suggest_float("RWLBS-AI_threshold", 1e-6, 1000.0, log=True),
                 "alpha": trial.suggest_float("RWLBS-AI_alpha", 1.000001, 10.0),
             },
         ),
@@ -1481,7 +1481,7 @@ def main() -> int:
                 max_trials=int(p["max_trials"]),
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS-FF_threshold", 0.0, 1.0),
+                "threshold": trial.suggest_float("RWLBS-FF_threshold", 1e-6, 1000.0, log=True),
                 "max_trials": trial.suggest_int("RWLBS-FF_max_trials", 1, 500, log=True),
             },
         ),
@@ -1497,7 +1497,7 @@ def main() -> int:
                 max_trials=int(p["max_trials"]),
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS-AD-FF_threshold", 0.0, 1.0),
+                "threshold": trial.suggest_float("RWLBS-AD-FF_threshold", 1e-6, 1000.0, log=True),
                 "alpha": trial.suggest_float("RWLBS-AD-FF_alpha", 0.0, 1.0),
                 "max_trials": trial.suggest_int("RWLBS-AD-FF_max_trials", 1, 500, log=True),
             },
@@ -1514,7 +1514,7 @@ def main() -> int:
                 max_trials=int(p["max_trials"]),
             ),
             suggest_params=lambda trial: {
-                "threshold": trial.suggest_float("RWLBS-AI-FF_threshold", 0.0, 1.0),
+                "threshold": trial.suggest_float("RWLBS-AI-FF_threshold", 1e-6, 1000.0, log=True),
                 "alpha": trial.suggest_float("RWLBS-AI-FF_alpha", 1.000001, 10.0),
                 "max_trials": trial.suggest_int("RWLBS-AI-FF_max_trials", 1, 500, log=True),
             },
