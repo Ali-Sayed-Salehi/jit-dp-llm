@@ -442,9 +442,13 @@ For each selected `(lookback, bisection)` combo:
 
 2) The simulator is executed for each trial and the objective values are computed from the resulting metrics.
 
-3) Trials are treated as **infeasible** (returning `(inf, inf)`) when:
+3) The objective **raises** (aborting optimization) when:
    - No bugs were processed (`processed == 0`), or
-   - Any processed bug failed to locate a culprit (`total_culprits_found < processed`)
+   - Any processed bug failed to locate a culprit (`total_culprits_found < processed`), or
+   - Required objective metrics are missing (e.g. `max_tests_per_search` is `None`)
+
+   The simulator also emits a warning when `total_culprits_found < processed`. This is unexpected
+   under the simulation assumptions.
 
 4) Optuna uses `NSGAIISampler` when available (multi-objective evolutionary search). If that sampler is not available in your Optuna version, the script falls back to `RandomSampler`.
 

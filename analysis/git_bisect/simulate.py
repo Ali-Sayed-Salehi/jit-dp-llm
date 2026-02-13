@@ -721,6 +721,17 @@ def run_combo(
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
         collect_tests_per_search=bool(collect_tests_per_search),
     )
+    processed = int((res.get("bugs") or {}).get("processed", 0))
+    found = int(res.get("total_culprits_found", 0))
+    if processed > 0 and found < processed:
+        logger.warning(
+            "Combo %s+%s did not locate a culprit for all processed bugs: found=%d processed=%d (dataset=%s)",
+            lookback_spec.code,
+            bisection_spec.code,
+            found,
+            processed,
+            inputs.dataset,
+        )
     res["params"] = {
         "lookback": {"code": lookback_spec.code, "name": lookback_spec.name, **lookback_params},
         "bisection": {"code": bisection_spec.code, "name": bisection_spec.name, **bisection_params},
@@ -759,8 +770,8 @@ def optimize_combo_params(
     Objective:
       - Minimize `max_tests_per_search`.
       - Minimize `mean_tests_per_search`.
-      - Treat trials as infeasible if any processed bug fails to identify a culprit
-        (i.e., `total_culprits_found < processed`), returning `(inf, inf)`.
+      - Raise if the combo violates simulation invariants (e.g. no processed bugs,
+        missing objective metrics, or any processed bug failed to locate a culprit).
 
     Returns (best_lookback_params, best_bisection_params, payload) where payload
     includes `metrics` (re-run at best params) and `optuna` metadata.
@@ -822,13 +833,25 @@ def optimize_combo_params(
 
         processed = int(res["bugs"]["processed"])
         found = int(res["total_culprits_found"])
-        if processed <= 0 or found < processed:
-            return (float("inf"), float("inf"))
+        if processed <= 0:
+            raise RuntimeError(
+                "Optuna objective invariant violated: processed == 0 "
+                f"(combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
+            )
+        if found < processed:
+            raise RuntimeError(
+                "Optuna objective invariant violated: failed to locate all culprits "
+                f"(found={found} processed={processed}, combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
+            )
 
         max_tests_per_search = res.get("max_tests_per_search")
         mean_tests_per_search = res.get("mean_tests_per_search")
         if max_tests_per_search is None or mean_tests_per_search is None:
-            return (float("inf"), float("inf"))
+            raise RuntimeError(
+                "Optuna objective invariant violated: missing objective metrics "
+                f"(max_tests_per_search={max_tests_per_search!r} mean_tests_per_search={mean_tests_per_search!r}, "
+                f"combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
+            )
         return (float(max_tests_per_search), float(mean_tests_per_search))
 
     study.optimize(objective, n_trials=int(n_trials), show_progress_bar=False)
@@ -1936,7 +1959,7 @@ def main() -> int:
                 "optuna_seed": int(args.optuna_seed),
                 "objective": (
                     "minimize max_tests_per_search and mean_tests_per_search; "
-                    "infeasible if culprits_found < processed"
+                    "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
                 ),
             },
             "results": eval_results,
