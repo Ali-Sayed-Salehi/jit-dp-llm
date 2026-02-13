@@ -25,7 +25,6 @@ import random
 import math
 from datetime import datetime, timedelta, timezone
 import argparse
-import csv
 import logging
 
 import bisection_strats as bisection_mod
@@ -62,6 +61,7 @@ from batch_strats import (
 from bisection_strats import (
     TestExecutor,
     run_test_suite,
+    get_batch_signature_durations,
     configure_bisection_defaults,
     validate_failing_signatures_coverage,
     configure_full_suite_signatures_union,
@@ -73,9 +73,6 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 ALL_COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
-SIG_GROUP_JOB_DURATIONS_CSV = os.path.join(
-    REPO_ROOT, "datasets", "mozilla_perf", "sig_group_job_durations.csv"
-)
 
 BATCH_HOURS = 4
 FSB_SIZE = 20
@@ -294,45 +291,6 @@ def _worker_pools_for_output(pools: dict) -> dict:
             continue
         out[k] = int(pools[k])
     return out
-
-
-def _load_batch_signature_durations(path):
-    """
-    Load ET "full suite" jobs from sig_group_job_durations.csv.
-
-    Returns:
-      list[(signature_group_id, duration_minutes)]
-    """
-    suite = []
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                sig_group = row.get("signature_group_id")
-                dur = row.get("duration_minutes")
-                if not sig_group or not dur:
-                    continue
-                try:
-                    sig_group_id = int(sig_group)
-                    duration = float(dur)
-                except ValueError:
-                    continue
-                suite.append((sig_group_id, duration))
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"ET full-suite durations CSV not found at: {path}"
-        ) from exc
-
-    if not suite:
-        raise RuntimeError(
-            f"No valid (signature_group_id, duration_minutes) entries found in CSV at: {path}"
-        )
-
-    return suite
-
-
-# Used by run_exhaustive_testing (loaded lazily so `--help` works without datasets present).
-BATCH_SIGNATURE_DURATIONS_ET = None
 
 
 def get_args():
@@ -738,10 +696,6 @@ def run_exhaustive_testing(commits):
             "found_all_regressors": True,
         }
 
-    global BATCH_SIGNATURE_DURATIONS_ET
-    if BATCH_SIGNATURE_DURATIONS_ET is None:
-        BATCH_SIGNATURE_DURATIONS_ET = _load_batch_signature_durations(SIG_GROUP_JOB_DURATIONS_CSV)
-
     total_tests_run = 0
     culprit_times = []
     feedback_times = {}
@@ -753,11 +707,13 @@ def run_exhaustive_testing(commits):
         WORKER_POOLS,
     )
 
+    # Full suite: use the simulator's current "full suite" definition (which is
+    # typically restricted via `configure_full_suite_signatures_union(...)`).
+    durations = get_batch_signature_durations()
+
     for idx, c in enumerate(commits, start=1):
         submit_time = c["ts"]
 
-        # Full suite: run all signature-groups in sig_group_job_durations.csv.
-        durations = BATCH_SIGNATURE_DURATIONS_ET
         finish_time = run_test_suite(executor, submit_time, durations)
 
         total_tests_run += len(durations)
