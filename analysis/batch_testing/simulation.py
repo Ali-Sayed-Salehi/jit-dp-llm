@@ -1206,7 +1206,7 @@ def run_evaluation_mopt(
                     a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.0, 0.500)
                     param = (T, a)
                 elif normalized_batch_name == "RAPB-la":
-                    T = trial.suggest_float("RAPB_LA_BUDGET", 0.25, 6.0)
+                    T = trial.suggest_float("RAPB_LA_BUDGET", 0.25, 10.0)
                     a = trial.suggest_float(
                         "RAPB_LA_AGING_PER_HOUR", 0.0, 0.500
                     )
@@ -1259,7 +1259,7 @@ def run_evaluation_mopt(
                     )
                     hm = trial.suggest_float("ARAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("ARAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
-                    a = trial.suggest_float("ARAHATS_AGING_PER_HOUR", 0.005, 0.200)
+                    a = trial.suggest_float("ARAHATS_AGING_PER_HOUR", 0.0, 0.200)
                     param = (budget, hbase, hscale, hpower, hm, cm, a)
                 elif normalized_batch_name == "ARAHATS-la":
                     budget = float(ARAHATS_RISK_BUDGET)
@@ -1274,7 +1274,7 @@ def run_evaluation_mopt(
                     )
                     hm = trial.suggest_float("ARAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("ARAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
-                    a = trial.suggest_float("ARAHATS_AGING_PER_HOUR", 0.005, 0.200)
+                    a = trial.suggest_float("ARAHATS_AGING_PER_HOUR", 0.0, 0.200)
                     param = (budget, hbase, hscale, hpower, hm, cm, a)
                 elif normalized_batch_name == "LAB":
                     param = trial.suggest_float(
