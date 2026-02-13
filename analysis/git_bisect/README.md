@@ -436,9 +436,11 @@ When `--final-only` is **not** set, the script runs a full tuning pass on the **
 
 For each selected `(lookback, bisection)` combo:
 
-1) A single Optuna study is created with two objectives:
-   - **Minimize** `max_tests_per_search`
-   - **Minimize** `mean_tests_per_search`
+1) A single Optuna study is created with:
+   - Default (single-objective): **Minimize** `mean_tests_per_search`
+   - With `--multi-objective-opt`: two objectives:
+     - **Minimize** `max_tests_per_search`
+     - **Minimize** `mean_tests_per_search`
 
 2) The simulator is executed for each trial and the objective values are computed from the resulting metrics.
 
@@ -450,11 +452,13 @@ For each selected `(lookback, bisection)` combo:
    The simulator also emits a warning when `total_culprits_found < processed`. This is unexpected
    under the simulation assumptions.
 
-4) Optuna uses `NSGAIISampler` when available (multi-objective evolutionary search). If that sampler is not available in your Optuna version, the script falls back to `RandomSampler`.
+4) Optuna uses `TPESampler` by default. With `--multi-objective-opt`, it uses `NSGAIISampler` when available (multi-objective evolutionary search). If that sampler is not available in your Optuna version, the script falls back to `RandomSampler`.
 
-5) After optimization, the script selects a single point from the Pareto front by a simple rule:
-   - Choose the Pareto-optimal trial with the smallest `max_tests_per_search`
-   - Break ties by the smallest `mean_tests_per_search`
+5) After optimization:
+   - Default: select the single best trial (min `mean_tests_per_search`)
+   - With `--multi-objective-opt`: select a single point from the Pareto front by a simple rule:
+     - Choose the Pareto-optimal trial with the smallest `max_tests_per_search`
+     - Break ties by the smallest `mean_tests_per_search`
 
 What gets written to `--output-eval`:
 - `results[].best_params`: the selected best parameter values for the combo (stored without the Optuna prefix, e.g. `{"stride": 100}` rather than `{"FSLB_stride": 100}`).
@@ -543,10 +547,10 @@ If `processed == 0`, `mean_tests_per_search` and `max_tests_per_search` are repo
 ### Eval output (`--output-eval`)
 Includes:
 - Dataset metadata (commit window, risk file path, bug counts)
-- Per-combo Optuna details (selected Pareto-optimal trial params, selected objective values)
+- Per-combo Optuna details (selected best-trial params and selected objective values; Pareto-point selection when `--multi-objective-opt` is enabled)
 - Per-combo metrics (including a `bugs` breakdown of processed/skipped)
 
-Optuna tuning is multi-objective: it minimizes `(max_tests_per_search, mean_tests_per_search)`.
+Optuna tuning is single-objective by default: it minimizes `mean_tests_per_search`. With `--multi-objective-opt`, it is multi-objective and minimizes `(max_tests_per_search, mean_tests_per_search)`.
 
 Eval output structure (high level):
 

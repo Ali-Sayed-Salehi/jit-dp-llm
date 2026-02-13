@@ -27,6 +27,8 @@ Simulation outline for each regression bug:
 
 Run:
   - Evaluation (Optuna tuning): `python analysis/git_bisect/simulate.py --mopt-trials 200`
+    - Default objective: minimize `mean_tests_per_search`
+    - With `--multi-objective-opt`: minimize (`max_tests_per_search`, `mean_tests_per_search`)
   - Replay tuned params on final test: `python analysis/git_bisect/simulate.py --final-only`
   - Optional: penalize runs where lookback uses the simulation window start commit:
     `python analysis/git_bisect/simulate.py --penalize-window-start-lookback --window-start-lookback-penalty-tests 4`
@@ -761,6 +763,7 @@ def optimize_combo_params(
     bisection_spec: StrategySpec,
     n_trials: int,
     seed: int,
+    multi_objective_opt: bool = False,
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -768,8 +771,8 @@ def optimize_combo_params(
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
 
     Objective:
-      - Minimize `max_tests_per_search`.
-      - Minimize `mean_tests_per_search`.
+      - Default: Minimize `mean_tests_per_search`.
+      - With `multi_objective_opt`: Minimize `max_tests_per_search` and `mean_tests_per_search`.
       - Raise if the combo violates simulation invariants (e.g. no processed bugs,
         missing objective metrics, or any processed bug failed to locate a culprit).
 
@@ -794,6 +797,7 @@ def optimize_combo_params(
             "reason": "no_suggest_params",
             "n_trials": 0,
             "seed": int(seed),
+            "multi_objective_opt": bool(multi_objective_opt),
         }
         return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
 
@@ -802,25 +806,7 @@ def optimize_combo_params(
     except ImportError as exc:
         raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
 
-    try:
-        sampler = optuna.samplers.NSGAIISampler(seed=int(seed))
-    except AttributeError:
-        # Fallback for older Optuna versions where NSGAIISampler may not exist.
-        sampler = optuna.samplers.RandomSampler(seed=int(seed))
-    study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler)
-
-    def objective(trial: Any) -> Tuple[float, float]:
-        lookback_params = (
-            lookback_spec.suggest_params(trial)
-            if lookback_spec.suggest_params is not None
-            else dict(lookback_spec.default_params)
-        )
-        bisection_params = (
-            bisection_spec.suggest_params(trial)
-            if bisection_spec.suggest_params is not None
-            else dict(bisection_spec.default_params)
-        )
-
+    def _run_and_validate(lookback_params: Dict[str, Any], bisection_params: Dict[str, Any]) -> tuple[float, float]:
         res = run_combo(
             inputs=inputs,
             lookback_spec=lookback_spec,
@@ -852,15 +838,66 @@ def optimize_combo_params(
                 f"(max_tests_per_search={max_tests_per_search!r} mean_tests_per_search={mean_tests_per_search!r}, "
                 f"combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
             )
+
         return (float(max_tests_per_search), float(mean_tests_per_search))
+
+    if bool(multi_objective_opt):
+        try:
+            sampler = optuna.samplers.NSGAIISampler(seed=int(seed))
+        except AttributeError:
+            # Fallback for older Optuna versions where NSGAIISampler may not exist.
+            sampler = optuna.samplers.RandomSampler(seed=int(seed))
+        study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler)
+
+        def objective(trial: Any) -> Tuple[float, float]:
+            lookback_params = (
+                lookback_spec.suggest_params(trial)
+                if lookback_spec.suggest_params is not None
+                else dict(lookback_spec.default_params)
+            )
+            bisection_params = (
+                bisection_spec.suggest_params(trial)
+                if bisection_spec.suggest_params is not None
+                else dict(bisection_spec.default_params)
+            )
+
+            max_tests_per_search, mean_tests_per_search = _run_and_validate(lookback_params, bisection_params)
+            return (float(max_tests_per_search), float(mean_tests_per_search))
+    else:
+        try:
+            sampler = optuna.samplers.TPESampler(seed=int(seed))
+        except AttributeError:
+            sampler = optuna.samplers.RandomSampler(seed=int(seed))
+        study = optuna.create_study(direction="minimize", sampler=sampler)
+
+        def objective(trial: Any) -> float:
+            lookback_params = (
+                lookback_spec.suggest_params(trial)
+                if lookback_spec.suggest_params is not None
+                else dict(lookback_spec.default_params)
+            )
+            bisection_params = (
+                bisection_spec.suggest_params(trial)
+                if bisection_spec.suggest_params is not None
+                else dict(bisection_spec.default_params)
+            )
+
+            _, mean_tests_per_search = _run_and_validate(lookback_params, bisection_params)
+            return float(mean_tests_per_search)
 
     study.optimize(objective, n_trials=int(n_trials), show_progress_bar=False)
 
-    # Select a single point from the Pareto front. We primarily minimize the
-    # worst-case search cost, and break ties by mean cost.
-    if not study.best_trials:
-        raise RuntimeError("Optuna produced no Pareto-optimal trials.")
-    selected_trial = min(study.best_trials, key=lambda t: (float(t.values[0]), float(t.values[1])))
+    if bool(multi_objective_opt):
+        # Select a single point from the Pareto front. We primarily minimize the
+        # worst-case search cost, and break ties by mean cost.
+        if not study.best_trials:
+            raise RuntimeError("Optuna produced no Pareto-optimal trials.")
+        selected_trial = min(study.best_trials, key=lambda t: (float(t.values[0]), float(t.values[1])))
+    else:
+        try:
+            selected_trial = study.best_trial
+        except Exception as exc:
+            raise RuntimeError("Optuna produced no successful trials.") from exc
     best_trial_params_raw = dict(selected_trial.params)
     for key in best_trial_params_raw.keys():
         if not (
@@ -892,18 +929,32 @@ def optimize_combo_params(
         penalize_window_start_lookback=bool(penalize_window_start_lookback),
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
     )
-    optuna_meta = {
-        "n_trials": int(n_trials),
-        "seed": int(seed),
-        "pareto_best_trial_count": int(len(study.best_trials)),
-        "selected_trial_number": int(selected_trial.number),
-        "selection": "lexicographic (min max_tests_per_search, then min mean_tests_per_search)",
-        "selected_values": {
-            "max_tests_per_search": float(selected_trial.values[0]),
-            "mean_tests_per_search": float(selected_trial.values[1]),
-        },
-        "best_trial_params_raw": best_trial_params_raw,
-    }
+    if bool(multi_objective_opt):
+        optuna_meta = {
+            "n_trials": int(n_trials),
+            "seed": int(seed),
+            "multi_objective_opt": True,
+            "pareto_best_trial_count": int(len(study.best_trials)),
+            "selected_trial_number": int(selected_trial.number),
+            "selection": "lexicographic (min max_tests_per_search, then min mean_tests_per_search)",
+            "selected_values": {
+                "max_tests_per_search": float(selected_trial.values[0]),
+                "mean_tests_per_search": float(selected_trial.values[1]),
+            },
+            "best_trial_params_raw": best_trial_params_raw,
+        }
+    else:
+        optuna_meta = {
+            "n_trials": int(n_trials),
+            "seed": int(seed),
+            "multi_objective_opt": False,
+            "selected_trial_number": int(selected_trial.number),
+            "selection": "min mean_tests_per_search",
+            "selected_values": {
+                "mean_tests_per_search": float(selected_trial.value),
+            },
+            "best_trial_params_raw": best_trial_params_raw,
+        }
     return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
 
 
@@ -970,6 +1021,14 @@ def get_args() -> argparse.Namespace:
         type=int,
         default=42,
         help="Random seed for Optuna samplers.",
+    )
+    parser.add_argument(
+        "--multi-objective-opt",
+        action="store_true",
+        help=(
+            "Use multi-objective optimization (minimize max_tests_per_search and mean_tests_per_search). "
+            "Default: optimize mean_tests_per_search only."
+        ),
     )
     parser.add_argument(
         "--lookback",
@@ -1892,13 +1951,19 @@ def main() -> int:
                     lookback_spec.name == NightlyBuildLookback.name
                     and bisection_spec.name == GitBisectBaseline.name
                 )
-                logger.info("Optuna tuning combo=%s trials=%d", combo_key, int(args.mopt_trials))
+                logger.info(
+                    "Optuna tuning combo=%s trials=%d multi_objective_opt=%s",
+                    combo_key,
+                    int(args.mopt_trials),
+                    bool(args.multi_objective_opt),
+                )
                 lookback_params, bisection_params, payload = optimize_combo_params(
                     inputs=eval_inputs,
                     lookback_spec=lookback_spec,
                     bisection_spec=bisection_spec,
                     n_trials=int(args.mopt_trials),
                     seed=int(args.optuna_seed),
+                    multi_objective_opt=bool(args.multi_objective_opt),
                     penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                 )
@@ -1957,9 +2022,17 @@ def main() -> int:
             "optimization": {
                 "mopt_trials_per_combo": int(args.mopt_trials),
                 "optuna_seed": int(args.optuna_seed),
+                "multi_objective_opt": bool(args.multi_objective_opt),
                 "objective": (
-                    "minimize max_tests_per_search and mean_tests_per_search; "
-                    "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+                    (
+                        "minimize max_tests_per_search and mean_tests_per_search; "
+                        "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+                    )
+                    if bool(args.multi_objective_opt)
+                    else (
+                        "minimize mean_tests_per_search; "
+                        "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+                    )
                 ),
             },
             "results": eval_results,
