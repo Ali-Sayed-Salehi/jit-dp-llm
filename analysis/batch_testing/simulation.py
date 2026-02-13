@@ -1203,25 +1203,25 @@ def run_evaluation_mopt(
                     param = trial.suggest_float("RASB_LA_BUDGET", 0.25, 6.0)
                 elif normalized_batch_name == "RAPB":
                     T = trial.suggest_float("RAPB_THRESHOLD", 0.30, 0.80)
-                    a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.005, 0.200)
+                    a = trial.suggest_float("RAPB_AGING_PER_HOUR", 0.0, 0.500)
                     param = (T, a)
                 elif normalized_batch_name == "RAPB-la":
                     T = trial.suggest_float("RAPB_LA_BUDGET", 0.25, 6.0)
                     a = trial.suggest_float(
-                        "RAPB_LA_AGING_PER_HOUR", 0.005, 0.200
+                        "RAPB_LA_AGING_PER_HOUR", 0.0, 0.500
                     )
                     param = (T, a)
                 elif normalized_batch_name == "RATB":
-                    thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.95)
+                    thr = trial.suggest_float("RATB_THRESHOLD", 0.10, 0.999)
                     tw = trial.suggest_float("RATB_TIME_WINDOW_HOURS", 0.25, 24.0)
                     param = (thr, tw)
                 elif normalized_batch_name == "HATS":
                     budget = trial.suggest_float("HATS_RISK_BUDGET", 0.25, 6.0)
                     base = trial.suggest_float(
-                        "HATS_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
+                        "HATS_BASE_RISK_PER_COMMIT", 1e-4, 1e-1, log=True
                     )
                     scale = trial.suggest_float("HATS_REPEAT_RISK_SCALE", 0.0, 0.1)
-                    power = trial.suggest_float("HATS_REPEAT_RISK_POWER", 0.5, 3.0)
+                    power = trial.suggest_float("HATS_REPEAT_RISK_POWER", 0.5, 5.0)
                     param = (budget, base, scale, power)
                 elif normalized_batch_name == "RAHATS":
                     # Keep RAHATS risk budget fixed for a better-conditioned Optuna
@@ -1232,7 +1232,7 @@ def run_evaluation_mopt(
                         "RAHATS_HIST_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
                     )
                     hscale = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1)
-                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0)
+                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 5.0)
                     hm = trial.suggest_float("RAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("RAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
                     param = (budget, hbase, hscale, hpower, hm, cm)
@@ -1242,7 +1242,7 @@ def run_evaluation_mopt(
                         "RAHATS_HIST_BASE_RISK_PER_COMMIT", 1e-4, 1e-2, log=True
                     )
                     hscale = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1)
-                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0)
+                    hpower = trial.suggest_float("RAHATS_HIST_REPEAT_RISK_POWER", 0.5, 5.0)
                     hm = trial.suggest_float("RAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("RAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
                     param = (budget, hbase, hscale, hpower, hm, cm)
@@ -1255,7 +1255,7 @@ def run_evaluation_mopt(
                         "ARAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1
                     )
                     hpower = trial.suggest_float(
-                        "ARAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0
+                        "ARAHATS_HIST_REPEAT_RISK_POWER", 0.5, 5.0
                     )
                     hm = trial.suggest_float("ARAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("ARAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
@@ -1270,7 +1270,7 @@ def run_evaluation_mopt(
                         "ARAHATS_HIST_REPEAT_RISK_SCALE", 0.0, 0.1
                     )
                     hpower = trial.suggest_float(
-                        "ARAHATS_HIST_REPEAT_RISK_POWER", 0.5, 3.0
+                        "ARAHATS_HIST_REPEAT_RISK_POWER", 0.5, 5.0
                     )
                     hm = trial.suggest_float("ARAHATS_HIST_MULTIPLIER", 0.0, 6.0)
                     cm = trial.suggest_float("ARAHATS_COMMIT_MULTIPLIER", 0.0, 6.0)
