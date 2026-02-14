@@ -307,7 +307,11 @@ def get_args():
         "--mopt-trials",
         type=int,
         default=200,
-        help="Number of Optuna trials per (batch,bisect) combo.",
+        help=(
+            "Base number of Optuna trials per combo *per tunable parameter*. "
+            "The actual trials per (batch,bisect) combo are computed as: "
+            "(mopt_trials * num_tunable_params_for_combo)."
+        ),
     )
     parser.add_argument(
         "--optuna-seed",
@@ -1011,7 +1015,7 @@ def run_evaluation_mopt(
     optuna_seed = int(optuna_seed)
 
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, optuna_seed=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, base_trials_per_param=%d, optuna_seed=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
         INPUT_JSON_EVAL,
         n_trials,
         optuna_seed,
@@ -1025,6 +1029,41 @@ def run_evaluation_mopt(
         except AttributeError:
             # Fallback for older Optuna versions where NSGAIISampler may not exist.
             return optuna.samplers.RandomSampler(seed=optuna_seed)
+
+    def _num_tunable_params_for_combo(batch_name: str, bisect_name: str) -> int:
+        """
+        Return the number of tunable Optuna parameters for a (batch,bisect) combo.
+
+        This is used to scale `n_trials` so that higher-dimensional strategies
+        receive more samples.
+        """
+        normalized_batch_name = (
+            batch_name[:-2] if str(batch_name).endswith("-s") else str(batch_name)
+        )
+        batch_param_count_by_strategy = {
+            # 1D
+            "TWB": 1,
+            "FSB": 1,
+            "RASB": 1,
+            "RASB-la": 1,
+            "LAB": 1,
+            # 2D
+            "RAPB": 2,
+            "RAPB-la": 2,
+            "RATB": 2,
+            "LARAB": 2,
+            "LARAB-la": 2,
+            # Higher-D
+            "HATS": 4,
+            "RAHATS": 5,     # budget fixed; tune 5 params
+            "RAHATS-la": 5,  # budget fixed; tune 5 params
+            "ARAHATS": 6,    # budget fixed; tune 6 params
+            "ARAHATS-la": 6, # budget fixed; tune 6 params
+        }
+        count = int(batch_param_count_by_strategy.get(normalized_batch_name, 1))
+        if str(bisect_name) == "TKRB":
+            count += 1
+        return max(1, count)
 
     selected_batching_set = (
         set(selected_batching) if selected_batching is not None else None
@@ -1134,6 +1173,8 @@ def run_evaluation_mopt(
         "Exhaustive Testing (ET)": et_results,
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
+        "mopt_base_trials_per_param": int(n_trials),
+        "mopt_trials_scale_by_param_count": True,
         "mopt_optuna_seed": int(optuna_seed),
         "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
         "mopt_baseline_opt_metric_multplier": float(baseline_opt_metric_multplier),
@@ -1184,10 +1225,14 @@ def run_evaluation_mopt(
             if dry_run and selected_combos is not None and (b_name, bis_name) not in selected_combos:
                 continue
             combo_key = f"{b_name} + {bis_name}"
+            combo_param_count = _num_tunable_params_for_combo(b_name, bis_name)
+            combo_trials = int(n_trials) * int(combo_param_count)
             logger.info(
-                "Creating Optuna study for combo %s with %d trials",
+                "Creating Optuna study for combo %s with base_trials=%d param_count=%d => trials=%d",
                 combo_key,
-                n_trials,
+                int(n_trials),
+                int(combo_param_count),
+                int(combo_trials),
             )
 
             def objective(trial):
@@ -1195,7 +1240,7 @@ def run_evaluation_mopt(
                     logger.info(
                         "Optuna trial %d/%d for combo %s",
                         trial.number,
-                        n_trials,
+                        combo_trials,
                         combo_key,
                     )
                 # Bisection-specific tunables (only for TKRB).
@@ -1334,7 +1379,7 @@ def run_evaluation_mopt(
                 directions=["minimize", "minimize"],
                 sampler=_create_mopt_sampler(),
             )
-            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+            study.optimize(objective, n_trials=combo_trials, show_progress_bar=False)
             logger.info(
                 "Completed Optuna study for combo %s; best trial count=%d",
                 combo_key,
@@ -2102,7 +2147,7 @@ def main():
             f"--baseline-opt-metric-multplier must be > 0; got {baseline_opt_metric_multplier!r}"
         )
     logger.info(
-        "Parsed CLI args: mopt_trials=%d, optuna_seed=%d, final_only=%s, num_test_workers=%s, "
+        "Parsed CLI args: mopt_trials_base_per_param=%d, optuna_seed=%d, final_only=%s, num_test_workers=%s, "
         "optimize_for_timeliness_metric=%s, "
         "baseline_opt_metric_multplier=%.4f, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
