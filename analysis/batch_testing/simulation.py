@@ -310,6 +310,12 @@ def get_args():
         help="Number of Optuna trials per (batch,bisect) combo.",
     )
     parser.add_argument(
+        "--optuna-seed",
+        type=int,
+        default=RANDOM_SEED,
+        help="Random seed for Optuna samplers (for reproducible tuning runs).",
+    )
+    parser.add_argument(
         "--optimize-for-timeliness-metric",
         default=DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC,
         help=(
@@ -970,6 +976,7 @@ def rank_overall_and_pareto_combos(items):
 def run_evaluation_mopt(
     INPUT_JSON_EVAL,
     n_trials,
+    optuna_seed=RANDOM_SEED,
     optimize_for_timeliness_metric="max_time_to_culprit_hr",
     baseline_opt_metric_multplier=1.0,
     selected_batching=None,
@@ -1001,13 +1008,23 @@ def run_evaluation_mopt(
             "Optuna is required for this script. Install with `pip install optuna`."
         ) from e
 
+    optuna_seed = int(optuna_seed)
+
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, n_trials=%d, optuna_seed=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
         INPUT_JSON_EVAL,
         n_trials,
+        optuna_seed,
         optimize_for_timeliness_metric,
         float(baseline_opt_metric_multplier),
     )
+
+    def _create_mopt_sampler():
+        try:
+            return optuna.samplers.NSGAIISampler(seed=optuna_seed)
+        except AttributeError:
+            # Fallback for older Optuna versions where NSGAIISampler may not exist.
+            return optuna.samplers.RandomSampler(seed=optuna_seed)
 
     selected_batching_set = (
         set(selected_batching) if selected_batching is not None else None
@@ -1117,6 +1134,7 @@ def run_evaluation_mopt(
         "Exhaustive Testing (ET)": et_results,
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
+        "mopt_optuna_seed": int(optuna_seed),
         "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
         "mopt_baseline_opt_metric_multplier": float(baseline_opt_metric_multplier),
     }
@@ -1312,7 +1330,10 @@ def run_evaluation_mopt(
                     _float_or_inf(res.get(optimize_for_timeliness_metric)),
                 )
 
-            study = optuna.create_study(directions=["minimize", "minimize"])
+            study = optuna.create_study(
+                directions=["minimize", "minimize"],
+                sampler=_create_mopt_sampler(),
+            )
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
             logger.info(
                 "Completed Optuna study for combo %s; best trial count=%d",
@@ -2081,7 +2102,7 @@ def main():
             f"--baseline-opt-metric-multplier must be > 0; got {baseline_opt_metric_multplier!r}"
         )
     logger.info(
-        "Parsed CLI args: mopt_trials=%d, final_only=%s, num_test_workers=%s, "
+        "Parsed CLI args: mopt_trials=%d, optuna_seed=%d, final_only=%s, num_test_workers=%s, "
         "optimize_for_timeliness_metric=%s, "
         "baseline_opt_metric_multplier=%.4f, "
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
@@ -2090,6 +2111,7 @@ def main():
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
         "log_level=%s, random_seed=%d",
         args.mopt_trials,
+        int(getattr(args, "optuna_seed", RANDOM_SEED)),
         args.final_only,
         str(args.num_test_workers),
         timeliness_metric_key,
@@ -2266,6 +2288,7 @@ def main():
     eval_payload = run_evaluation_mopt(
         INPUT_JSON_EVAL,
         n_trials=args.mopt_trials,
+        optuna_seed=int(getattr(args, "optuna_seed", RANDOM_SEED)),
         optimize_for_timeliness_metric=timeliness_metric_key,
         baseline_opt_metric_multplier=baseline_opt_metric_multplier,
         selected_batching=selected_batching,
