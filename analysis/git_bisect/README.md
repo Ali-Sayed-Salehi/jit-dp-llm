@@ -40,7 +40,7 @@ This makes bisection deterministic and lets us count “how many tests would be 
 The simulator’s **cost** is the number of times we “run a test” on a specific commit index. For each bug:
 
 $$
-\text{tests\_per\_bug} = \text{lookback\_tests} + \text{bisection\_tests}
+\text{tests\\_per\\_bug} = \text{lookback\\_tests} + \text{bisection\\_tests}
 $$
 
 Important modeling choice: the simulator treats `b` as an *already-observed* failing commit (e.g., the regression was first noticed there), so it is **not** counted as a test. Lookback/bisection only count *additional* probes.
@@ -53,16 +53,16 @@ To model an additional fixed overhead in that situation, you can enable `--penal
 Concretely, for each processed bug:
 
 $$
-\text{tests\_per\_bug} =
-\text{lookback\_tests} + \text{bisection\_tests} + \text{window\_start\_penalty}
+\text{tests\\_per\\_bug} =
+\text{lookback\\_tests} + \text{bisection\\_tests} + \text{window\\_start\\_penalty}
 $$
 
 where:
 
 $$
-\text{window\_start\_penalty} =
+\text{window\\_start\\_penalty} =
 \begin{cases}
-\text{window\_start\_lookback\_penalty\_tests} & \text{if penalize is enabled and } g=\text{window\_start} \\\\
+\text{window\\_start\\_lookback\\_penalty\\_tests} & \text{if penalize is enabled and } g=\text{window\\_start} \\\\
 0 & \text{otherwise}
 \end{cases}
 $$
@@ -197,7 +197,7 @@ This is meant to approximate “bisecting by nightly builds”: cheap to try one
 Do **no additional tests** to find a good boundary; use the simulation window start commit:
 
 $$
-g = \text{window\_start}
+g = \text{window\\_start}
 $$
 
 The simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`), since there is no known-good commit available strictly before the culprit within the window. When applicable, bisection searches over `(window_start, b]`.
@@ -239,7 +239,7 @@ Example mapping of base strategies → forced-fallback variants:
 Choose a stride length `s` in commits and repeatedly jump back by exactly `s`:
 
 $$
-x_k = \max(\text{window\_start},\; b_{k-1} - s)
+x_k = \max(\text{window\\_start},\; b_{k-1} - s)
 $$
 
 Stop on the first `x_k < c`. If you ignore the window clamp, the number of lookback tests needed is:
@@ -339,7 +339,7 @@ Same as RWLBLS-AD, but with `α > 1` so the threshold increases after each faile
 Let commit `i` have timestamp `t_i` (UTC). Choose a fixed time window `H` hours. From the current boundary `b`, jump back by time and test the nearest commit at-or-before the target time:
 
 $$
-\text{target\_time} = t_b - H
+\text{target\\_time} = t_b - H
 $$
 
 Test the commit `x` with the largest `x < b` such that `t_x ≤ target_time`. On failure, set `b ← x` and repeat. If the target time predates all in-window history, fall back to testing `window_start`.
@@ -512,7 +512,7 @@ For a processed bug, the simulator counts:
 The per-bug cost is:
 
 $$
-\text{tests\_per\_bug} = \text{lookback\_tests} + \text{bisection\_tests}
+\text{tests\\_per\\_bug} = \text{lookback\\_tests} + \text{bisection\\_tests}
 $$
 
 where `bisection_tests` may already include the optional window-start penalty.
@@ -526,20 +526,20 @@ Let `processed` be the number of bugs successfully simulated for a combo. For ea
 Then:
 
 $$
-\text{total\_tests} = \sum_{j=1}^{processed} (L_j + B_j)
+\text{total\\_tests} = \sum_{j=1}^{processed} (L_j + B_j)
 $$
 
 $$
-\text{total\_lookback\_tests} = \sum_{j=1}^{processed} L_j,\;\;\;\;
-\text{total\_bisection\_tests} = \sum_{j=1}^{processed} B_j
+\text{total\\_lookback\\_tests} = \sum_{j=1}^{processed} L_j,\;\;\;\;
+\text{total\\_bisection\\_tests} = \sum_{j=1}^{processed} B_j
 $$
 
 $$
-\text{mean\_tests\_per\_search} = \frac{\text{total\_tests}}{processed}
+\text{mean\\_tests\\_per\\_search} = \frac{\text{total\\_tests}}{processed}
 $$
 
 $$
-\text{max\_tests\_per\_search} = \max_{j \in [1,processed]} (L_j + B_j)
+\text{max\\_tests\\_per\\_search} = \max_{j \in [1,processed]} (L_j + B_j)
 $$
 
 If `processed == 0`, `mean_tests_per_search` and `max_tests_per_search` are reported as `null` in the JSON output.
