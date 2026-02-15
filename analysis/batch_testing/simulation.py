@@ -293,6 +293,36 @@ def _worker_pools_for_output(pools: dict) -> dict:
     return out
 
 
+def _split_metadata_for_output(
+    *,
+    commits,
+    preds_raw,
+    lower_cutoff,
+    upper_cutoff,
+) -> dict:
+    """
+    Build a small JSON-serializable metadata payload describing a split/window.
+
+    This is written into the output JSON files so results remain self-describing.
+    """
+    lower_iso = lower_cutoff.isoformat() if lower_cutoff is not None else None
+    upper_iso = upper_cutoff.isoformat() if upper_cutoff is not None else None
+    try:
+        num_commits = int(len(commits or []))
+    except TypeError:
+        num_commits = 0
+    try:
+        num_predicted = int(len(preds_raw or {}))
+    except TypeError:
+        num_predicted = 0
+
+    return {
+        "num_commits_in_window": num_commits,
+        "num_predicted_commits": num_predicted,
+        "window": {"lower": lower_iso, "upper": upper_iso},
+    }
+
+
 def get_args():
     """
     Parse CLI arguments for evaluation/final runs.
@@ -1888,6 +1918,19 @@ def run_final_test_unified(
             "lower": final_lower.isoformat(),
             "upper": final_upper.isoformat() if final_upper else None,
         },
+        "splits": {
+            "eval": (
+                eval_payload.get("eval_output", {}).get("splits", {}).get("eval")
+                if isinstance(eval_payload, dict)
+                else None
+            ),
+            "final": _split_metadata_for_output(
+                commits=base_commits_final,
+                preds_raw=preds_raw_final,
+                lower_cutoff=final_lower,
+                upper_cutoff=final_upper,
+            ),
+        },
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
     }
@@ -2300,6 +2343,21 @@ def main():
     # signature-groups and results would be misleading.
     validate_failing_signatures_coverage(failing_revisions=failing_revisions)
 
+    split_metadata = {
+        "eval": _split_metadata_for_output(
+            commits=eval_commits,
+            preds_raw=eval_preds_raw,
+            lower_cutoff=eval_lower,
+            upper_cutoff=eval_upper,
+        ),
+        "final": _split_metadata_for_output(
+            commits=final_commits,
+            preds_raw=final_preds_raw,
+            lower_cutoff=final_lower,
+            upper_cutoff=final_upper,
+        ),
+    }
+
     if args.final_only:
         # Reuse existing eval results
         if not os.path.exists(OUTPUT_PATH_EVAL):
@@ -2308,6 +2366,10 @@ def main():
             )
         with open(OUTPUT_PATH_EVAL, "r", encoding="utf-8") as f:
             reused_eval_output = json.load(f)
+
+        # Ensure split metadata is present even when reusing older eval files.
+        if isinstance(reused_eval_output, dict):
+            reused_eval_output["splits"] = split_metadata
 
         # Shape expected by run_final_test_unified
         eval_payload = {"eval_output": reused_eval_output}
@@ -2348,6 +2410,9 @@ def main():
 
     if eval_payload is None:
         raise RuntimeError("Evaluation was unsuccessful. No eval payload present")
+
+    if isinstance(eval_payload.get("eval_output"), dict):
+        eval_payload["eval_output"]["splits"] = split_metadata
 
     os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
     with open(OUTPUT_PATH_EVAL, "w", encoding="utf-8") as f:
