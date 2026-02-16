@@ -49,7 +49,18 @@ echo "Running script ..."
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
-# --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s,LAB,LAB-s,LARAB,LARAB-s,HATS,RAHATS,RAHATS-la,ARAHATS,ARAHATS-la \
+# --batching "TWSB,\
+# TWB,TWB-s,TWB-hats,\
+# FSB,FSB-s,FSB-hats,\
+# RASB,RASB-s,RASB-hats,\
+# RASB-la,RASB-la-s,RASB-la-hats,\
+# RAPB,RAPB-s,RAPB-hats,\
+# RAPB-la,RAPB-la-s,RAPB-la-hats,\
+# RATB,RATB-s,RATB-hats,\
+# LAB,LAB-s,LAB-hats,\
+# LARAB,LARAB-s,LARAB-hats,\
+# LARAB-la,LARAB-la-s,LARAB-la-hats,\
+# HATS,RAHATS,RAHATS-la,ARAHATS,ARAHATS-la" \
 # --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
 # --optimize-for-timeliness-metric max_ttc \
 # --baseline-opt-metric-multplier 2 \

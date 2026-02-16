@@ -32,18 +32,25 @@ import bisection_strats as bisection_mod
 from batch_strats import (
     simulate_twb_with_bisect,
     simulate_twb_s_with_bisect,
+    simulate_twb_hats_with_bisect,
     simulate_fsb_with_bisect,
     simulate_fsb_s_with_bisect,
+    simulate_fsb_hats_with_bisect,
     simulate_rasb_with_bisect,
     simulate_rasb_s_with_bisect,
+    simulate_rasb_hats_with_bisect,
     simulate_rasb_la_with_bisect,
     simulate_rasb_la_s_with_bisect,
+    simulate_rasb_la_hats_with_bisect,
     simulate_rapb_with_bisect,
     simulate_rapb_s_with_bisect,
+    simulate_rapb_hats_with_bisect,
     simulate_rapb_la_with_bisect,
     simulate_rapb_la_s_with_bisect,
+    simulate_rapb_la_hats_with_bisect,
     simulate_ratb_with_bisect,
     simulate_ratb_s_with_bisect,
+    simulate_ratb_hats_with_bisect,
     simulate_hats_with_bisect,
     simulate_rahats_with_bisect,
     simulate_rahats_la_with_bisect,
@@ -51,10 +58,13 @@ from batch_strats import (
     simulate_arahats_la_with_bisect,
     simulate_lab_with_bisect,
     simulate_lab_s_with_bisect,
+    simulate_lab_hats_with_bisect,
     simulate_larab_with_bisect,
     simulate_larab_s_with_bisect,
+    simulate_larab_hats_with_bisect,
     simulate_larab_la_with_bisect,
     simulate_larab_la_s_with_bisect,
+    simulate_larab_la_hats_with_bisect,
     simulate_twsb_with_bisect,
 )
 
@@ -86,6 +96,7 @@ HATS_RISK_BUDGET = 1.0
 HATS_BASE_RISK_PER_COMMIT = 0.001
 HATS_REPEAT_RISK_SCALE = 0.02
 HATS_REPEAT_RISK_POWER = 1.0
+HATS_SIG_RISK_THRESHOLD = 1.0
 RAHATS_RISK_BUDGET = 1.0
 RAHATS_HIST_BASE_RISK_PER_COMMIT = 0.001
 RAHATS_HIST_REPEAT_RISK_SCALE = 0.02
@@ -166,21 +177,45 @@ def resolve_timeliness_metric_key(raw: str) -> str:
         f"(or a full result key: {keys})."
     )
 
+
+def parse_batching_variant_name(name: str):
+    """
+    Parse batching strategy variant suffixes.
+
+    Returns: (base_name, is_subset_suite, is_hats_subset)
+      - `-s`    => subset-suite via observed signature unions
+      - `-hats` => subset-suite via history-aware risk thresholding
+    """
+    raw = str(name).strip()
+    is_subset = raw.endswith("-s")
+    base = raw[:-2] if is_subset else raw
+    is_hats = base.endswith("-hats")
+    base = base[:-5] if is_hats else base
+    return base, is_subset, is_hats
+
+
 BATCHING_STRATEGIES = [
     ("TWB",  simulate_twb_with_bisect,      BATCH_HOURS),
     ("TWB-s",  simulate_twb_s_with_bisect,      BATCH_HOURS),
+    ("TWB-hats",  simulate_twb_hats_with_bisect,      (BATCH_HOURS, HATS_SIG_RISK_THRESHOLD)),
     ("FSB",  simulate_fsb_with_bisect,      FSB_SIZE),
     ("FSB-s",  simulate_fsb_s_with_bisect,      FSB_SIZE),
+    ("FSB-hats",  simulate_fsb_hats_with_bisect,      (FSB_SIZE, HATS_SIG_RISK_THRESHOLD)),
     ("RASB", simulate_rasb_with_bisect,   RASB_THRESHOLD),
     ("RASB-s", simulate_rasb_s_with_bisect,   RASB_THRESHOLD),
+    ("RASB-hats", simulate_rasb_hats_with_bisect,   (RASB_THRESHOLD, HATS_SIG_RISK_THRESHOLD)),
     ("RASB-la", simulate_rasb_la_with_bisect,   LINEAR_RISK_BUDGET),
     ("RASB-la-s", simulate_rasb_la_s_with_bisect,   LINEAR_RISK_BUDGET),
+    ("RASB-la-hats", simulate_rasb_la_hats_with_bisect,   (LINEAR_RISK_BUDGET, HATS_SIG_RISK_THRESHOLD)),
     ("RAPB", simulate_rapb_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
     ("RAPB-s", simulate_rapb_s_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR)),
+    ("RAPB-hats", simulate_rapb_hats_with_bisect, (RAPB_THRESHOLD, RAPB_AGING_PER_HOUR, HATS_SIG_RISK_THRESHOLD)),
     ("RAPB-la", simulate_rapb_la_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
     ("RAPB-la-s", simulate_rapb_la_s_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR)),
+    ("RAPB-la-hats", simulate_rapb_la_hats_with_bisect, (LINEAR_RISK_BUDGET, RAPB_AGING_PER_HOUR, HATS_SIG_RISK_THRESHOLD)),
     ("RATB", simulate_ratb_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
     ("RATB-s", simulate_ratb_s_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS)),
+    ("RATB-hats", simulate_ratb_hats_with_bisect,     (RATB_THRESHOLD, RATB_TIME_WINDOW_HOURS, HATS_SIG_RISK_THRESHOLD)),
     (
         "HATS",
         simulate_hats_with_bisect,
@@ -243,10 +278,13 @@ BATCHING_STRATEGIES = [
     ),
     ("LAB", simulate_lab_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
     ("LAB-s", simulate_lab_s_with_bisect, LAB_QUEUE_PRESSURE_THRESHOLD_MIN),
+    ("LAB-hats", simulate_lab_hats_with_bisect, (LAB_QUEUE_PRESSURE_THRESHOLD_MIN, HATS_SIG_RISK_THRESHOLD)),
     ("LARAB", simulate_larab_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
     ("LARAB-s", simulate_larab_s_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
+    ("LARAB-hats", simulate_larab_hats_with_bisect, (LARAB_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER, HATS_SIG_RISK_THRESHOLD)),
     ("LARAB-la", simulate_larab_la_with_bisect, (LARAB_LA_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
     ("LARAB-la-s", simulate_larab_la_s_with_bisect, (LARAB_LA_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER)),
+    ("LARAB-la-hats", simulate_larab_la_hats_with_bisect, (LARAB_LA_RISK_MULTIPLIER, LARAB_QUEUE_PRESSURE_MULTIPLIER, HATS_SIG_RISK_THRESHOLD)),
 ]
 
 BISECTION_STRATEGIES = [
@@ -1067,9 +1105,7 @@ def run_evaluation_mopt(
         This is used to scale `n_trials` so that higher-dimensional strategies
         receive more samples.
         """
-        normalized_batch_name = (
-            batch_name[:-2] if str(batch_name).endswith("-s") else str(batch_name)
-        )
+        normalized_batch_name, _is_subset, is_hats = parse_batching_variant_name(batch_name)
         batch_param_count_by_strategy = {
             # 1D
             "TWB": 1,
@@ -1091,6 +1127,8 @@ def run_evaluation_mopt(
             "ARAHATS-la": 6, # budget fixed; tune 6 params
         }
         count = int(batch_param_count_by_strategy.get(normalized_batch_name, 1))
+        if is_hats:
+            count += 1
         if str(bisect_name) == "TKRB":
             count += 1
         return max(1, count)
@@ -1277,15 +1315,15 @@ def run_evaluation_mopt(
                 if bis_name == "TKRB":
                     bisection_mod.TKRB_TOP_K = trial.suggest_int("TKRB_TOP_K", 1, 10)
 
-                def normalize_batch_name(name: str) -> str:
-                    return name[:-2] if name.endswith("-s") else name
-
                 # Strategy-specific continuous/int params.
                 #
-                # Note: "-s" batching variants share the same parameter space
-                # as their non-"-s" counterparts; they differ only in how the
-                # initial batch test suite is constructed.
-                normalized_batch_name = normalize_batch_name(b_name)
+                # Note:
+                #   - "-s" variants share the same parameter space as their base
+                #     strategy (they only change suite construction).
+                #   - "-hats" variants share the base strategy parameter space
+                #     and add `HATS_SIG_RISK_THRESHOLD`.
+                normalized_batch_name, _is_subset, is_hats = parse_batching_variant_name(b_name)
+
                 if normalized_batch_name == "TWB":
                     param = trial.suggest_float("BATCH_HOURS", 0.25, 24.0)
                 elif normalized_batch_name == "FSB":
@@ -1389,6 +1427,12 @@ def run_evaluation_mopt(
                     )
                     return (float("inf"), float("inf"))
 
+                if is_hats:
+                    hats_thr = trial.suggest_float("HATS_SIG_RISK_THRESHOLD", 0.25, 6.0)
+                    if isinstance(param, tuple):
+                        param = (*param, hats_thr)
+                    else:
+                        param = (param, hats_thr)
 
                 if not base_commits_for_context:
                     logger.warning(
@@ -1400,6 +1444,13 @@ def run_evaluation_mopt(
 
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
+                if not bool(res.get("found_all_regressors", False)):
+                    raise RuntimeError(
+                        "Trial did not find all regressors: "
+                        f"combo={combo_key}, trial={trial.number}, "
+                        f"found={res.get('num_regressors_found')}/{res.get('num_regressors_total')}, "
+                        f"param={param!r}"
+                    )
                 return (
                     _float_or_inf(res.get("total_tests_run")),
                     _float_or_inf(res.get(optimize_for_timeliness_metric)),
@@ -1426,41 +1477,39 @@ def run_evaluation_mopt(
 
                 # unpack for re-eval (same mapping as objective; "-s" variants use
                 # the same underlying parameter(s)).
-                normalized_batch_name = (
-                    b_name[:-2] if b_name.endswith("-s") else b_name
-                )
+                normalized_batch_name, _is_subset, is_hats = parse_batching_variant_name(b_name)
                 if normalized_batch_name == "TWB":
-                    param = params["BATCH_HOURS"]
+                    base_param = params["BATCH_HOURS"]
                 elif normalized_batch_name == "FSB":
-                    param = int(params["FSB_SIZE"])
+                    base_param = int(params["FSB_SIZE"])
                 elif normalized_batch_name == "RASB":
-                    param = params["RASB_THRESHOLD"]
+                    base_param = params["RASB_THRESHOLD"]
                 elif normalized_batch_name == "RASB-la":
-                    param = params["RASB_LA_BUDGET"]
+                    base_param = params["RASB_LA_BUDGET"]
                 elif normalized_batch_name == "RAPB":
-                    param = (
+                    base_param = (
                         params["RAPB_THRESHOLD"],
                         params["RAPB_AGING_PER_HOUR"],
                     )
                 elif normalized_batch_name == "RAPB-la":
-                    param = (
+                    base_param = (
                         params["RAPB_LA_BUDGET"],
                         params["RAPB_LA_AGING_PER_HOUR"],
                     )
                 elif normalized_batch_name == "RATB":
-                    param = (
+                    base_param = (
                         params["RATB_THRESHOLD"],
                         params["RATB_TIME_WINDOW_HOURS"],
                     )
                 elif normalized_batch_name == "HATS":
-                    param = (
+                    base_param = (
                         params["HATS_RISK_BUDGET"],
                         params["HATS_BASE_RISK_PER_COMMIT"],
                         params["HATS_REPEAT_RISK_SCALE"],
                         params["HATS_REPEAT_RISK_POWER"],
                     )
                 elif normalized_batch_name == "RAHATS":
-                    param = (
+                    base_param = (
                         float(RAHATS_RISK_BUDGET),
                         params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
                         params["RAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -1469,7 +1518,7 @@ def run_evaluation_mopt(
                         params["RAHATS_COMMIT_MULTIPLIER"],
                     )
                 elif normalized_batch_name == "RAHATS-la":
-                    param = (
+                    base_param = (
                         float(RAHATS_RISK_BUDGET),
                         params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
                         params["RAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -1478,7 +1527,7 @@ def run_evaluation_mopt(
                         params["RAHATS_COMMIT_MULTIPLIER"],
                     )
                 elif normalized_batch_name == "ARAHATS":
-                    param = (
+                    base_param = (
                         float(ARAHATS_RISK_BUDGET),
                         params["ARAHATS_HIST_BASE_RISK_PER_COMMIT"],
                         params["ARAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -1488,7 +1537,7 @@ def run_evaluation_mopt(
                         params["ARAHATS_AGING_PER_HOUR"],
                     )
                 elif normalized_batch_name == "ARAHATS-la":
-                    param = (
+                    base_param = (
                         float(ARAHATS_RISK_BUDGET),
                         params["ARAHATS_HIST_BASE_RISK_PER_COMMIT"],
                         params["ARAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -1498,14 +1547,14 @@ def run_evaluation_mopt(
                         params["ARAHATS_AGING_PER_HOUR"],
                     )
                 elif normalized_batch_name == "LAB":
-                    param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
+                    base_param = params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
                 elif normalized_batch_name == "LARAB":
-                    param = (
+                    base_param = (
                         params["LARAB_RISK_MULTIPLIER"],
                         params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
                     )
                 elif normalized_batch_name == "LARAB-la":
-                    param = (
+                    base_param = (
                         params["LARAB_RISK_MULTIPLIER"],
                         params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
                     )
@@ -1517,96 +1566,112 @@ def run_evaluation_mopt(
                     )
                     continue
 
+                hats_thr = None
+                param = base_param
+                if is_hats:
+                    hats_thr = params.get("HATS_SIG_RISK_THRESHOLD")
+                    if hats_thr is None:
+                        continue
+                    if isinstance(base_param, tuple):
+                        param = (*base_param, float(hats_thr))
+                    else:
+                        param = (base_param, float(hats_thr))
+
                 if not base_commits_for_context:
                     continue
 
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
+                if not bool(res.get("found_all_regressors", False)):
+                    continue
 
                 if normalized_batch_name == "TWB":
-                    best_param_dict = {"BATCH_HOURS": param}
+                    best_param_dict = {"BATCH_HOURS": base_param}
                 elif normalized_batch_name == "FSB":
-                    best_param_dict = {"FSB_SIZE": param}
+                    best_param_dict = {"FSB_SIZE": base_param}
                 elif normalized_batch_name == "RASB":
-                    best_param_dict = {"RASB_THRESHOLD": param}
+                    best_param_dict = {"RASB_THRESHOLD": base_param}
                 elif normalized_batch_name == "RASB-la":
-                    best_param_dict = {"RASB_LA_BUDGET": param}
+                    best_param_dict = {"RASB_LA_BUDGET": base_param}
                 elif normalized_batch_name == "RAPB":
                     best_param_dict = {
-                        "RAPB_THRESHOLD": param[0],
-                        "RAPB_AGING_PER_HOUR": param[1],
+                        "RAPB_THRESHOLD": base_param[0],
+                        "RAPB_AGING_PER_HOUR": base_param[1],
                     }
                 elif normalized_batch_name == "RAPB-la":
                     best_param_dict = {
-                        "RAPB_LA_BUDGET": param[0],
-                        "RAPB_LA_AGING_PER_HOUR": param[1],
+                        "RAPB_LA_BUDGET": base_param[0],
+                        "RAPB_LA_AGING_PER_HOUR": base_param[1],
                     }
                 elif normalized_batch_name == "RATB":
                     best_param_dict = {
-                        "RATB_THRESHOLD": param[0],
-                        "RATB_TIME_WINDOW_HOURS": param[1],
+                        "RATB_THRESHOLD": base_param[0],
+                        "RATB_TIME_WINDOW_HOURS": base_param[1],
                     }
                 elif normalized_batch_name == "HATS":
                     best_param_dict = {
-                        "HATS_RISK_BUDGET": param[0],
-                        "HATS_BASE_RISK_PER_COMMIT": param[1],
-                        "HATS_REPEAT_RISK_SCALE": param[2],
-                        "HATS_REPEAT_RISK_POWER": param[3],
+                        "HATS_RISK_BUDGET": base_param[0],
+                        "HATS_BASE_RISK_PER_COMMIT": base_param[1],
+                        "HATS_REPEAT_RISK_SCALE": base_param[2],
+                        "HATS_REPEAT_RISK_POWER": base_param[3],
                     }
                 elif normalized_batch_name == "RAHATS":
                     best_param_dict = {
                         "RAHATS_RISK_BUDGET": float(RAHATS_RISK_BUDGET),
-                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
-                        "RAHATS_HIST_REPEAT_RISK_SCALE": param[2],
-                        "RAHATS_HIST_REPEAT_RISK_POWER": param[3],
-                        "RAHATS_HIST_MULTIPLIER": param[4],
-                        "RAHATS_COMMIT_MULTIPLIER": param[5],
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": base_param[1],
+                        "RAHATS_HIST_REPEAT_RISK_SCALE": base_param[2],
+                        "RAHATS_HIST_REPEAT_RISK_POWER": base_param[3],
+                        "RAHATS_HIST_MULTIPLIER": base_param[4],
+                        "RAHATS_COMMIT_MULTIPLIER": base_param[5],
                     }
                 elif normalized_batch_name == "RAHATS-la":
                     best_param_dict = {
                         "RAHATS_RISK_BUDGET": float(RAHATS_RISK_BUDGET),
-                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
-                        "RAHATS_HIST_REPEAT_RISK_SCALE": param[2],
-                        "RAHATS_HIST_REPEAT_RISK_POWER": param[3],
-                        "RAHATS_HIST_MULTIPLIER": param[4],
-                        "RAHATS_COMMIT_MULTIPLIER": param[5],
+                        "RAHATS_HIST_BASE_RISK_PER_COMMIT": base_param[1],
+                        "RAHATS_HIST_REPEAT_RISK_SCALE": base_param[2],
+                        "RAHATS_HIST_REPEAT_RISK_POWER": base_param[3],
+                        "RAHATS_HIST_MULTIPLIER": base_param[4],
+                        "RAHATS_COMMIT_MULTIPLIER": base_param[5],
                     }
                 elif normalized_batch_name == "ARAHATS":
                     best_param_dict = {
                         "ARAHATS_RISK_BUDGET": float(ARAHATS_RISK_BUDGET),
-                        "ARAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
-                        "ARAHATS_HIST_REPEAT_RISK_SCALE": param[2],
-                        "ARAHATS_HIST_REPEAT_RISK_POWER": param[3],
-                        "ARAHATS_HIST_MULTIPLIER": param[4],
-                        "ARAHATS_COMMIT_MULTIPLIER": param[5],
-                        "ARAHATS_AGING_PER_HOUR": param[6],
+                        "ARAHATS_HIST_BASE_RISK_PER_COMMIT": base_param[1],
+                        "ARAHATS_HIST_REPEAT_RISK_SCALE": base_param[2],
+                        "ARAHATS_HIST_REPEAT_RISK_POWER": base_param[3],
+                        "ARAHATS_HIST_MULTIPLIER": base_param[4],
+                        "ARAHATS_COMMIT_MULTIPLIER": base_param[5],
+                        "ARAHATS_AGING_PER_HOUR": base_param[6],
                     }
                 elif normalized_batch_name == "ARAHATS-la":
                     best_param_dict = {
                         "ARAHATS_RISK_BUDGET": float(ARAHATS_RISK_BUDGET),
-                        "ARAHATS_HIST_BASE_RISK_PER_COMMIT": param[1],
-                        "ARAHATS_HIST_REPEAT_RISK_SCALE": param[2],
-                        "ARAHATS_HIST_REPEAT_RISK_POWER": param[3],
-                        "ARAHATS_HIST_MULTIPLIER": param[4],
-                        "ARAHATS_COMMIT_MULTIPLIER": param[5],
-                        "ARAHATS_AGING_PER_HOUR": param[6],
+                        "ARAHATS_HIST_BASE_RISK_PER_COMMIT": base_param[1],
+                        "ARAHATS_HIST_REPEAT_RISK_SCALE": base_param[2],
+                        "ARAHATS_HIST_REPEAT_RISK_POWER": base_param[3],
+                        "ARAHATS_HIST_MULTIPLIER": base_param[4],
+                        "ARAHATS_COMMIT_MULTIPLIER": base_param[5],
+                        "ARAHATS_AGING_PER_HOUR": base_param[6],
                     }
                 elif normalized_batch_name == "LAB":
                     best_param_dict = {
-                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN": param,
+                        "LAB_QUEUE_PRESSURE_THRESHOLD_MIN": base_param,
                     }
                 elif normalized_batch_name == "LARAB":
                     best_param_dict = {
-                        "LARAB_RISK_MULTIPLIER": param[0],
-                        "LARAB_QUEUE_PRESSURE_MULTIPLIER": param[1],
+                        "LARAB_RISK_MULTIPLIER": base_param[0],
+                        "LARAB_QUEUE_PRESSURE_MULTIPLIER": base_param[1],
                     }
                 elif normalized_batch_name == "LARAB-la":
                     best_param_dict = {
-                        "LARAB_RISK_MULTIPLIER": param[0],
-                        "LARAB_QUEUE_PRESSURE_MULTIPLIER": param[1],
+                        "LARAB_RISK_MULTIPLIER": base_param[0],
+                        "LARAB_QUEUE_PRESSURE_MULTIPLIER": base_param[1],
                     }
                 else:
                     continue
+
+                if hats_thr is not None:
+                    best_param_dict["HATS_SIG_RISK_THRESHOLD"] = float(hats_thr)
                 if bis_name == "TKRB":
                     best_param_dict["TKRB_TOP_K"] = int(bisection_mod.TKRB_TOP_K)
 
@@ -1973,46 +2038,74 @@ def run_final_test_unified(
 
         # Unpack params for this strategy
         best_params = val.get("best_params")
-        normalized_batch_name = b_name[:-2] if b_name.endswith("-s") else b_name
-        if normalized_batch_name == "RAPB":
+        normalized_batch_name, _is_subset, is_hats = parse_batching_variant_name(b_name)
+        hats_thr = None
+        if is_hats:
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            hats_thr = best_params.get("HATS_SIG_RISK_THRESHOLD")
+            if hats_thr is None:
+                continue
+
+        if normalized_batch_name == "TWB":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = best_params["BATCH_HOURS"]
+        elif normalized_batch_name == "FSB":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = int(best_params["FSB_SIZE"])
+        elif normalized_batch_name == "RASB":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = best_params["RASB_THRESHOLD"]
+        elif normalized_batch_name == "RASB-la":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = best_params["RASB_LA_BUDGET"]
+        elif normalized_batch_name == "RAPB":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = (
                 best_params["RAPB_THRESHOLD"],
                 best_params["RAPB_AGING_PER_HOUR"],
             )
         elif normalized_batch_name == "RAPB-la":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params["RAPB_LA_BUDGET"],
                 best_params["RAPB_LA_AGING_PER_HOUR"],
             )
         elif normalized_batch_name == "RATB":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params["RATB_THRESHOLD"],
                 best_params["RATB_TIME_WINDOW_HOURS"],
             )
+        elif normalized_batch_name == "LAB":
+            if not isinstance(best_params, dict):
+                continue
+            base_param = best_params["LAB_QUEUE_PRESSURE_THRESHOLD_MIN"]
         elif normalized_batch_name == "LARAB":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params["LARAB_RISK_MULTIPLIER"],
                 best_params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
             )
         elif normalized_batch_name == "LARAB-la":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params["LARAB_RISK_MULTIPLIER"],
                 best_params["LARAB_QUEUE_PRESSURE_MULTIPLIER"],
             )
         elif normalized_batch_name == "HATS":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params["HATS_RISK_BUDGET"],
                 best_params["HATS_BASE_RISK_PER_COMMIT"],
                 best_params["HATS_REPEAT_RISK_SCALE"],
@@ -2021,7 +2114,7 @@ def run_final_test_unified(
         elif normalized_batch_name == "RAHATS":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params.get("RAHATS_RISK_BUDGET", float(RAHATS_RISK_BUDGET)),
                 best_params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
                 best_params["RAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -2032,7 +2125,7 @@ def run_final_test_unified(
         elif normalized_batch_name == "RAHATS-la":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params.get("RAHATS_RISK_BUDGET", float(RAHATS_RISK_BUDGET)),
                 best_params["RAHATS_HIST_BASE_RISK_PER_COMMIT"],
                 best_params["RAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -2043,7 +2136,7 @@ def run_final_test_unified(
         elif normalized_batch_name == "ARAHATS":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params.get("ARAHATS_RISK_BUDGET", float(ARAHATS_RISK_BUDGET)),
                 best_params["ARAHATS_HIST_BASE_RISK_PER_COMMIT"],
                 best_params["ARAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -2055,7 +2148,7 @@ def run_final_test_unified(
         elif normalized_batch_name == "ARAHATS-la":
             if not isinstance(best_params, dict):
                 continue
-            param = (
+            base_param = (
                 best_params.get("ARAHATS_RISK_BUDGET", float(ARAHATS_RISK_BUDGET)),
                 best_params["ARAHATS_HIST_BASE_RISK_PER_COMMIT"],
                 best_params["ARAHATS_HIST_REPEAT_RISK_SCALE"],
@@ -2066,17 +2159,16 @@ def run_final_test_unified(
             )
         elif normalized_batch_name == "TWSB":
             # No tunable params for TWSB
-            param = None
+            base_param = None
         else:
-            # single-valued dict e.g., {"BATCH_HOURS": x} 
-            # or {"FSB_SIZE": n} or {"RASB_THRESHOLD": t} 
-            # or {"RASB_LA_BUDGET": b}
-            try:
-                if not isinstance(best_params, dict):
-                    continue
-                param = list(best_params.values())[0]
-            except Exception:
-                continue
+            continue
+
+        param = base_param
+        if hats_thr is not None:
+            if isinstance(base_param, tuple):
+                param = (*base_param, float(hats_thr))
+            else:
+                param = (base_param, float(hats_thr))
 
         res_final = b_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
         res_final = convert_result_minutes_to_hours(res_final)

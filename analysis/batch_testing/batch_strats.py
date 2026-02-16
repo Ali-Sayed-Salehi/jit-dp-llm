@@ -4904,3 +4904,1003 @@ def simulate_larab_la_s_with_bisect(commits, bisect_fn, params, num_workers):
         num_regressors_total=num_regressors_total,
         num_regressors_found=len(metrics.found_regressors),
     )
+
+
+# =============================================================================
+# History-aware subset suite ("-hats") variants
+# =============================================================================
+
+# Default historical-risk mapping used by the "-hats" variants for *full-suite*
+# batching strategies. These mirror the simulation.py defaults for HATS.
+_HATS_SUBSET_BASE_RISK_PER_COMMIT = 0.001
+_HATS_SUBSET_REPEAT_RISK_SCALE = 0.02
+_HATS_SUBSET_REPEAT_RISK_POWER = 1.0
+
+
+def _prepare_hats_subset_suite(
+    *,
+    hats_sig_risk_threshold: float,
+    hist_base_risk_per_commit: float = _HATS_SUBSET_BASE_RISK_PER_COMMIT,
+    hist_repeat_risk_scale: float = _HATS_SUBSET_REPEAT_RISK_SCALE,
+    hist_repeat_risk_power: float = _HATS_SUBSET_REPEAT_RISK_POWER,
+):
+    """
+    Prepare the data needed for "-hats" subset selection.
+
+    Returns:
+      (sig_group_ids, duration_by_gid, interval_by_gid)
+
+    Where:
+      - duration_by_gid: gid -> duration_minutes
+      - interval_by_gid: gid -> ceil(hats_threshold / hist_inc(gid)) in commit-count space
+
+    The "historical increment" uses `_hats_per_commit_risk()` and historical repeat counts.
+    """
+    hats_sig_risk_threshold = float(hats_sig_risk_threshold)
+    if hats_sig_risk_threshold <= 0.0:
+        raise ValueError(
+            "HATS subset signature risk threshold must be > 0; "
+            f"got {hats_sig_risk_threshold!r}"
+        )
+
+    full_suite = get_batch_signature_durations()
+    sig_group_ids = []
+    duration_by_gid = {}
+    for gid, dur in full_suite:
+        if gid is None:
+            continue
+        try:
+            gid_int = int(gid)
+        except (TypeError, ValueError):
+            continue
+        sig_group_ids.append(gid_int)
+        duration_by_gid[gid_int] = float(dur)
+
+    if not sig_group_ids:
+        raise RuntimeError("HATS subset selection: empty signature-group suite.")
+
+    repeat_counts = bisection_mod.get_historical_repeat_counts_by_sig_group()
+    interval_by_gid = {}
+    for gid in sig_group_ids:
+        r = int(repeat_counts.get(int(gid), 0) or 0)
+        inc = _hats_per_commit_risk(
+            r,
+            float(hist_base_risk_per_commit),
+            float(hist_repeat_risk_scale),
+            float(hist_repeat_risk_power),
+        )
+        # Ensure every group can eventually reach the threshold.
+        if inc <= 0.0:
+            inc = 1e-12
+
+        interval = int(math.ceil(float(hats_sig_risk_threshold) / float(inc)))
+        if interval < 1:
+            interval = 1
+        interval_by_gid[int(gid)] = int(interval)
+
+    return sig_group_ids, duration_by_gid, interval_by_gid
+
+
+def _simulate_hats_subset_over_batches(
+    commits,
+    bisect_fn,
+    batches,
+    num_workers,
+    hats_sig_risk_threshold: float,
+    *,
+    hist_base_risk_per_commit: float = _HATS_SUBSET_BASE_RISK_PER_COMMIT,
+    hist_repeat_risk_scale: float = _HATS_SUBSET_REPEAT_RISK_SCALE,
+    hist_repeat_risk_power: float = _HATS_SUBSET_REPEAT_RISK_POWER,
+):
+    """
+    Shared implementation for "-hats" variants of full-suite batching strategies.
+
+    The batch boundaries come from the underlying strategy, but each batch's
+    *initial suite* is a history-aware subset:
+      - Maintain a per-signature-group cumulative *historical* risk since its
+        last exercise.
+      - At each batch flush, run only signature-groups whose cumulative risk
+        has reached `hats_sig_risk_threshold`.
+
+    Detection/bisection behavior follows the same last-seen anchoring as HATS:
+      - A regressor is detectable only via signature-groups included in the
+        batch's suite.
+      - When a signature-group fails, bisection is restricted to commits since
+        that signature-group was last exercised.
+    """
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            0.0,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    _sig_ids, duration_by_gid, interval_by_gid = _prepare_hats_subset_suite(
+        hats_sig_risk_threshold=float(hats_sig_risk_threshold),
+        hist_base_risk_per_commit=float(hist_base_risk_per_commit),
+        hist_repeat_risk_scale=float(hist_repeat_risk_scale),
+        hist_repeat_risk_power=float(hist_repeat_risk_power),
+    )
+
+    # Track last batch-end index where each signature-group was exercised.
+    last_seen_batch_end_idx_by_sig = {}
+
+    # Heap of (next_due_idx, gid) in commit-index space, derived from fixed per-gid intervals.
+    heap = []
+    for gid, interval in interval_by_gid.items():
+        next_due_idx = int(interval) - 1  # last_test_idx=-1 => due at interval-1
+        heapq.heappush(heap, (int(next_due_idx), int(gid)))
+
+    executor = TestExecutor(num_workers)
+
+    for batch_start_idx, batch_end_idx, flush_time in batches:
+        if batch_end_idx < batch_start_idx:
+            continue
+
+        due_gids = []
+        while heap and int(heap[0][0]) <= int(batch_end_idx):
+            _due_idx, gid = heapq.heappop(heap)
+            due_gids.append(int(gid))
+
+        if due_gids:
+            suite_durations = [
+                (int(g), duration_by_gid.get(int(g)))
+                for g in due_gids
+                if int(g) in duration_by_gid
+            ]
+            if suite_durations:
+                _run_streaming_suite_and_bisect_per_sig_group(
+                    commits,
+                    suite_durations,
+                    int(batch_start_idx),
+                    int(batch_end_idx),
+                    flush_time,
+                    bisect_fn,
+                    executor,
+                    metrics,
+                    last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+                )
+
+                # Reschedule exercised signature-groups relative to this batch end.
+                for g in due_gids:
+                    interval = interval_by_gid.get(int(g))
+                    if interval is None:
+                        continue
+                    next_due = int(batch_end_idx) + int(interval)
+                    heapq.heappush(heap, (int(next_due), int(g)))
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_twb_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    TWB with history-aware subset suite selection (TWB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(batch_hours, hats_sig_risk_threshold)`.
+    """
+    try:
+        batch_hours, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "TWB-hats expects params=(batch_hours, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    batch_hours = float(batch_hours)
+    hats_thr = float(hats_thr)
+
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    batches = []
+    batch_start_idx = 0
+    batch_start_time = commits[0]["ts"]
+    batch_end_time = batch_start_time + timedelta(hours=batch_hours)
+
+    for idx, c in enumerate(commits):
+        if c["ts"] < batch_end_time:
+            continue
+        batch_end_idx = idx - 1
+        if batch_end_idx >= batch_start_idx:
+            batches.append((batch_start_idx, batch_end_idx, batch_end_time))
+        batch_start_idx = idx
+        batch_start_time = c["ts"]
+        batch_end_time = batch_start_time + timedelta(hours=batch_hours)
+
+    if batch_start_idx < len(commits):
+        batches.append((batch_start_idx, len(commits) - 1, batch_end_time))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_fsb_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    FSB with history-aware subset suite selection (FSB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(batch_size, hats_sig_risk_threshold)`.
+    """
+    try:
+        batch_size, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "FSB-hats expects params=(batch_size, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    batch_size = int(batch_size)
+    hats_thr = float(hats_thr)
+    if batch_size <= 0:
+        raise ValueError(f"FSB-hats batch_size must be > 0; got {batch_size!r}")
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    for end in range(len(commits)):
+        if (end - start + 1) >= batch_size:
+            batches.append((start, end, commits[end]["ts"]))
+            start = end + 1
+
+    if start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_rasb_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RASB with history-aware subset suite selection (RASB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(rasb_threshold, hats_sig_risk_threshold)`.
+    """
+    try:
+        threshold, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "RASB-hats expects params=(rasb_threshold, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    threshold = float(threshold)
+    hats_thr = float(hats_thr)
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    log_survival = 0.0
+
+    for idx, c in enumerate(commits):
+        p = c["risk"]
+        log_survival = _accumulate_log_survival(log_survival, p)
+        fail_prob = _combined_probability_from_log_survival(log_survival)
+        if fail_prob >= threshold:
+            batches.append((start, idx, c["ts"]))
+            start = idx + 1
+            log_survival = 0.0
+
+    if start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_rasb_la_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RASB-la with history-aware subset suite selection (RASB-la-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_budget, hats_sig_risk_threshold)`.
+    """
+    try:
+        risk_budget, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "RASB-la-hats expects params=(risk_budget, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_budget = float(risk_budget)
+    hats_thr = float(hats_thr)
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    risk_sum = 0.0
+    for idx, c in enumerate(commits):
+        risk_sum += float(c["risk"])
+        if risk_sum >= risk_budget:
+            batches.append((start, idx, c["ts"]))
+            start = idx + 1
+            risk_sum = 0.0
+
+    if start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_rapb_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RAPB with history-aware subset suite selection (RAPB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(threshold_T, aging_rate, hats_sig_risk_threshold)`.
+    """
+    try:
+        threshold_T, aging_rate, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "RAPB-hats expects params=(threshold_T, aging_rate, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    threshold_T = float(threshold_T)
+    aging_rate = float(aging_rate)
+    hats_thr = float(hats_thr)
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    log_survival = 0.0
+    batch_size = 0
+    last_ts = None
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        if batch_size == 0:
+            start = idx
+            log_survival = 0.0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            if not (math.isinf(log_survival) and float(log_survival) < 0.0):
+                log_survival = float(log_survival) - float(aging_rate) * float(batch_size) * float(delta_hours)
+            last_ts = now_ts
+
+        base_risk = float(c["risk"])
+        log_survival = _accumulate_log_survival(log_survival, base_risk)
+        batch_size += 1
+
+        fail_prob = _combined_probability_from_log_survival(log_survival)
+        if fail_prob >= threshold_T:
+            batches.append((start, idx, now_ts))
+            start = idx + 1
+            log_survival = 0.0
+            batch_size = 0
+            last_ts = None
+
+    if batch_size > 0 and start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_rapb_la_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RAPB-la with history-aware subset suite selection (RAPB-la-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_budget_T, aging_rate, hats_sig_risk_threshold)`.
+    """
+    try:
+        risk_budget_T, aging_rate, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "RAPB-la-hats expects params=(risk_budget_T, aging_rate, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_budget_T = float(risk_budget_T)
+    aging_rate = float(aging_rate)
+    hats_thr = float(hats_thr)
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    survival_sum = 0.0
+    batch_size = 0
+    last_ts = None
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        if batch_size == 0:
+            start = idx
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = now_ts
+        else:
+            delta_hours = max(0.0, (now_ts - last_ts).total_seconds() / 3600.0)
+            if float(aging_rate) != 0.0 and survival_sum != 0.0:
+                survival_sum = float(survival_sum) * float(math.exp(-float(aging_rate) * float(delta_hours)))
+            last_ts = now_ts
+
+        base_risk = float(c["risk"])
+        survival_sum = float(survival_sum) + float(1.0 - base_risk)
+        batch_size += 1
+        risk_sum = float(batch_size) - float(survival_sum)
+
+        if risk_sum >= risk_budget_T:
+            batches.append((start, idx, now_ts))
+            start = idx + 1
+            survival_sum = 0.0
+            batch_size = 0
+            last_ts = None
+
+    if batch_size > 0 and start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_ratb_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    RATB with history-aware subset suite selection (RATB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(threshold, time_window_hours, hats_sig_risk_threshold)`.
+
+        Backward-compat: also accepts `(threshold, hats_sig_risk_threshold)` and
+        defaults `time_window_hours=4.0`.
+    """
+    if not isinstance(params, tuple):
+        raise TypeError(
+            "RATB-hats expects params=(threshold, time_window_hours, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        )
+    if len(params) == 3:
+        threshold, time_window_hours, hats_thr = params
+    elif len(params) == 2:
+        threshold, hats_thr = params
+        time_window_hours = 4.0
+    else:
+        raise ValueError(
+            "RATB-hats expects params=(threshold, time_window_hours, hats_sig_risk_threshold) "
+            f"or (threshold, hats_sig_risk_threshold); got {params!r}"
+        )
+
+    threshold = float(threshold)
+    time_window_hours = float(time_window_hours)
+    hats_thr = float(hats_thr)
+
+    batches = []
+    if not commits:
+        return build_results(0, [], {}, 0.0, num_regressors_total=0, num_regressors_found=0)
+
+    start = 0
+    batch_start_time = commits[0]["ts"]
+    window_delta = timedelta(hours=time_window_hours)
+
+    for idx, c in enumerate(commits):
+        c_ts = c["ts"]
+        risk = float(c["risk"])
+
+        if idx == start:
+            batch_start_time = c_ts
+
+        if risk >= threshold:
+            batches.append((start, idx, c_ts))
+            start = idx + 1
+            if start < len(commits):
+                batch_start_time = commits[start]["ts"]
+            continue
+
+        batch_end_time = batch_start_time + window_delta
+        if c_ts >= batch_end_time and idx > int(start):
+            batches.append((start, idx - 1, batch_end_time))
+            start = idx
+            batch_start_time = c_ts
+
+    if start < len(commits):
+        batches.append((start, len(commits) - 1, commits[-1]["ts"]))
+
+    return _simulate_hats_subset_over_batches(commits, bisect_fn, batches, num_workers, hats_thr)
+
+
+def simulate_lab_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    LAB with history-aware subset suite selection (LAB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(queue_pressure_threshold_min, hats_sig_risk_threshold)`.
+    """
+    try:
+        queue_pressure_threshold_min, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "LAB-hats expects params=(queue_pressure_threshold_min, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    threshold_min = float(queue_pressure_threshold_min)
+    hats_thr = float(hats_thr)
+    if threshold_min < 0.0:
+        raise ValueError(
+            "LAB-hats queue_pressure_threshold_min must be non-negative; "
+            f"got {queue_pressure_threshold_min!r}"
+        )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    executor = TestExecutor(num_workers)
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    sig_group_ids, duration_by_gid, interval_by_gid = _prepare_hats_subset_suite(
+        hats_sig_risk_threshold=hats_thr
+    )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    heap_by_pool = {p: [] for p in pools}
+    for gid in sig_group_ids:
+        pool = executor.pool_for_signature_group(gid)
+        if pool not in heap_by_pool:
+            pool = executor.default_pool
+        interval = interval_by_gid.get(int(gid))
+        if interval is None:
+            continue
+        heapq.heappush(heap_by_pool[pool], (int(interval) - 1, int(gid)))
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            if pressure_min > threshold_min:
+                continue
+
+            due_gids = []
+            heap = heap_by_pool.get(pool) or []
+            while heap and int(heap[0][0]) <= int(idx):
+                _due_idx, gid = heapq.heappop(heap)
+                due_gids.append(int(gid))
+
+            suite_durations = [
+                (int(g), duration_by_gid.get(int(g)))
+                for g in due_gids
+                if int(g) in duration_by_gid
+            ]
+            if suite_durations:
+                _run_streaming_suite_and_bisect_per_sig_group(
+                    commits,
+                    suite_durations,
+                    start_idx,
+                    idx,
+                    now_ts,
+                    bisect_fn,
+                    executor,
+                    metrics,
+                    last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+                )
+
+                for g in due_gids:
+                    interval = interval_by_gid.get(int(g))
+                    if interval is None:
+                        continue
+                    next_due = int(idx) + int(interval)
+                    heapq.heappush(heap, (int(next_due), int(g)))
+
+            # Flush this pool's commit batch regardless of whether any signature-groups were due.
+            start_idx_by_pool[pool] = idx + 1
+
+    flush_time = commits[-1]["ts"]
+    last_idx = len(commits) - 1
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+
+        due_gids = []
+        heap = heap_by_pool.get(pool) or []
+        while heap and int(heap[0][0]) <= int(last_idx):
+            _due_idx, gid = heapq.heappop(heap)
+            due_gids.append(int(gid))
+
+        suite_durations = [
+            (int(g), duration_by_gid.get(int(g)))
+            for g in due_gids
+            if int(g) in duration_by_gid
+        ]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                start_idx,
+                last_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_larab_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    LARAB with history-aware subset suite selection (LARAB-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_multiplier, queue_pressure_multiplier, hats_sig_risk_threshold)`.
+    """
+    try:
+        risk_multiplier, queue_pressure_multiplier, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB-hats expects params=(risk_multiplier, queue_pressure_multiplier, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    hats_thr = float(hats_thr)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB-hats risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
+        raise ValueError(
+            "LARAB-hats queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
+        )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    executor = TestExecutor(num_workers)
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    sig_group_ids, duration_by_gid, interval_by_gid = _prepare_hats_subset_suite(
+        hats_sig_risk_threshold=hats_thr
+    )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    log_survival_by_pool = {p: 0.0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    heap_by_pool = {p: [] for p in pools}
+    for gid in sig_group_ids:
+        pool = executor.pool_for_signature_group(gid)
+        if pool not in heap_by_pool:
+            pool = executor.default_pool
+        interval = interval_by_gid.get(int(gid))
+        if interval is None:
+            continue
+        heapq.heappush(heap_by_pool[pool], (int(interval) - 1, int(gid)))
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            log_survival_by_pool[pool] = _accumulate_log_survival(
+                log_survival_by_pool[pool], p
+            )
+
+            log_survival = log_survival_by_pool[pool]
+            if math.isinf(log_survival) and float(log_survival) < 0.0:
+                base_score = float("inf")
+            else:
+                base_score = risk_multiplier * (-float(log_survival))
+            if base_score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            score = _larab_flush_score(
+                log_survival,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            due_gids = []
+            heap = heap_by_pool.get(pool) or []
+            while heap and int(heap[0][0]) <= int(idx):
+                _due_idx, gid = heapq.heappop(heap)
+                due_gids.append(int(gid))
+
+            suite_durations = [
+                (int(g), duration_by_gid.get(int(g)))
+                for g in due_gids
+                if int(g) in duration_by_gid
+            ]
+            if suite_durations:
+                _run_streaming_suite_and_bisect_per_sig_group(
+                    commits,
+                    suite_durations,
+                    start_idx,
+                    idx,
+                    now_ts,
+                    bisect_fn,
+                    executor,
+                    metrics,
+                    last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+                )
+
+                for g in due_gids:
+                    interval = interval_by_gid.get(int(g))
+                    if interval is None:
+                        continue
+                    next_due = int(idx) + int(interval)
+                    heapq.heappush(heap, (int(next_due), int(g)))
+
+            start_idx_by_pool[pool] = idx + 1
+            log_survival_by_pool[pool] = 0.0
+
+    flush_time = commits[-1]["ts"]
+    last_idx = len(commits) - 1
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+
+        due_gids = []
+        heap = heap_by_pool.get(pool) or []
+        while heap and int(heap[0][0]) <= int(last_idx):
+            _due_idx, gid = heapq.heappop(heap)
+            due_gids.append(int(gid))
+
+        suite_durations = [
+            (int(g), duration_by_gid.get(int(g)))
+            for g in due_gids
+            if int(g) in duration_by_gid
+        ]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                start_idx,
+                last_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
+
+
+def simulate_larab_la_hats_with_bisect(commits, bisect_fn, params, num_workers):
+    """
+    LARAB-la with history-aware subset suite selection (LARAB-la-hats).
+
+    Parameters
+    ----------
+    params:
+        Tuple `(risk_multiplier, queue_pressure_multiplier, hats_sig_risk_threshold)`.
+    """
+    try:
+        risk_multiplier, queue_pressure_multiplier, hats_thr = params
+    except Exception as exc:
+        raise TypeError(
+            "LARAB-la-hats expects params=(risk_multiplier, queue_pressure_multiplier, hats_sig_risk_threshold); "
+            f"got {params!r}"
+        ) from exc
+
+    risk_multiplier = float(risk_multiplier)
+    queue_pressure_multiplier = float(queue_pressure_multiplier)
+    hats_thr = float(hats_thr)
+    if risk_multiplier <= 0.0:
+        raise ValueError(f"LARAB-la-hats risk_multiplier must be > 0; got {risk_multiplier!r}")
+    if queue_pressure_multiplier < 0.0:
+        raise ValueError(
+            "LARAB-la-hats queue_pressure_multiplier must be non-negative; "
+            f"got {queue_pressure_multiplier!r}"
+        )
+
+    metrics = _StreamingMetrics(0, [], {}, set())
+    num_regressors_total = sum(1 for c in commits if c.get("true_label"))
+
+    executor = TestExecutor(num_workers)
+    if not commits:
+        return build_results(
+            metrics.total_tests_run,
+            metrics.culprit_times,
+            metrics.feedback_times,
+            executor.total_cpu_minutes,
+            num_regressors_total=num_regressors_total,
+            num_regressors_found=0,
+        )
+
+    sig_group_ids, duration_by_gid, interval_by_gid = _prepare_hats_subset_suite(
+        hats_sig_risk_threshold=hats_thr
+    )
+
+    pools = _stable_pool_iteration_order(executor.pool_sizes)
+    start_idx_by_pool = {p: 0 for p in pools}
+    risk_sum_by_pool = {p: 0.0 for p in pools}
+    last_seen_batch_end_idx_by_sig = {}
+
+    heap_by_pool = {p: [] for p in pools}
+    for gid in sig_group_ids:
+        pool = executor.pool_for_signature_group(gid)
+        if pool not in heap_by_pool:
+            pool = executor.default_pool
+        interval = interval_by_gid.get(int(gid))
+        if interval is None:
+            continue
+        heapq.heappush(heap_by_pool[pool], (int(interval) - 1, int(gid)))
+
+    for idx, c in enumerate(commits):
+        now_ts = c["ts"]
+        p = float(c["risk"])
+        if p < 0.0:
+            p = 0.0
+        for pool in pools:
+            start_idx = int(start_idx_by_pool[pool])
+            if start_idx > idx:
+                continue
+
+            risk_sum_by_pool[pool] = float(risk_sum_by_pool[pool]) + float(p)
+            risk_sum = float(risk_sum_by_pool[pool])
+            base_score = risk_multiplier * risk_sum
+            if base_score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            pressure_min = executor.predict_queue_pressure_minutes(now_ts, pool=pool)
+            score = _larab_flush_score_linear(
+                risk_sum,
+                pressure_min,
+                risk_multiplier,
+                queue_pressure_multiplier,
+            )
+            if score < _LARAB_SCORE_THRESHOLD:
+                continue
+
+            due_gids = []
+            heap = heap_by_pool.get(pool) or []
+            while heap and int(heap[0][0]) <= int(idx):
+                _due_idx, gid = heapq.heappop(heap)
+                due_gids.append(int(gid))
+
+            suite_durations = [
+                (int(g), duration_by_gid.get(int(g)))
+                for g in due_gids
+                if int(g) in duration_by_gid
+            ]
+            if suite_durations:
+                _run_streaming_suite_and_bisect_per_sig_group(
+                    commits,
+                    suite_durations,
+                    start_idx,
+                    idx,
+                    now_ts,
+                    bisect_fn,
+                    executor,
+                    metrics,
+                    last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+                )
+
+                for g in due_gids:
+                    interval = interval_by_gid.get(int(g))
+                    if interval is None:
+                        continue
+                    next_due = int(idx) + int(interval)
+                    heapq.heappush(heap, (int(next_due), int(g)))
+
+            start_idx_by_pool[pool] = idx + 1
+            risk_sum_by_pool[pool] = 0.0
+
+    flush_time = commits[-1]["ts"]
+    last_idx = len(commits) - 1
+    for pool in pools:
+        start_idx = int(start_idx_by_pool[pool])
+        if start_idx >= len(commits):
+            continue
+
+        due_gids = []
+        heap = heap_by_pool.get(pool) or []
+        while heap and int(heap[0][0]) <= int(last_idx):
+            _due_idx, gid = heapq.heappop(heap)
+            due_gids.append(int(gid))
+
+        suite_durations = [
+            (int(g), duration_by_gid.get(int(g)))
+            for g in due_gids
+            if int(g) in duration_by_gid
+        ]
+        if suite_durations:
+            _run_streaming_suite_and_bisect_per_sig_group(
+                commits,
+                suite_durations,
+                start_idx,
+                last_idx,
+                flush_time,
+                bisect_fn,
+                executor,
+                metrics,
+                last_seen_idx_by_sig=last_seen_batch_end_idx_by_sig,
+            )
+
+    return build_results(
+        metrics.total_tests_run,
+        metrics.culprit_times,
+        metrics.feedback_times,
+        executor.total_cpu_minutes,
+        num_regressors_total=num_regressors_total,
+        num_regressors_found=len(metrics.found_regressors),
+    )
