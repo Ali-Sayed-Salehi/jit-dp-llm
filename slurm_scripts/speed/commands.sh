@@ -70,6 +70,26 @@ echo "Running script ..."
 # --workers-mac 250
 
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/model_machine_count.py \
+# --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_eval.json \
+# --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
+# --out-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/plots/test/machine_count_sweep.json \
+# --plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/plots/test \
+# --build-time-minutes 98.7 \
+# --mopt-trials 50 \
+# --skip-exhaustive-testing \
+# --batching TWSB,RAPB,RASB,RATB,LARAB,ARAHATS \
+# --bisection PAR \
+# --optimize-for-timeliness-metric max_ttc \
+# --baseline-opt-metric-multplier 2 \
+# --base-workers-android 60 \
+# --base-workers-windows 120 \
+# --base-workers-linux 100 \
+# --base-workers-mac 250 \
+# --unknown-platform-pool mac \
+# --log-level INFO
+
+
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulate_predictor.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/plot.py \
