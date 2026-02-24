@@ -1445,12 +1445,15 @@ def run_evaluation_mopt(
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
                 if not bool(res.get("found_all_regressors", False)):
-                    raise RuntimeError(
-                        "Trial did not find all regressors: "
-                        f"combo={combo_key}, trial={trial.number}, "
-                        f"found={res.get('num_regressors_found')}/{res.get('num_regressors_total')}, "
-                        f"param={param!r}"
+                    logger.warning(
+                        "Trial did not find all regressors: combo=%s, trial=%d, found=%s/%s, param=%r; returning inf",
+                        combo_key,
+                        trial.number,
+                        res.get("num_regressors_found"),
+                        res.get("num_regressors_total"),
+                        param,
                     )
+                    return (float("inf"), float("inf"))
                 return (
                     _float_or_inf(res.get("total_tests_run")),
                     _float_or_inf(res.get(optimize_for_timeliness_metric)),
