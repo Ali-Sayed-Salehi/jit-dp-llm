@@ -178,6 +178,55 @@ def resolve_timeliness_metric_key(raw: str) -> str:
     )
 
 
+def _hats_sig_risk_threshold_suggest_range(commits) -> tuple[float, float]:
+    """
+    Compute the Optuna search range for `HATS_SIG_RISK_THRESHOLD` used by "*-hats"
+    batching variants.
+
+    Goal
+    ----
+    Ensure that even the lowest-risk signature-groups (historical_repeat_count=0)
+    can be exercised *after* the last regressor in the stream, instead of having
+    their next due index fall beyond the end of the window.
+
+    In "-hats", a sig-group's per-commit increment for repeat_count=0 is the
+    base risk per commit (log1p(0)=0). With base=0.001, an interval of N commits
+    corresponds to a threshold of N * 0.001.
+
+    We cap the upper bound so that the repeat_count=0 interval is <= the number
+    of commits after the last regressor.
+    """
+    # Allow extremely small thresholds (interval=1) for feasibility.
+    low = 1e-4
+
+    # Keep the old upper bound as a fallback when we cannot derive the window tail.
+    high = 6.0
+
+    if not commits:
+        return low, high
+
+    last_reg_idx = None
+    for i, c in enumerate(commits):
+        if c.get("true_label"):
+            last_reg_idx = int(i)
+    if last_reg_idx is None:
+        return low, high
+
+    last_idx = len(commits) - 1
+    tail = int(last_idx) - int(last_reg_idx)
+    tail = max(1, tail)
+
+    # For repeat_count=0 in "-hats": inc = base_risk_per_commit.
+    base_inc = float(HATS_BASE_RISK_PER_COMMIT)
+    high = min(float(high), base_inc * float(tail))
+
+    if not (high > low):
+        # Should not happen with base_inc>0 and tail>=1, but keep Optuna happy.
+        high = low * 10.0
+
+    return float(low), float(high)
+
+
 def parse_batching_variant_name(name: str):
     """
     Parse batching strategy variant suffixes.
@@ -1250,6 +1299,15 @@ def run_evaluation_mopt(
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
 
+    hats_thr_low, hats_thr_high = _hats_sig_risk_threshold_suggest_range(
+        base_commits_for_context
+    )
+    logger.info(
+        "Optuna range for HATS_SIG_RISK_THRESHOLD (for *-hats variants): [%.6f, %.6f]",
+        float(hats_thr_low),
+        float(hats_thr_high),
+    )
+
     # Per combo study with continuous/int ranges
     logger.info(
         "Beginning Optuna studies over %d batching strategies x %d bisection strategies",
@@ -1428,7 +1486,9 @@ def run_evaluation_mopt(
                     return (float("inf"), float("inf"))
 
                 if is_hats:
-                    hats_thr = trial.suggest_float("HATS_SIG_RISK_THRESHOLD", 0.25, 6.0)
+                    hats_thr = trial.suggest_float(
+                        "HATS_SIG_RISK_THRESHOLD", float(hats_thr_low), float(hats_thr_high)
+                    )
                     if isinstance(param, tuple):
                         param = (*param, hats_thr)
                     else:
