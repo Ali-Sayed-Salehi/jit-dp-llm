@@ -11,6 +11,7 @@ It then writes one plot per (batching × bisection) combo showing:
   - mean_feedback_time_hr
   - mean_time_to_culprit_hr
   - max_time_to_culprit_hr
+  - total_tests_run
 vs worker-pool multiplier.
 """
 
@@ -515,7 +516,7 @@ def main() -> None:
                         "mean_feedback_time_hr": mft,
                         "mean_time_to_culprit_hr": mean_ttc,
                         "max_time_to_culprit_hr": max_ttc,
-                        "total_tests_run": float(entry.get("total_tests_run", 0.0)),
+                        "total_tests_run": int(entry.get("total_tests_run", 0)),
                         "total_cpu_time_hr": float(entry.get("total_cpu_time_hr", 0.0)),
                         "found_all_regressors": bool(entry.get("found_all_regressors", False)),
                     }
@@ -565,24 +566,33 @@ def main() -> None:
         mft = [r["mean_feedback_time_hr"] for r in rows]
         mean_ttc = [r["mean_time_to_culprit_hr"] for r in rows]
         max_ttc = [r["max_time_to_culprit_hr"] for r in rows]
+        tests = [r.get("total_tests_run", 0) for r in rows]
 
-        plt.figure(figsize=(11, 6.5))
-        plt.plot(xs, mft, label="mean_feedback_time_hr", linewidth=2)
-        plt.plot(xs, mean_ttc, label="mean_time_to_culprit_hr", linewidth=2)
-        plt.plot(xs, max_ttc, label="max_time_to_culprit_hr", linewidth=2)
-        plt.axvline(1.0, color="black", linestyle="--", linewidth=1, alpha=0.6)
+        fig, ax1 = plt.subplots(figsize=(11, 6.5))
+        ax1.plot(xs, mft, label="mean_feedback_time_hr", linewidth=2)
+        ax1.plot(xs, mean_ttc, label="mean_time_to_culprit_hr", linewidth=2)
+        ax1.plot(xs, max_ttc, label="max_time_to_culprit_hr", linewidth=2)
+        ax1.axvline(1.0, color="black", linestyle="--", linewidth=1, alpha=0.6)
 
-        plt.xlabel("Worker pool multiplier (x)")
-        plt.ylabel("Hours (lower is better)")
-        plt.title(f"{combo_key}: FINAL latency vs worker capacity")
-        plt.grid(True, linestyle=":", linewidth=0.6)
-        plt.legend()
-        plt.tight_layout()
+        ax1.set_xlabel("Worker pool multiplier (x)")
+        ax1.set_ylabel("Hours (lower is better)")
+        ax1.set_title(f"{combo_key}: FINAL latency vs worker capacity")
+        ax1.grid(True, linestyle=":", linewidth=0.6)
+
+        ax2 = ax1.twinx()
+        ax2.plot(xs, tests, label="total_tests_run", linewidth=2, linestyle="--", color="tab:gray")
+        ax2.set_ylabel("Total tests run")
+
+        handles1, labels1 = ax1.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(handles1 + handles2, labels1 + labels2)
+
+        fig.tight_layout()
 
         out_name = f"{sanitize_filename(combo_key)}__machine_count_sweep.png"
         out_path = os.path.join(str(args.plots_dir), out_name)
-        plt.savefig(out_path, dpi=200)
-        plt.close()
+        fig.savefig(out_path, dpi=200)
+        plt.close(fig)
         logger.info("Wrote plot to %s", out_path)
 
 
