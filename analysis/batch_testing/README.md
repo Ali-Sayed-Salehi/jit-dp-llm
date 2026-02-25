@@ -142,6 +142,7 @@ Outputs:
   - latency: `mean_feedback_time_hr`, `mean_time_to_culprit_hr`, `max_time_to_culprit_hr`
   - cost: `total_tests_run`, `total_cpu_time_hr`
   - correctness: `found_all_regressors`
+- When `--skip-exhaustive-testing` is **not** set, the sweep also includes an additional results key and plot for `"Exhaustive Testing (ET)"`, allowing direct capacity-scaling comparison against the ET baseline.
 - Plots (`--plots-dir`): one plot per combo vs multiplier, with latency curves (left y-axis) and `total_tests_run` (right y-axis).
 
 Important interpretation detail:

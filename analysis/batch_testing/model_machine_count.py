@@ -7,7 +7,7 @@ For each worker-pool multiplier, this script:
   2) replays the chosen configuration(s) on the FINAL set, and
   3) records FINAL latency metrics for plotting.
 
-It then writes one plot per (batching × bisection) combo showing:
+It then writes one plot per combo (batching × bisection, plus Exhaustive Testing (ET) when enabled) showing:
   - mean_feedback_time_hr
   - mean_time_to_culprit_hr
   - max_time_to_culprit_hr
@@ -433,12 +433,14 @@ def main() -> None:
     if out_json_dir:
         os.makedirs(out_json_dir, exist_ok=True)
 
+    run_et = not bool(getattr(args, "skip_exhaustive_testing", False))
+
     batching_list = sorted(selected_batching_set)
     bisection_list = sorted(selected_bisection_set)
     combo_keys = [f"{b} + {bis}" for b in batching_list for bis in bisection_list]
+    if run_et:
+        combo_keys.append("Exhaustive Testing (ET)")
     sweep_results: dict[str, list[dict]] = {k: [] for k in combo_keys}
-
-    run_et = not bool(getattr(args, "skip_exhaustive_testing", False))
 
     with tempfile.TemporaryDirectory(prefix="batch_testing_machine_count_sweep_") as tmp_dir:
         tmp_final_path = os.path.join(tmp_dir, "final_replay.json")
