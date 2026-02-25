@@ -11,7 +11,7 @@ It then writes one plot per combo (batching × bisection, plus Exhaustive Testin
   - mean_feedback_time_hr
   - mean_time_to_culprit_hr
   - max_time_to_culprit_hr
-  - total_tests_run
+  - total_tests_run (when --show-total-tests-run is set)
 vs worker-pool multiplier.
 """
 
@@ -300,6 +300,11 @@ def get_args(*, sim, bisection_mod) -> argparse.Namespace:
         help="If set, skip generating plots (still writes --out-json).",
     )
     ap.add_argument(
+        "--show-total-tests-run",
+        action="store_true",
+        help="If set, add total_tests_run on a secondary axis in the plots.",
+    )
+    ap.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -574,20 +579,30 @@ def main() -> None:
         ax1.plot(xs, mft, label="mean_feedback_time_hr", linewidth=2)
         ax1.plot(xs, mean_ttc, label="mean_time_to_culprit_hr", linewidth=2)
         ax1.plot(xs, max_ttc, label="max_time_to_culprit_hr", linewidth=2)
-        ax1.axvline(1.0, color="black", linestyle="--", linewidth=1, alpha=0.6)
 
         ax1.set_xlabel("Worker pool multiplier (x)")
         ax1.set_ylabel("Hours (lower is better)")
         ax1.set_title(f"{combo_key}: FINAL latency vs worker capacity")
         ax1.grid(True, linestyle=":", linewidth=0.6)
 
-        ax2 = ax1.twinx()
-        ax2.plot(xs, tests, label="total_tests_run", linewidth=2, linestyle="--", color="tab:gray")
-        ax2.set_ylabel("Total tests run")
+        if args.show_total_tests_run:
+            ax2 = ax1.twinx()
+            ax2.plot(
+                xs,
+                tests,
+                label="total_tests_run",
+                linewidth=2,
+                linestyle="--",
+                color="tab:gray",
+            )
+            ax2.set_ylabel("Total tests run")
 
         handles1, labels1 = ax1.get_legend_handles_labels()
-        handles2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(handles1 + handles2, labels1 + labels2)
+        if args.show_total_tests_run:
+            handles2, labels2 = ax2.get_legend_handles_labels()
+            ax1.legend(handles1 + handles2, labels1 + labels2)
+        else:
+            ax1.legend(handles1, labels1)
 
         fig.tight_layout()
 
