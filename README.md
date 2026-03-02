@@ -51,7 +51,9 @@ This repo is designed to run offline once you have:
 ### Getting datasets
 
 - Download a prepared snapshot:
-  - https://drive.google.com/drive/folders/1QsMAn7yboltMN7gJmXDu-qKIplsjJyKq?usp=sharing
+  - DRS-OSS: [https://doi.org/10.5281/zenodo.18829383](https://doi.org/10.5281/zenodo.18829383)
+  - Mozilla-Perf: [https://doi.org/10.5281/zenodo.18829344](https://doi.org/10.5281/zenodo.18829344)
+  - Mozilla-JIT: [https://doi.org/10.5281/zenodo.18829451](https://doi.org/10.5281/zenodo.18829451)
 - Or pull via DVC (tracks `datasets/` as `datasets.dvc`):
   - `pip install "dvc[gdrive]"`
   - `dvc pull datasets.dvc`
