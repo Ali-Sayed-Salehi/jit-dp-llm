@@ -400,11 +400,27 @@ class NightlyBuildLookback:
         self.sorted_time_indices = list(sorted_time_indices)
         self.window_start = int(window_start)
 
-    def _last_commit_strictly_before(self, t: datetime) -> Optional[int]:
-        import bisect
+    def _last_commit_strictly_before(self, t: datetime, *, upper_bound_inclusive: int) -> Optional[int]:
+        """
+        Return the most recent commit (by timestamp order) strictly before `t`,
+        restricted to indices < `upper_bound_exclusive`.
+
+        Commit timestamps in the dataset are not guaranteed to be monotone by
+        commit index (e.g., author dates can be older than surrounding landed
+        commits). Without the index bound, a "go back one day" cutoff can map to
+        a commit index that is *later* than a previously tested nightly build.
+        """
+        upper = int(upper_bound_inclusive)
+        if upper < 0:
+            return None
 
         pos = bisect.bisect_left(self.sorted_times_utc, t) - 1
-        return self.sorted_time_indices[pos] if pos >= 0 else None
+        while pos >= 0:
+            idx = int(self.sorted_time_indices[pos])
+            if idx <= upper:
+                return idx
+            pos -= 1
+        return None
 
     def find_good_index(
         self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
@@ -429,16 +445,16 @@ class NightlyBuildLookback:
             tzinfo=timezone.utc,
         )
 
+        cur_idx = int(start_index)
+        last_tested: Optional[int] = None
+
         steps = 0
         known_results: dict[int, bool] = {}
         cutoff = midnight_today
         while True:
-            nightly_idx = self._last_commit_strictly_before(cutoff)
+            nightly_idx = self._last_commit_strictly_before(cutoff, upper_bound_inclusive=cur_idx)
             if nightly_idx is None:
-                raise RuntimeError(
-                    "Nightly lookback failed: no commits before "
-                    f"cutoff={cutoff.isoformat()} (start_index={start_index}, culprit_index={culprit_index}, steps={steps})"
-                )
+                nightly_idx = self.window_start
 
             if nightly_idx < self.window_start:
                 nightly_idx = self.window_start
@@ -446,7 +462,12 @@ class NightlyBuildLookback:
             # If the nightly build resolves to the already-known "bad" observation commit
             # (possible when the bug is observed soon after midnight with no intervening commits),
             # skip it without counting a new test.
-            if nightly_idx >= start_index:
+            if int(nightly_idx) == int(start_index):
+                cutoff = cutoff - timedelta(days=1)
+                continue
+
+            # If the nightly build didn't move, don't re-test the same revision.
+            if last_tested is not None and int(nightly_idx) == int(last_tested):
                 cutoff = cutoff - timedelta(days=1)
                 continue
 
@@ -466,6 +487,10 @@ class NightlyBuildLookback:
                 # No earlier in-window commit can be tested.
                 return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
 
+            # Treat the failing nightly build as the new known-bad boundary so we never
+            # "go back in time" to a later commit index.
+            last_tested = int(nightly_idx)
+            cur_idx = int(nightly_idx)
             cutoff = cutoff - timedelta(days=1)
 
 
