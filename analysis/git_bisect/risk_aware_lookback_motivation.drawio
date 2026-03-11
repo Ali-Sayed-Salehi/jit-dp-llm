@@ -1,0 +1,352 @@
+<mxfile host="app.diagrams.net" agent="Codex" version="26.0.11">
+  <diagram id="risk-aware-lookback-motivation" name="Page-1">
+    <mxGraphModel dx="1680" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1660" pageHeight="1320" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="Risk-Aware Lookback: Step-By-Step Panels" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="Synthetic scenario: true culprit = C17, observed bad = C23, and tests fail iff the tested commit index is &gt;= 17." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="20" y="52" width="1100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="&lt;b&gt;Context&lt;/b&gt;&lt;br&gt;Only local windows are drawn inside each panel. Commits outside the panel still exist but are omitted for space.&lt;br&gt;Omitted early false positives: C6 = 0.89, C9 = 0.94, C12 = 0.91. Most other omitted commits have risk 0.02." style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#d9d9d9;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="20" y="84" width="1010" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;S = current bad boundary&lt;br&gt;P = tested commit passed&lt;br&gt;F = tested commit failed&lt;br&gt;T = trigger commit (RATLB)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="84" width="280" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="&lt;b&gt;FixedStrideLookback&lt;/b&gt; (FSLB, stride = 4)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="170" width="420" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="7" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="20" y="200" width="500" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="&lt;b&gt;Step 1&lt;/b&gt;&lt;br&gt;Current bad boundary is C23.&lt;br&gt;FSLB ignores risk scores and applies the fixed stride directly:&lt;br&gt;C23 - 4 = C19, so test C19." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="34" y="214" width="472" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="C19" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="C20" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="140" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="C21" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="210" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="C22" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="280" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="C23" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#1f4e79;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="350" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="87" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="S" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#1f4e79;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="367" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="-4" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="296" width="44" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="17" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1" source="15" target="14">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="Observed bad commit" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="320" y="398" width="120" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="Tested and failed" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="50" y="398" width="100" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="20" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="560" y="200" width="500" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="&lt;b&gt;Step 2&lt;/b&gt;&lt;br&gt;C19 failed, so FSLB keeps using the same rule from the new bad boundary:&lt;br&gt;C19 - 4 = C15, so test C15." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="574" y="214" width="472" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="C15" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="610" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="23" value="C16" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="680" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="24" value="C17" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="750" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="25" value="C18" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="820" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="26" value="C19" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="890" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="27" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="627" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="28" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="907" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="29" value="-4" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="296" width="44" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="30" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1" source="28" target="27">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="Now FSLB has one pass and one fail." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="690" y="398" width="180" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="32" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="200" width="500" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="33" value="&lt;b&gt;Step 3&lt;/b&gt;&lt;br&gt;Lookback stops with C15(P) and C19(F).&lt;br&gt;Bisection searches (C15,C19]. Realized bisect path: C17(F) -&gt; C16(P).&lt;br&gt;&lt;b&gt;Total: 2 lookback + 2 bisect = 4&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1114" y="214" width="472" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="34" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#dae8fc;strokeColor=#6c8ebf;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="334" width="280" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="35" value="C15" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#82b366;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="36" value="C16" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="37" value="C17" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="38" value="C18" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="39" value="C19" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1430" y="340" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="40" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1167" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1447" y="304" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="Interval handed to bisection: (C15,C19]" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#1f4e79;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="398" width="260" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="&lt;b&gt;RiskWeightedLookbackSum&lt;/b&gt; (RWLB-S, threshold T = 1.80)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="480" width="560" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="44" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="20" y="510" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="45" value="&lt;b&gt;Step 1&lt;/b&gt;&lt;br&gt;Need the first candidate i whose cumulative risk up to the current bad boundary reaches T = 1.80.&lt;br&gt;C22: 0.02&lt;br&gt;C21..22: 0.52&lt;br&gt;C20..22: 1.45&lt;br&gt;C19..22: 2.27 &gt;= T, so test C19." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="34" y="524" width="472" height="108" as="geometry" />
+        </mxCell>
+        <mxCell id="46" value="T = 1.80" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="410" y="640" width="82" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="47" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="70" y="724" width="270" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="48" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="49" value="C20&lt;br&gt;0.93" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="140" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="C21&lt;br&gt;0.50" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="210" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="C22&lt;br&gt;0.02" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="C23&lt;br&gt;0.02" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#1f4e79;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="87" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="54" value="S" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#1f4e79;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="367" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="55" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="54" target="53">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="56" value="Chosen cumulative-risk window = 2.27" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="95" y="788" width="220" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="57" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="560" y="510" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="58" value="&lt;b&gt;Step 2&lt;/b&gt;&lt;br&gt;The failed boundary is now C19, so recompute cumulative risk toward C18.&lt;br&gt;C18: 0.84&lt;br&gt;C17..18: 1.79&lt;br&gt;C16..18: 2.65 &gt;= T, so test C16." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="574" y="524" width="472" height="108" as="geometry" />
+        </mxCell>
+        <mxCell id="59" value="T = 1.80" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="640" width="82" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="60" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="610" y="724" width="200" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="61" value="C16&lt;br&gt;0.86" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="610" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="62" value="C17&lt;br&gt;0.95" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="680" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="63" value="C18&lt;br&gt;0.84" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="750" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="64" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="65" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="627" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="66" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="837" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="67" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="66" target="65">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="68" value="Chosen cumulative-risk window = 2.65" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="630" y="788" width="170" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="69" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="510" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="70" value="&lt;b&gt;Step 3&lt;/b&gt;&lt;br&gt;RWLB-S stops with C16(P) and C19(F).&lt;br&gt;Interval handed to bisection: (C16,C19]. The midpoint C17 is the culprit here, so bisection finishes in 1 realized step.&lt;br&gt;&lt;b&gt;Total: 2 lookback + 1 realized bisect = 3&lt;/b&gt;&lt;br&gt;Worst-case bisection for this 3-commit interval would still be 2." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1114" y="524" width="472" height="122" as="geometry" />
+        </mxCell>
+        <mxCell id="71" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="724" width="200" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="72" value="C16&lt;br&gt;0.86" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#82b366;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="73" value="C17&lt;br&gt;0.95" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="74" value="C18&lt;br&gt;0.84" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="75" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="730" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="76" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1167" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="77" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1377" y="694" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="78" value="(C16,C19]" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1235" y="788" width="100" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="79" value="&lt;b&gt;RiskAwareTriggerLookback&lt;/b&gt; (RATLB, trigger threshold T = 0.90)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="840" width="620" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="80" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="20" y="870" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="81" value="&lt;b&gt;Step 1&lt;/b&gt;&lt;br&gt;Scan left from C23 until risk exceeds T = 0.90.&lt;br&gt;C22 = 0.02 &lt; T&lt;br&gt;C21 = 0.50 &lt; T&lt;br&gt;C20 = 0.93 &gt; T, so C20 is the trigger and the tested commit is the one just before it: C19." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="34" y="884" width="472" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="82" value="T = 0.90" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="410" y="1008" width="82" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="83" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="84" value="C20&lt;br&gt;0.93" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="85" value="C21&lt;br&gt;0.50" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="210" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="86" value="C22&lt;br&gt;0.02" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#b3b3b3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="87" value="C23&lt;br&gt;0.02" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f5f5f5;strokeColor=#1f4e79;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="88" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="87" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="89" value="S" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#1f4e79;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="367" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="90" value="T" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="1052" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="91" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#b85450;" edge="1" parent="1" source="90" target="88">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="92" value="Trigger: 0.93 &gt; 0.90" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="118" y="1148" width="110" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="93" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="560" y="870" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="94" value="&lt;b&gt;Step 2&lt;/b&gt;&lt;br&gt;Continue scanning earlier from the failed boundary C19.&lt;br&gt;C18 = 0.84 &lt; T&lt;br&gt;C17 = 0.95 &gt; T, so C17 is the next trigger and the tested commit is C16." style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="574" y="884" width="472" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="95" value="T = 0.90" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fff2cc;strokeColor=#d6b656;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="1008" width="82" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="96" value="C16&lt;br&gt;0.86" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#82b366;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="610" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="97" value="C17&lt;br&gt;0.95" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="680" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="98" value="C18&lt;br&gt;0.84" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="750" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="99" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="100" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="627" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="101" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="837" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="102" value="T" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1052" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="103" style="rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#b85450;" edge="1" parent="1" source="102" target="100">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="104" value="Trigger: 0.95 &gt; 0.90" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="658" y="1148" width="110" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="105" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fafafa;strokeColor=#d9d9d9;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="870" width="500" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="106" value="&lt;b&gt;Step 3&lt;/b&gt;&lt;br&gt;RATLB also stops with C16(P) and C19(F).&lt;br&gt;That gives the same bisection interval (C16,C19] as RWLB-S, but it got there through two trigger decisions rather than cumulative sums.&lt;br&gt;&lt;b&gt;Total: 2 lookback + 1 realized bisect = 3&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffffff;strokeColor=#d9d9d9;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1114" y="884" width="472" height="108" as="geometry" />
+        </mxCell>
+        <mxCell id="107" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="1084" width="200" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="108" value="C16&lt;br&gt;0.86" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#82b366;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="109" value="C17&lt;br&gt;0.95" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="110" value="C18&lt;br&gt;0.84" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="111" value="C19&lt;br&gt;0.82" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;fillColor=#ffe6cc;strokeColor=#b85450;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="1090" width="60" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="112" value="P" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1167" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="113" value="F" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1377" y="1054" width="26" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="114" value="(C16,C19]" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1235" y="1148" width="100" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="115" value="&lt;b&gt;Takeaway&lt;/b&gt;&lt;br&gt;Each panel now shows its own local commit sequence instead of borrowing a single shared history line. FSLB shows pure arithmetic on commit indices. RWLB-S explicitly shows cumulative-risk sums and where they cross T = 1.80. RATLB explicitly shows trigger checks against T = 0.90 and the test on the commit immediately before each trigger. RWLB-S and RATLB still tie here with the same final bracket, but the panelized sequences make it clear that they reach that bracket by different reasoning." style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#d9d9d9;align=left;verticalAlign=middle;spacingLeft=12;spacingRight=12;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="20" y="1190" width="1580" height="88" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
