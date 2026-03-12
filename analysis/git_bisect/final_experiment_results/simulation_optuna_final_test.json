@@ -1,0 +1,2106 @@
+{
+  "best_combo_by_max_tests_per_search": "NLB+GB",
+  "best_combo_by_mean_tests_per_search": "RWLBS-AI+RWBS",
+  "best_combo_by_total_tests": "RWLBS-AI+RWBS",
+  "bugs": {
+    "loaded": 78338,
+    "simulated": 78338
+  },
+  "commit_window": {
+    "end_index": 822585,
+    "end_node": "b8e959d3f3c8ab6d8c9ef4baafee4e887ac879ea",
+    "num_commits": 49162,
+    "start_index": 773424,
+    "start_node": "2e37252d504a65c0de412ffaac1e9d7f4fe94aeb"
+  },
+  "dataset": "final_test",
+  "dry_run": false,
+  "results": [
+    {
+      "combo": "NBLB+GB",
+      "max_tests_per_search": 261,
+      "max_tests_per_search_saved_vs_baseline_pct": -1205.0,
+      "mean_tests_per_search": 25.17027027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": -39.53627748436152,
+      "params": {},
+      "total_bisection_tests": 11478,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 25774,
+      "total_tests": 37252,
+      "total_tests_saved_vs_baseline_pct": -39.53627748436154
+    },
+    {
+      "combo": "NBLB+TKRB",
+      "max_tests_per_search": 262,
+      "max_tests_per_search_saved_vs_baseline_pct": -1210.0,
+      "mean_tests_per_search": 25.960135135135136,
+      "mean_tests_per_search_saved_vs_baseline_pct": -43.91504663445331,
+      "params": {
+        "Bisection_k": 1
+      },
+      "total_bisection_tests": 12647,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 25774,
+      "total_tests": 38421,
+      "total_tests_saved_vs_baseline_pct": -43.91504663445331
+    },
+    {
+      "combo": "NBLB+RWBS",
+      "max_tests_per_search": 259,
+      "max_tests_per_search_saved_vs_baseline_pct": -1195.0,
+      "mean_tests_per_search": 24.09527027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": -33.576806382739626,
+      "params": {},
+      "total_bisection_tests": 9887,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 25774,
+      "total_tests": 35661,
+      "total_tests_saved_vs_baseline_pct": -33.57680638273963
+    },
+    {
+      "combo": "NBLB+RWBLS",
+      "max_tests_per_search": 261,
+      "max_tests_per_search_saved_vs_baseline_pct": -1205.0,
+      "mean_tests_per_search": 24.622297297297298,
+      "mean_tests_per_search_saved_vs_baseline_pct": -36.49848297561523,
+      "params": {},
+      "total_bisection_tests": 10667,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 25774,
+      "total_tests": 36441,
+      "total_tests_saved_vs_baseline_pct": -36.49848297561524
+    },
+    {
+      "combo": "NLB+GB",
+      "max_tests_per_search": 20,
+      "max_tests_per_search_saved_vs_baseline_pct": 0.0,
+      "mean_tests_per_search": 18.038513513513514,
+      "mean_tests_per_search_saved_vs_baseline_pct": 0.0,
+      "params": {},
+      "total_bisection_tests": 26697,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 0,
+      "total_tests": 26697,
+      "total_tests_saved_vs_baseline_pct": 0.0
+    },
+    {
+      "combo": "NLB+TKRB",
+      "max_tests_per_search": 21,
+      "max_tests_per_search_saved_vs_baseline_pct": -5.0,
+      "mean_tests_per_search": 19.152027027027028,
+      "mean_tests_per_search_saved_vs_baseline_pct": -6.172978237255123,
+      "params": {
+        "Bisection_k": 1
+      },
+      "total_bisection_tests": 28345,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 0,
+      "total_tests": 28345,
+      "total_tests_saved_vs_baseline_pct": -6.172978237255123
+    },
+    {
+      "combo": "NLB+RWBS",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 16.91554054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": 6.225418586358024,
+      "params": {},
+      "total_bisection_tests": 25035,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 0,
+      "total_tests": 25035,
+      "total_tests_saved_vs_baseline_pct": 6.225418586358018
+    },
+    {
+      "combo": "NLB+RWBLS",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 17.44662162162162,
+      "mean_tests_per_search_saved_vs_baseline_pct": 3.281267558152613,
+      "params": {},
+      "total_bisection_tests": 25821,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 0,
+      "total_tests": 25821,
+      "total_tests_saved_vs_baseline_pct": 3.2812675581526016
+    },
+    {
+      "combo": "FSLB+GB",
+      "max_tests_per_search": 88,
+      "max_tests_per_search_saved_vs_baseline_pct": -340.0,
+      "mean_tests_per_search": 14.845945945945946,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.69861782222722,
+      "params": {
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 13317,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8655,
+      "total_tests": 21972,
+      "total_tests_saved_vs_baseline_pct": 17.698617822227217
+    },
+    {
+      "combo": "FSLB+TKRB",
+      "max_tests_per_search": 84,
+      "max_tests_per_search_saved_vs_baseline_pct": -320.0,
+      "mean_tests_per_search": 15.961486486486486,
+      "mean_tests_per_search_saved_vs_baseline_pct": 11.514402367307197,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 14968,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8655,
+      "total_tests": 23623,
+      "total_tests_saved_vs_baseline_pct": 11.514402367307188
+    },
+    {
+      "combo": "FSLB+RWBS",
+      "max_tests_per_search": 87,
+      "max_tests_per_search_saved_vs_baseline_pct": -335.0,
+      "mean_tests_per_search": 13.758108108108107,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.7292579690602,
+      "params": {
+        "Lookback_stride": 498
+      },
+      "total_bisection_tests": 11689,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8673,
+      "total_tests": 20362,
+      "total_tests_saved_vs_baseline_pct": 23.729257969060193
+    },
+    {
+      "combo": "FSLB+RWBLS",
+      "max_tests_per_search": 87,
+      "max_tests_per_search_saved_vs_baseline_pct": -335.0,
+      "mean_tests_per_search": 14.277027027027026,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.85253024684422,
+      "params": {
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 12475,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8655,
+      "total_tests": 21130,
+      "total_tests_saved_vs_baseline_pct": 20.852530246844214
+    },
+    {
+      "combo": "FSLB-FF+GB",
+      "max_tests_per_search": 44,
+      "max_tests_per_search_saved_vs_baseline_pct": -120.0,
+      "mean_tests_per_search": 13.630405405405405,
+      "mean_tests_per_search_saved_vs_baseline_pct": 24.43720268194929,
+      "params": {
+        "Lookback_max_trials": 26,
+        "Lookback_stride": 807
+      },
+      "total_bisection_tests": 14555,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5618,
+      "total_tests": 20173,
+      "total_tests_saved_vs_baseline_pct": 24.437202681949284
+    },
+    {
+      "combo": "FSLB-FF+TKRB",
+      "max_tests_per_search": 60,
+      "max_tests_per_search_saved_vs_baseline_pct": -200.0,
+      "mean_tests_per_search": 14.620945945945946,
+      "mean_tests_per_search_saved_vs_baseline_pct": 18.945948983031805,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_max_trials": 272,
+        "Lookback_stride": 864
+      },
+      "total_bisection_tests": 16228,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5411,
+      "total_tests": 21639,
+      "total_tests_saved_vs_baseline_pct": 18.9459489830318
+    },
+    {
+      "combo": "FSLB-FF+RWBS",
+      "max_tests_per_search": 39,
+      "max_tests_per_search_saved_vs_baseline_pct": -95.0,
+      "mean_tests_per_search": 12.42972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.093381278795377,
+      "params": {
+        "Lookback_max_trials": 19,
+        "Lookback_stride": 812
+      },
+      "total_bisection_tests": 12955,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5441,
+      "total_tests": 18396,
+      "total_tests_saved_vs_baseline_pct": 31.09338127879537
+    },
+    {
+      "combo": "FSLB-FF+RWBLS",
+      "max_tests_per_search": 60,
+      "max_tests_per_search_saved_vs_baseline_pct": -200.0,
+      "mean_tests_per_search": 13.094594594594595,
+      "mean_tests_per_search_saved_vs_baseline_pct": 27.40757388470615,
+      "params": {
+        "Lookback_max_trials": 372,
+        "Lookback_stride": 783
+      },
+      "total_bisection_tests": 13502,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5878,
+      "total_tests": 19380,
+      "total_tests_saved_vs_baseline_pct": 27.407573884706146
+    },
+    {
+      "combo": "FSLB-AD+GB",
+      "max_tests_per_search": 87,
+      "max_tests_per_search_saved_vs_baseline_pct": -335.0,
+      "mean_tests_per_search": 14.853378378378379,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.65741469078923,
+      "params": {
+        "Lookback_alpha": 0.9996206262693332,
+        "Lookback_stride": 500
+      },
+      "total_bisection_tests": 13318,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8665,
+      "total_tests": 21983,
+      "total_tests_saved_vs_baseline_pct": 17.657414690789228
+    },
+    {
+      "combo": "FSLB-AD+TKRB",
+      "max_tests_per_search": 331,
+      "max_tests_per_search_saved_vs_baseline_pct": -1555.0,
+      "mean_tests_per_search": 37.61891891891892,
+      "mean_tests_per_search_saved_vs_baseline_pct": -108.54777690377198,
+      "params": {
+        "Bisection_k": 10,
+        "Lookback_alpha": 0.9999562138196437,
+        "Lookback_stride": 121
+      },
+      "total_bisection_tests": 22591,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 33085,
+      "total_tests": 55676,
+      "total_tests_saved_vs_baseline_pct": -108.54777690377196
+    },
+    {
+      "combo": "FSLB-AD+RWBS",
+      "max_tests_per_search": 85,
+      "max_tests_per_search_saved_vs_baseline_pct": -325.0,
+      "mean_tests_per_search": 13.750675675675677,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.770461100498185,
+      "params": {
+        "Lookback_alpha": 0.9996264167014729,
+        "Lookback_stride": 500
+      },
+      "total_bisection_tests": 11688,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8663,
+      "total_tests": 20351,
+      "total_tests_saved_vs_baseline_pct": 23.770461100498185
+    },
+    {
+      "combo": "FSLB-AD+RWBLS",
+      "max_tests_per_search": 89,
+      "max_tests_per_search_saved_vs_baseline_pct": -345.0,
+      "mean_tests_per_search": 14.277027027027026,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.85253024684422,
+      "params": {
+        "Lookback_alpha": 0.9999191474207191,
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 12473,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8657,
+      "total_tests": 21130,
+      "total_tests_saved_vs_baseline_pct": 20.852530246844214
+    },
+    {
+      "combo": "FSLB-AD-FF+GB",
+      "max_tests_per_search": 29,
+      "max_tests_per_search_saved_vs_baseline_pct": -45.0,
+      "mean_tests_per_search": 14.694594594594594,
+      "mean_tests_per_search_saved_vs_baseline_pct": 18.53766340787355,
+      "params": {
+        "Lookback_alpha": 0.9679494940066207,
+        "Lookback_max_trials": 9,
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 16025,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5723,
+      "total_tests": 21748,
+      "total_tests_saved_vs_baseline_pct": 18.537663407873545
+    },
+    {
+      "combo": "FSLB-AD-FF+TKRB",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 15.844594594594595,
+      "mean_tests_per_search_saved_vs_baseline_pct": 12.162415252650113,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.9802201237687709,
+        "Lookback_max_trials": 3,
+        "Lookback_stride": 490
+      },
+      "total_bisection_tests": 20357,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3093,
+      "total_tests": 23450,
+      "total_tests_saved_vs_baseline_pct": 12.16241525265011
+    },
+    {
+      "combo": "FSLB-AD-FF+RWBS",
+      "max_tests_per_search": 29,
+      "max_tests_per_search_saved_vs_baseline_pct": -45.0,
+      "mean_tests_per_search": 13.338513513513513,
+      "mean_tests_per_search_saved_vs_baseline_pct": 26.055362025695775,
+      "params": {
+        "Lookback_alpha": 0.9992118314329541,
+        "Lookback_max_trials": 8,
+        "Lookback_stride": 500
+      },
+      "total_bisection_tests": 14450,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5291,
+      "total_tests": 19741,
+      "total_tests_saved_vs_baseline_pct": 26.05536202569577
+    },
+    {
+      "combo": "FSLB-AD-FF+RWBLS",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 13.885135135135135,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.025058995392744,
+      "params": {
+        "Lookback_alpha": 0.9994117953355894,
+        "Lookback_max_trials": 6,
+        "Lookback_stride": 500
+      },
+      "total_bisection_tests": 15978,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4572,
+      "total_tests": 20550,
+      "total_tests_saved_vs_baseline_pct": 23.02505899539274
+    },
+    {
+      "combo": "FSLB-AI+GB",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 12.896621621621621,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.50507547664532,
+      "params": {
+        "Lookback_alpha": 1.492889344918853,
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 15002,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4085,
+      "total_tests": 19087,
+      "total_tests_saved_vs_baseline_pct": 28.505075476645317
+    },
+    {
+      "combo": "FSLB-AI+TKRB",
+      "max_tests_per_search": 30,
+      "max_tests_per_search_saved_vs_baseline_pct": -50.0,
+      "mean_tests_per_search": 14.547972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 19.350488818968426,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.6400662427795383,
+        "Lookback_stride": 154
+      },
+      "total_bisection_tests": 15618,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5913,
+      "total_tests": 21531,
+      "total_tests_saved_vs_baseline_pct": 19.350488818968422
+    },
+    {
+      "combo": "FSLB-AI+RWBS",
+      "max_tests_per_search": 25,
+      "max_tests_per_search_saved_vs_baseline_pct": -25.0,
+      "mean_tests_per_search": 11.73445945945946,
+      "mean_tests_per_search_saved_vs_baseline_pct": 34.947746937858184,
+      "params": {
+        "Lookback_alpha": 1.6829686957063819,
+        "Lookback_stride": 454
+      },
+      "total_bisection_tests": 13428,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3939,
+      "total_tests": 17367,
+      "total_tests_saved_vs_baseline_pct": 34.947746937858184
+    },
+    {
+      "combo": "FSLB-AI+RWBLS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 12.275675675675675,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.947409821328247,
+      "params": {
+        "Lookback_alpha": 1.5936013051174966,
+        "Lookback_stride": 497
+      },
+      "total_bisection_tests": 14240,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3928,
+      "total_tests": 18168,
+      "total_tests_saved_vs_baseline_pct": 31.94740982132824
+    },
+    {
+      "combo": "FSLB-AI-FF+GB",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 12.849324324324325,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.767277222159795,
+      "params": {
+        "Lookback_alpha": 1.597645472062069,
+        "Lookback_max_trials": 218,
+        "Lookback_stride": 482
+      },
+      "total_bisection_tests": 15059,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3958,
+      "total_tests": 19017,
+      "total_tests_saved_vs_baseline_pct": 28.767277222159795
+    },
+    {
+      "combo": "FSLB-AI-FF+TKRB",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 14.150675675675675,
+      "mean_tests_per_search_saved_vs_baseline_pct": 21.55298348129004,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.5918626309461401,
+        "Lookback_max_trials": 261,
+        "Lookback_stride": 305
+      },
+      "total_bisection_tests": 16207,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4736,
+      "total_tests": 20943,
+      "total_tests_saved_vs_baseline_pct": 21.55298348129003
+    },
+    {
+      "combo": "FSLB-AI-FF+RWBS",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 11.816216216216215,
+      "mean_tests_per_search_saved_vs_baseline_pct": 34.494512492040315,
+      "params": {
+        "Lookback_alpha": 1.3071679898104842,
+        "Lookback_max_trials": 61,
+        "Lookback_stride": 495
+      },
+      "total_bisection_tests": 12893,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4595,
+      "total_tests": 17488,
+      "total_tests_saved_vs_baseline_pct": 34.49451249204031
+    },
+    {
+      "combo": "FSLB-AI-FF+RWBLS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 12.268918918918919,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.9848672135446,
+      "params": {
+        "Lookback_alpha": 1.5881314076609154,
+        "Lookback_max_trials": 87,
+        "Lookback_stride": 499
+      },
+      "total_bisection_tests": 14231,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3927,
+      "total_tests": 18158,
+      "total_tests_saved_vs_baseline_pct": 31.984867213544593
+    },
+    {
+      "combo": "RATLB+GB",
+      "max_tests_per_search": 75,
+      "max_tests_per_search_saved_vs_baseline_pct": -275.0,
+      "mean_tests_per_search": 14.888513513513514,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.46263625126419,
+      "params": {
+        "Lookback_threshold": 0.9760307109149444
+      },
+      "total_bisection_tests": 14231,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7804,
+      "total_tests": 22035,
+      "total_tests_saved_vs_baseline_pct": 17.462636251264186
+    },
+    {
+      "combo": "RATLB+TKRB",
+      "max_tests_per_search": 75,
+      "max_tests_per_search_saved_vs_baseline_pct": -275.0,
+      "mean_tests_per_search": 15.704054054054055,
+      "mean_tests_per_search_saved_vs_baseline_pct": 12.941529010750273,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_threshold": 0.9766040698988763
+      },
+      "total_bisection_tests": 15580,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7662,
+      "total_tests": 23242,
+      "total_tests_saved_vs_baseline_pct": 12.941529010750271
+    },
+    {
+      "combo": "RATLB+RWBS",
+      "max_tests_per_search": 73,
+      "max_tests_per_search_saved_vs_baseline_pct": -265.0,
+      "mean_tests_per_search": 13.767567567567568,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.6768176199573,
+      "params": {
+        "Lookback_threshold": 0.9763910764169443
+      },
+      "total_bisection_tests": 12572,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7804,
+      "total_tests": 20376,
+      "total_tests_saved_vs_baseline_pct": 23.676817619957298
+    },
+    {
+      "combo": "RATLB+RWBLS",
+      "max_tests_per_search": 74,
+      "max_tests_per_search_saved_vs_baseline_pct": -270.0,
+      "mean_tests_per_search": 14.272972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.875004682174033,
+      "params": {
+        "Lookback_threshold": 0.9760307109149444
+      },
+      "total_bisection_tests": 13320,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7804,
+      "total_tests": 21124,
+      "total_tests_saved_vs_baseline_pct": 20.875004682174026
+    },
+    {
+      "combo": "RATLB-AD+GB",
+      "max_tests_per_search": 76,
+      "max_tests_per_search_saved_vs_baseline_pct": -280.0,
+      "mean_tests_per_search": 14.962837837837839,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.050604936884294,
+      "params": {
+        "Lookback_alpha": 0.9999871330965693,
+        "Lookback_threshold": 0.9753018507395677
+      },
+      "total_bisection_tests": 14180,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7965,
+      "total_tests": 22145,
+      "total_tests_saved_vs_baseline_pct": 17.050604936884294
+    },
+    {
+      "combo": "RATLB-AD+TKRB",
+      "max_tests_per_search": 236,
+      "max_tests_per_search_saved_vs_baseline_pct": -1080.0,
+      "mean_tests_per_search": 21.886486486486486,
+      "mean_tests_per_search_saved_vs_baseline_pct": -21.33198486721354,
+      "params": {
+        "Bisection_k": 3,
+        "Lookback_alpha": 0.9996894714149394,
+        "Lookback_threshold": 0.9398204933127358
+      },
+      "total_bisection_tests": 16307,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 16085,
+      "total_tests": 32392,
+      "total_tests_saved_vs_baseline_pct": -21.331984867213546
+    },
+    {
+      "combo": "RATLB-AD+RWBS",
+      "max_tests_per_search": 74,
+      "max_tests_per_search_saved_vs_baseline_pct": -270.0,
+      "mean_tests_per_search": 13.841891891891892,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.264786305577406,
+      "params": {
+        "Lookback_alpha": 0.9999871330965693,
+        "Lookback_threshold": 0.9753018507395677
+      },
+      "total_bisection_tests": 12521,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7965,
+      "total_tests": 20486,
+      "total_tests_saved_vs_baseline_pct": 23.264786305577406
+    },
+    {
+      "combo": "RATLB-AD+RWBLS",
+      "max_tests_per_search": 75,
+      "max_tests_per_search_saved_vs_baseline_pct": -275.0,
+      "mean_tests_per_search": 14.355405405405405,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.41802449713452,
+      "params": {
+        "Lookback_alpha": 0.9999871330965693,
+        "Lookback_threshold": 0.9753018507395677
+      },
+      "total_bisection_tests": 13281,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7965,
+      "total_tests": 21246,
+      "total_tests_saved_vs_baseline_pct": 20.41802449713451
+    },
+    {
+      "combo": "RATLB-AI+GB",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 14.00472972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.36206315316328,
+      "params": {
+        "Lookback_alpha": 1.0070441438982471,
+        "Lookback_threshold": 0.9747840488230245
+      },
+      "total_bisection_tests": 16936,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3791,
+      "total_tests": 20727,
+      "total_tests_saved_vs_baseline_pct": 22.362063153163277
+    },
+    {
+      "combo": "RATLB-AI+TKRB",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 15.308108108108108,
+      "mean_tests_per_search_saved_vs_baseline_pct": 15.136532194628614,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.0098085567283186,
+        "Lookback_threshold": 0.9576268878507652
+      },
+      "total_bisection_tests": 18020,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4636,
+      "total_tests": 22656,
+      "total_tests_saved_vs_baseline_pct": 15.136532194628609
+    },
+    {
+      "combo": "RATLB-AI+RWBS",
+      "max_tests_per_search": 31,
+      "max_tests_per_search_saved_vs_baseline_pct": -55.0,
+      "mean_tests_per_search": 12.909459459459459,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.43390643143425,
+      "params": {
+        "Lookback_alpha": 1.0042380379309335,
+        "Lookback_threshold": 0.9650277024643122
+      },
+      "total_bisection_tests": 13525,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5581,
+      "total_tests": 19106,
+      "total_tests_saved_vs_baseline_pct": 28.433906431434245
+    },
+    {
+      "combo": "RATLB-AI+RWBLS",
+      "max_tests_per_search": 30,
+      "max_tests_per_search_saved_vs_baseline_pct": -50.0,
+      "mean_tests_per_search": 13.862837837837837,
+      "mean_tests_per_search_saved_vs_baseline_pct": 23.148668389706717,
+      "params": {
+        "Lookback_alpha": 1.006306410049922,
+        "Lookback_threshold": 0.9567433157719577
+      },
+      "total_bisection_tests": 14956,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5561,
+      "total_tests": 20517,
+      "total_tests_saved_vs_baseline_pct": 23.14866838970671
+    },
+    {
+      "combo": "RATLB-FF+GB",
+      "max_tests_per_search": 55,
+      "max_tests_per_search_saved_vs_baseline_pct": -175.0,
+      "mean_tests_per_search": 15.004054054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": 16.822114844364542,
+      "params": {
+        "Lookback_max_trials": 37,
+        "Lookback_threshold": 0.9703672538373523
+      },
+      "total_bisection_tests": 14156,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 8050,
+      "total_tests": 22206,
+      "total_tests_saved_vs_baseline_pct": 16.822114844364535
+    },
+    {
+      "combo": "RATLB-FF+TKRB",
+      "max_tests_per_search": 34,
+      "max_tests_per_search_saved_vs_baseline_pct": -70.0,
+      "mean_tests_per_search": 15.768918918918919,
+      "mean_tests_per_search_saved_vs_baseline_pct": 12.581938045473278,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_max_trials": 13,
+        "Lookback_threshold": 0.9753364514190757
+      },
+      "total_bisection_tests": 16998,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 6340,
+      "total_tests": 23338,
+      "total_tests_saved_vs_baseline_pct": 12.581938045473274
+    },
+    {
+      "combo": "RATLB-FF+RWBS",
+      "max_tests_per_search": 70,
+      "max_tests_per_search_saved_vs_baseline_pct": -250.0,
+      "mean_tests_per_search": 13.614864864864865,
+      "mean_tests_per_search_saved_vs_baseline_pct": 24.5233546840469,
+      "params": {
+        "Lookback_max_trials": 338,
+        "Lookback_threshold": 0.9769411741202277
+      },
+      "total_bisection_tests": 12720,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 7430,
+      "total_tests": 20150,
+      "total_tests_saved_vs_baseline_pct": 24.523354684046897
+    },
+    {
+      "combo": "RATLB-FF+RWBLS",
+      "max_tests_per_search": 33,
+      "max_tests_per_search_saved_vs_baseline_pct": -65.0,
+      "mean_tests_per_search": 14.04527027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.137318799865156,
+      "params": {
+        "Lookback_max_trials": 11,
+        "Lookback_threshold": 0.9760830502281254
+      },
+      "total_bisection_tests": 14893,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5894,
+      "total_tests": 20787,
+      "total_tests_saved_vs_baseline_pct": 22.137318799865152
+    },
+    {
+      "combo": "RATLB-AD-FF+GB",
+      "max_tests_per_search": 21,
+      "max_tests_per_search_saved_vs_baseline_pct": -5.0,
+      "mean_tests_per_search": 15.893243243243242,
+      "mean_tests_per_search_saved_vs_baseline_pct": 11.892722028692372,
+      "params": {
+        "Lookback_alpha": 0.05435709055918406,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9765158865119273
+      },
+      "total_bisection_tests": 22042,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 23522,
+      "total_tests_saved_vs_baseline_pct": 11.892722028692363
+    },
+    {
+      "combo": "RATLB-AD-FF+TKRB",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 16.956756756756757,
+      "mean_tests_per_search_saved_vs_baseline_pct": 5.996928493838261,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.8538061604834916,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9761543797388156
+      },
+      "total_bisection_tests": 23616,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 25096,
+      "total_tests_saved_vs_baseline_pct": 5.996928493838259
+    },
+    {
+      "combo": "RATLB-AD-FF+RWBS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 14.892567567567568,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.440161815934378,
+      "params": {
+        "Lookback_alpha": 0.01976199161847323,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9718904438058832
+      },
+      "total_bisection_tests": 20561,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 22041,
+      "total_tests_saved_vs_baseline_pct": 17.440161815934374
+    },
+    {
+      "combo": "RATLB-AD-FF+RWBLS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 14.833783783783783,
+      "mean_tests_per_search_saved_vs_baseline_pct": 17.766041128216663,
+      "params": {
+        "Lookback_alpha": 0.5754453078731029,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9894564548603131
+      },
+      "total_bisection_tests": 20474,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 21954,
+      "total_tests_saved_vs_baseline_pct": 17.766041128216653
+    },
+    {
+      "combo": "RATLB-AI-FF+GB",
+      "max_tests_per_search": 34,
+      "max_tests_per_search_saved_vs_baseline_pct": -70.0,
+      "mean_tests_per_search": 14.635135135135135,
+      "mean_tests_per_search_saved_vs_baseline_pct": 18.867288459377463,
+      "params": {
+        "Lookback_alpha": 1.0015537633769527,
+        "Lookback_max_trials": 15,
+        "Lookback_threshold": 0.9669668969514027
+      },
+      "total_bisection_tests": 14872,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 6788,
+      "total_tests": 21660,
+      "total_tests_saved_vs_baseline_pct": 18.86728845937746
+    },
+    {
+      "combo": "RATLB-AI-FF+TKRB",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 16.906756756756756,
+      "mean_tests_per_search_saved_vs_baseline_pct": 6.274113196239284,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 4.65458939330274,
+        "Lookback_max_trials": 3,
+        "Lookback_threshold": 0.9912771961435995
+      },
+      "total_bisection_tests": 22787,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2235,
+      "total_tests": 25022,
+      "total_tests_saved_vs_baseline_pct": 6.274113196239278
+    },
+    {
+      "combo": "RATLB-AI-FF+RWBS",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 13.071621621621622,
+      "mean_tests_per_search_saved_vs_baseline_pct": 27.53492901824175,
+      "params": {
+        "Lookback_alpha": 1.0065713993826482,
+        "Lookback_max_trials": 41,
+        "Lookback_threshold": 0.9587576423606348
+      },
+      "total_bisection_tests": 14025,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5321,
+      "total_tests": 19346,
+      "total_tests_saved_vs_baseline_pct": 27.53492901824175
+    },
+    {
+      "combo": "RATLB-AI-FF+RWBLS",
+      "max_tests_per_search": 36,
+      "max_tests_per_search_saved_vs_baseline_pct": -80.0,
+      "mean_tests_per_search": 14.008108108108107,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.343334457055107,
+      "params": {
+        "Lookback_alpha": 1.0015537633769527,
+        "Lookback_max_trials": 15,
+        "Lookback_threshold": 0.9669668969514027
+      },
+      "total_bisection_tests": 13944,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 6788,
+      "total_tests": 20732,
+      "total_tests_saved_vs_baseline_pct": 22.3433344570551
+    },
+    {
+      "combo": "RWLBS+GB",
+      "max_tests_per_search": 47,
+      "max_tests_per_search_saved_vs_baseline_pct": -135.0,
+      "mean_tests_per_search": 13.158783783783784,
+      "mean_tests_per_search_saved_vs_baseline_pct": 27.051728658650788,
+      "params": {
+        "Lookback_threshold": 181.40549461310692
+      },
+      "total_bisection_tests": 15145,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4330,
+      "total_tests": 19475,
+      "total_tests_saved_vs_baseline_pct": 27.051728658650784
+    },
+    {
+      "combo": "RWLBS+TKRB",
+      "max_tests_per_search": 59,
+      "max_tests_per_search_saved_vs_baseline_pct": -195.0,
+      "mean_tests_per_search": 14.632432432432433,
+      "mean_tests_per_search_saved_vs_baseline_pct": 18.882271416264004,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_threshold": 135.0801877576241
+      },
+      "total_bisection_tests": 16145,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5511,
+      "total_tests": 21656,
+      "total_tests_saved_vs_baseline_pct": 18.882271416264
+    },
+    {
+      "combo": "RWLBS+RWBS",
+      "max_tests_per_search": 45,
+      "max_tests_per_search_saved_vs_baseline_pct": -125.0,
+      "mean_tests_per_search": 11.956756756756757,
+      "mean_tests_per_search_saved_vs_baseline_pct": 33.71539873394015,
+      "params": {
+        "Lookback_threshold": 183.55852304609735
+      },
+      "total_bisection_tests": 13409,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4287,
+      "total_tests": 17696,
+      "total_tests_saved_vs_baseline_pct": 33.71539873394014
+    },
+    {
+      "combo": "RWLBS+RWBLS",
+      "max_tests_per_search": 52,
+      "max_tests_per_search_saved_vs_baseline_pct": -160.0,
+      "mean_tests_per_search": 12.727027027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": 29.445256021275803,
+      "params": {
+        "Lookback_threshold": 158.5278038766722
+      },
+      "total_bisection_tests": 14001,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4835,
+      "total_tests": 18836,
+      "total_tests_saved_vs_baseline_pct": 29.4452560212758
+    },
+    {
+      "combo": "RWLBS-AD+GB",
+      "max_tests_per_search": 71,
+      "max_tests_per_search_saved_vs_baseline_pct": -255.0,
+      "mean_tests_per_search": 13.372972972972972,
+      "mean_tests_per_search_saved_vs_baseline_pct": 25.864329325392376,
+      "params": {
+        "Lookback_alpha": 0.978078716146855,
+        "Lookback_threshold": 177.9067460524271
+      },
+      "total_bisection_tests": 15003,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4789,
+      "total_tests": 19792,
+      "total_tests_saved_vs_baseline_pct": 25.864329325392365
+    },
+    {
+      "combo": "RWLBS-AD+TKRB",
+      "max_tests_per_search": 9483,
+      "max_tests_per_search_saved_vs_baseline_pct": -47315.0,
+      "mean_tests_per_search": 26.91418918918919,
+      "mean_tests_per_search_saved_vs_baseline_pct": -49.20403041540248,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.9570416311214798,
+        "Lookback_threshold": 191.45396376121178
+      },
+      "total_bisection_tests": 16692,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 23141,
+      "total_tests": 39833,
+      "total_tests_saved_vs_baseline_pct": -49.20403041540248
+    },
+    {
+      "combo": "RWLBS-AD+RWBS",
+      "max_tests_per_search": 49,
+      "max_tests_per_search_saved_vs_baseline_pct": -145.0,
+      "mean_tests_per_search": 12.053378378378378,
+      "mean_tests_per_search_saved_vs_baseline_pct": 33.17975802524629,
+      "params": {
+        "Lookback_alpha": 0.9997400821024254,
+        "Lookback_threshold": 167.15861949174695
+      },
+      "total_bisection_tests": 13214,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4625,
+      "total_tests": 17839,
+      "total_tests_saved_vs_baseline_pct": 33.17975802524628
+    },
+    {
+      "combo": "RWLBS-AD+RWBLS",
+      "max_tests_per_search": 53,
+      "max_tests_per_search_saved_vs_baseline_pct": -165.0,
+      "mean_tests_per_search": 12.705405405405406,
+      "mean_tests_per_search_saved_vs_baseline_pct": 29.56511967636813,
+      "params": {
+        "Lookback_alpha": 0.9998617320965181,
+        "Lookback_threshold": 158.80159359928257
+      },
+      "total_bisection_tests": 13975,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4829,
+      "total_tests": 18804,
+      "total_tests_saved_vs_baseline_pct": 29.56511967636813
+    },
+    {
+      "combo": "RWLBS-AI+GB",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 12.808108108108108,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.995767314679554,
+      "params": {
+        "Lookback_alpha": 1.5487445858915374,
+        "Lookback_threshold": 80.50414833773974
+      },
+      "total_bisection_tests": 14998,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3958,
+      "total_tests": 18956,
+      "total_tests_saved_vs_baseline_pct": 28.99576731467955
+    },
+    {
+      "combo": "RWLBS-AI+TKRB",
+      "max_tests_per_search": 29,
+      "max_tests_per_search_saved_vs_baseline_pct": -45.0,
+      "mean_tests_per_search": 14.011486486486486,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.324605760946927,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.507531880345977,
+        "Lookback_threshold": 60.51204551802527
+      },
+      "total_bisection_tests": 16221,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4516,
+      "total_tests": 20737,
+      "total_tests_saved_vs_baseline_pct": 22.324605760946923
+    },
+    {
+      "combo": "RWLBS-AI+RWBS",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 11.636486486486486,
+      "mean_tests_per_search_saved_vs_baseline_pct": 35.490879124995324,
+      "params": {
+        "Lookback_alpha": 1.557608010719679,
+        "Lookback_threshold": 95.18727389899458
+      },
+      "total_bisection_tests": 13515,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3707,
+      "total_tests": 17222,
+      "total_tests_saved_vs_baseline_pct": 35.49087912499532
+    },
+    {
+      "combo": "RWLBS-AI+RWBLS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 12.217567567567567,
+      "mean_tests_per_search_saved_vs_baseline_pct": 32.26954339438889,
+      "params": {
+        "Lookback_alpha": 1.6337447523026463,
+        "Lookback_threshold": 78.87705246559668
+      },
+      "total_bisection_tests": 14215,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3867,
+      "total_tests": 18082,
+      "total_tests_saved_vs_baseline_pct": 32.26954339438888
+    },
+    {
+      "combo": "RWLBS-FF+GB",
+      "max_tests_per_search": 49,
+      "max_tests_per_search_saved_vs_baseline_pct": -145.0,
+      "mean_tests_per_search": 13.221621621621622,
+      "mean_tests_per_search_saved_vs_baseline_pct": 26.70337491103869,
+      "params": {
+        "Lookback_max_trials": 239,
+        "Lookback_threshold": 164.90986197207087
+      },
+      "total_bisection_tests": 14892,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4676,
+      "total_tests": 19568,
+      "total_tests_saved_vs_baseline_pct": 26.703374911038694
+    },
+    {
+      "combo": "RWLBS-FF+TKRB",
+      "max_tests_per_search": 60,
+      "max_tests_per_search_saved_vs_baseline_pct": -200.0,
+      "mean_tests_per_search": 14.750675675675677,
+      "mean_tests_per_search_saved_vs_baseline_pct": 18.226767052477808,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_max_trials": 454,
+        "Lookback_threshold": 124.75314415365796
+      },
+      "total_bisection_tests": 15962,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5869,
+      "total_tests": 21831,
+      "total_tests_saved_vs_baseline_pct": 18.226767052477808
+    },
+    {
+      "combo": "RWLBS-FF+RWBS",
+      "max_tests_per_search": 46,
+      "max_tests_per_search_saved_vs_baseline_pct": -130.0,
+      "mean_tests_per_search": 11.937162162162162,
+      "mean_tests_per_search_saved_vs_baseline_pct": 33.82402517136757,
+      "params": {
+        "Lookback_max_trials": 101,
+        "Lookback_threshold": 182.32862147442285
+      },
+      "total_bisection_tests": 13359,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4308,
+      "total_tests": 17667,
+      "total_tests_saved_vs_baseline_pct": 33.824025171367566
+    },
+    {
+      "combo": "RWLBS-FF+RWBLS",
+      "max_tests_per_search": 34,
+      "max_tests_per_search_saved_vs_baseline_pct": -70.0,
+      "mean_tests_per_search": 12.581756756756757,
+      "mean_tests_per_search_saved_vs_baseline_pct": 30.25058995392741,
+      "params": {
+        "Lookback_max_trials": 15,
+        "Lookback_threshold": 179.11187697834114
+      },
+      "total_bisection_tests": 14389,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4232,
+      "total_tests": 18621,
+      "total_tests_saved_vs_baseline_pct": 30.250589953927406
+    },
+    {
+      "combo": "RWLBS-AD-FF+GB",
+      "max_tests_per_search": 48,
+      "max_tests_per_search_saved_vs_baseline_pct": -140.0,
+      "mean_tests_per_search": 13.146621621621621,
+      "mean_tests_per_search_saved_vs_baseline_pct": 27.119151964640224,
+      "params": {
+        "Lookback_alpha": 0.9997329770656023,
+        "Lookback_max_trials": 223,
+        "Lookback_threshold": 182.3864431304789
+      },
+      "total_bisection_tests": 15147,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4310,
+      "total_tests": 19457,
+      "total_tests_saved_vs_baseline_pct": 27.11915196464022
+    },
+    {
+      "combo": "RWLBS-AD-FF+TKRB",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 15.052702702702703,
+      "mean_tests_per_search_saved_vs_baseline_pct": 16.55242162040679,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.9314472906035899,
+        "Lookback_max_trials": 3,
+        "Lookback_threshold": 178.4653366469037
+      },
+      "total_bisection_tests": 19684,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2594,
+      "total_tests": 22278,
+      "total_tests_saved_vs_baseline_pct": 16.552421620406786
+    },
+    {
+      "combo": "RWLBS-AD-FF+RWBS",
+      "max_tests_per_search": 41,
+      "max_tests_per_search_saved_vs_baseline_pct": -105.0,
+      "mean_tests_per_search": 12.429054054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.09712701801701,
+      "params": {
+        "Lookback_alpha": 0.9949493667192478,
+        "Lookback_max_trials": 22,
+        "Lookback_threshold": 132.0200629955977
+      },
+      "total_bisection_tests": 12866,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 5529,
+      "total_tests": 18395,
+      "total_tests_saved_vs_baseline_pct": 31.097127018017005
+    },
+    {
+      "combo": "RWLBS-AD-FF+RWBLS",
+      "max_tests_per_search": 36,
+      "max_tests_per_search_saved_vs_baseline_pct": -80.0,
+      "mean_tests_per_search": 12.821621621621622,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.920852530246847,
+      "params": {
+        "Lookback_alpha": 0.999846866223935,
+        "Lookback_max_trials": 16,
+        "Lookback_threshold": 147.03361418874795
+      },
+      "total_bisection_tests": 14114,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4862,
+      "total_tests": 18976,
+      "total_tests_saved_vs_baseline_pct": 28.920852530246844
+    },
+    {
+      "combo": "RWLBS-AI-FF+GB",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 12.879054054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.60246469640784,
+      "params": {
+        "Lookback_alpha": 1.4328331732920465,
+        "Lookback_max_trials": 114,
+        "Lookback_threshold": 80.53058224603534
+      },
+      "total_bisection_tests": 14873,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4188,
+      "total_tests": 19061,
+      "total_tests_saved_vs_baseline_pct": 28.602464696407836
+    },
+    {
+      "combo": "RWLBS-AI-FF+TKRB",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 13.941891891891892,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.71041690077537,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.6399787418091325,
+        "Lookback_max_trials": 234,
+        "Lookback_threshold": 69.41857309836011
+      },
+      "total_bisection_tests": 16606,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4028,
+      "total_tests": 20634,
+      "total_tests_saved_vs_baseline_pct": 22.710416900775368
+    },
+    {
+      "combo": "RWLBS-AI-FF+RWBS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 11.666891891891892,
+      "mean_tests_per_search_saved_vs_baseline_pct": 35.32232086002173,
+      "params": {
+        "Lookback_alpha": 1.369522713366099,
+        "Lookback_max_trials": 370,
+        "Lookback_threshold": 86.59288542479057
+      },
+      "total_bisection_tests": 13059,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4208,
+      "total_tests": 17267,
+      "total_tests_saved_vs_baseline_pct": 35.322320860021726
+    },
+    {
+      "combo": "RWLBS-AI-FF+RWBLS",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 12.270945945945947,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.973629995879687,
+      "params": {
+        "Lookback_alpha": 1.2686278651393008,
+        "Lookback_max_trials": 49,
+        "Lookback_threshold": 95.85800772790323
+      },
+      "total_bisection_tests": 13834,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4327,
+      "total_tests": 18161,
+      "total_tests_saved_vs_baseline_pct": 31.973629995879687
+    },
+    {
+      "combo": "RWLBLS+GB",
+      "max_tests_per_search": 911,
+      "max_tests_per_search_saved_vs_baseline_pct": -4455.0,
+      "mean_tests_per_search": 67.87162162162163,
+      "mean_tests_per_search_saved_vs_baseline_pct": -276.25950481327493,
+      "params": {
+        "Lookback_threshold": 0.9999575670495091
+      },
+      "total_bisection_tests": 7859,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 92591,
+      "total_tests": 100450,
+      "total_tests_saved_vs_baseline_pct": -276.2595048132749
+    },
+    {
+      "combo": "RWLBLS+TKRB",
+      "max_tests_per_search": 912,
+      "max_tests_per_search_saved_vs_baseline_pct": -4460.0,
+      "mean_tests_per_search": 71.13243243243244,
+      "mean_tests_per_search_saved_vs_baseline_pct": -294.3364422968873,
+      "params": {
+        "Bisection_k": 104,
+        "Lookback_threshold": 0.9999552915202321
+      },
+      "total_bisection_tests": 12280,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 92996,
+      "total_tests": 105276,
+      "total_tests_saved_vs_baseline_pct": -294.3364422968873
+    },
+    {
+      "combo": "RWLBLS+RWBS",
+      "max_tests_per_search": 908,
+      "max_tests_per_search_saved_vs_baseline_pct": -4440.0,
+      "mean_tests_per_search": 66.81351351351351,
+      "mean_tests_per_search_saved_vs_baseline_pct": -270.3936771921939,
+      "params": {
+        "Lookback_threshold": 0.9999575670495091
+      },
+      "total_bisection_tests": 6293,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 92591,
+      "total_tests": 98884,
+      "total_tests_saved_vs_baseline_pct": -270.3936771921939
+    },
+    {
+      "combo": "RWLBLS+RWBLS",
+      "max_tests_per_search": 910,
+      "max_tests_per_search_saved_vs_baseline_pct": -4450.0,
+      "mean_tests_per_search": 67.37972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": -273.53260665992434,
+      "params": {
+        "Lookback_threshold": 0.9999575670495091
+      },
+      "total_bisection_tests": 7131,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 92591,
+      "total_tests": 99722,
+      "total_tests_saved_vs_baseline_pct": -273.53260665992434
+    },
+    {
+      "combo": "RWLBLS-AD+GB",
+      "max_tests_per_search": 4721,
+      "max_tests_per_search_saved_vs_baseline_pct": -23505.0,
+      "mean_tests_per_search": 199.84932432432433,
+      "mean_tests_per_search_saved_vs_baseline_pct": -1007.9035097576506,
+      "params": {
+        "Lookback_alpha": 0.9998657183545396,
+        "Lookback_threshold": 0.9780298700632354
+      },
+      "total_bisection_tests": 5634,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 290143,
+      "total_tests": 295777,
+      "total_tests_saved_vs_baseline_pct": -1007.9035097576507
+    },
+    {
+      "combo": "RWLBLS-AD+TKRB",
+      "max_tests_per_search": 3520,
+      "max_tests_per_search_saved_vs_baseline_pct": -17500.0,
+      "mean_tests_per_search": 206.81621621621622,
+      "mean_tests_per_search_saved_vs_baseline_pct": -1046.525826871933,
+      "params": {
+        "Bisection_k": 4,
+        "Lookback_alpha": 0.9999565344845864,
+        "Lookback_threshold": 0.9449757740198206
+      },
+      "total_bisection_tests": 4309,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 301779,
+      "total_tests": 306088,
+      "total_tests_saved_vs_baseline_pct": -1046.525826871933
+    },
+    {
+      "combo": "RWLBLS-AD+RWBS",
+      "max_tests_per_search": 4719,
+      "max_tests_per_search_saved_vs_baseline_pct": -23495.0,
+      "mean_tests_per_search": 198.79054054054055,
+      "mean_tests_per_search_saved_vs_baseline_pct": -1002.033936397348,
+      "params": {
+        "Lookback_alpha": 0.9998657183545396,
+        "Lookback_threshold": 0.9780298700632354
+      },
+      "total_bisection_tests": 4067,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 290143,
+      "total_tests": 294210,
+      "total_tests_saved_vs_baseline_pct": -1002.033936397348
+    },
+    {
+      "combo": "RWLBLS-AD+RWBLS",
+      "max_tests_per_search": 4721,
+      "max_tests_per_search_saved_vs_baseline_pct": -23505.0,
+      "mean_tests_per_search": 199.43851351351353,
+      "mean_tests_per_search_saved_vs_baseline_pct": -1005.6261003108963,
+      "params": {
+        "Lookback_alpha": 0.9998657183545396,
+        "Lookback_threshold": 0.9780298700632354
+      },
+      "total_bisection_tests": 5026,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 290143,
+      "total_tests": 295169,
+      "total_tests_saved_vs_baseline_pct": -1005.6261003108964
+    },
+    {
+      "combo": "RWLBLS-AI+GB",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 19.381756756756758,
+      "mean_tests_per_search_saved_vs_baseline_pct": -7.446529572611156,
+      "params": {
+        "Lookback_alpha": 9.513405966611975,
+        "Lookback_threshold": 0.9999094128558627
+      },
+      "total_bisection_tests": 25798,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2887,
+      "total_tests": 28685,
+      "total_tests_saved_vs_baseline_pct": -7.446529572611155
+    },
+    {
+      "combo": "RWLBLS-AI+TKRB",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 20.51554054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": -13.73187998651534,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.0182078998668,
+        "Lookback_threshold": 0.9998226248729596
+      },
+      "total_bisection_tests": 27470,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2893,
+      "total_tests": 30363,
+      "total_tests_saved_vs_baseline_pct": -13.731879986515338
+    },
+    {
+      "combo": "RWLBLS-AI+RWBS",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 18.21554054054054,
+      "mean_tests_per_search_saved_vs_baseline_pct": -0.98138367606847,
+      "params": {
+        "Lookback_alpha": 5.719716249158442,
+        "Lookback_threshold": 0.9998996094135227
+      },
+      "total_bisection_tests": 24072,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2887,
+      "total_tests": 26959,
+      "total_tests_saved_vs_baseline_pct": -0.9813836760684721
+    },
+    {
+      "combo": "RWLBLS-AI+RWBLS",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 18.731756756756756,
+      "mean_tests_per_search_saved_vs_baseline_pct": -3.843128441397899,
+      "params": {
+        "Lookback_alpha": 6.278655279158904,
+        "Lookback_threshold": 0.9999556536745915
+      },
+      "total_bisection_tests": 24843,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2880,
+      "total_tests": 27723,
+      "total_tests_saved_vs_baseline_pct": -3.84312844139791
+    },
+    {
+      "combo": "RWLBLS-FF+GB",
+      "max_tests_per_search": 21,
+      "max_tests_per_search_saved_vs_baseline_pct": -5.0,
+      "mean_tests_per_search": 18.406756756756756,
+      "mean_tests_per_search_saved_vs_baseline_pct": -2.041427875791281,
+      "params": {
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999403877705414
+      },
+      "total_bisection_tests": 25762,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 27242,
+      "total_tests_saved_vs_baseline_pct": -2.0414278757912876
+    },
+    {
+      "combo": "RWLBLS-FF+TKRB",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 19.552027027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": -8.390455856463266,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.999731598330526
+      },
+      "total_bisection_tests": 27457,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 28937,
+      "total_tests_saved_vs_baseline_pct": -8.390455856463273
+    },
+    {
+      "combo": "RWLBLS-FF+RWBS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 17.22635135135135,
+      "mean_tests_per_search_saved_vs_baseline_pct": 4.502378544405746,
+      "params": {
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999556333499756
+      },
+      "total_bisection_tests": 24015,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 25495,
+      "total_tests_saved_vs_baseline_pct": 4.5023785444057385
+    },
+    {
+      "combo": "RWLBLS-FF+RWBLS",
+      "max_tests_per_search": 24,
+      "max_tests_per_search_saved_vs_baseline_pct": -20.0,
+      "mean_tests_per_search": 18.2972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": -1.4346181218863547,
+      "params": {
+        "Lookback_max_trials": 2,
+        "Lookback_threshold": 0.999825290945948
+      },
+      "total_bisection_tests": 24187,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 2893,
+      "total_tests": 27080,
+      "total_tests_saved_vs_baseline_pct": -1.4346181218863543
+    },
+    {
+      "combo": "RWLBLS-AD-FF+GB",
+      "max_tests_per_search": 21,
+      "max_tests_per_search_saved_vs_baseline_pct": -5.0,
+      "mean_tests_per_search": 18.420945945945945,
+      "mean_tests_per_search_saved_vs_baseline_pct": -2.120088399445622,
+      "params": {
+        "Lookback_alpha": 0.4434812927944938,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.999914629363881
+      },
+      "total_bisection_tests": 25783,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 27263,
+      "total_tests_saved_vs_baseline_pct": -2.1200883994456308
+    },
+    {
+      "combo": "RWLBLS-AD-FF+TKRB",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 19.50608108108108,
+      "mean_tests_per_search_saved_vs_baseline_pct": -8.135745589392064,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.5927988316417455,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999164592389385
+      },
+      "total_bisection_tests": 27389,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 28869,
+      "total_tests_saved_vs_baseline_pct": -8.135745589392066
+    },
+    {
+      "combo": "RWLBLS-AD-FF+RWBS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 17.20608108108108,
+      "mean_tests_per_search_saved_vs_baseline_pct": 4.614750721054807,
+      "params": {
+        "Lookback_alpha": 0.44200619958572496,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999657427512544
+      },
+      "total_bisection_tests": 23985,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 25465,
+      "total_tests_saved_vs_baseline_pct": 4.6147507210548
+    },
+    {
+      "combo": "RWLBLS-AD-FF+RWBLS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 17.75337837837838,
+      "mean_tests_per_search_saved_vs_baseline_pct": 1.5807019515301362,
+      "params": {
+        "Lookback_alpha": 0.3485409137568252,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999661831130864
+      },
+      "total_bisection_tests": 24795,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 26275,
+      "total_tests_saved_vs_baseline_pct": 1.5807019515301344
+    },
+    {
+      "combo": "RWLBLS-AI-FF+GB",
+      "max_tests_per_search": 21,
+      "max_tests_per_search_saved_vs_baseline_pct": -5.0,
+      "mean_tests_per_search": 18.420945945945945,
+      "mean_tests_per_search_saved_vs_baseline_pct": -2.120088399445622,
+      "params": {
+        "Lookback_alpha": 4.9913321916691515,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.999914629363881
+      },
+      "total_bisection_tests": 25783,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 27263,
+      "total_tests_saved_vs_baseline_pct": -2.1200883994456308
+    },
+    {
+      "combo": "RWLBLS-AI-FF+TKRB",
+      "max_tests_per_search": 22,
+      "max_tests_per_search_saved_vs_baseline_pct": -10.0,
+      "mean_tests_per_search": 19.63581081081081,
+      "mean_tests_per_search_saved_vs_baseline_pct": -8.85492751994605,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 8.039566963186012,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9994233296168806
+      },
+      "total_bisection_tests": 27581,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 29061,
+      "total_tests_saved_vs_baseline_pct": -8.854927519946061
+    },
+    {
+      "combo": "RWLBLS-AI-FF+RWBS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 17.20608108108108,
+      "mean_tests_per_search_saved_vs_baseline_pct": 4.614750721054807,
+      "params": {
+        "Lookback_alpha": 4.978056354265326,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999657427512544
+      },
+      "total_bisection_tests": 23985,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 25465,
+      "total_tests_saved_vs_baseline_pct": 4.6147507210548
+    },
+    {
+      "combo": "RWLBLS-AI-FF+RWBLS",
+      "max_tests_per_search": 23,
+      "max_tests_per_search_saved_vs_baseline_pct": -15.0,
+      "mean_tests_per_search": 17.75337837837838,
+      "mean_tests_per_search_saved_vs_baseline_pct": 1.5807019515301362,
+      "params": {
+        "Lookback_alpha": 4.136868875270511,
+        "Lookback_max_trials": 1,
+        "Lookback_threshold": 0.9999661831130864
+      },
+      "total_bisection_tests": 24795,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 1480,
+      "total_tests": 26275,
+      "total_tests_saved_vs_baseline_pct": 1.5807019515301344
+    },
+    {
+      "combo": "TWLB+GB",
+      "max_tests_per_search": 64,
+      "max_tests_per_search_saved_vs_baseline_pct": -220.0,
+      "mean_tests_per_search": 13.494594594594595,
+      "mean_tests_per_search_saved_vs_baseline_pct": 25.190096265497996,
+      "params": {
+        "Lookback_hours": 175
+      },
+      "total_bisection_tests": 15215,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4757,
+      "total_tests": 19972,
+      "total_tests_saved_vs_baseline_pct": 25.190096265497996
+    },
+    {
+      "combo": "TWLB+TKRB",
+      "max_tests_per_search": 45,
+      "max_tests_per_search_saved_vs_baseline_pct": -125.0,
+      "mean_tests_per_search": 14.384459459459459,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.256957710604198,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_hours": 216
+      },
+      "total_bisection_tests": 17462,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3827,
+      "total_tests": 21289,
+      "total_tests_saved_vs_baseline_pct": 20.256957710604187
+    },
+    {
+      "combo": "TWLB+RWBS",
+      "max_tests_per_search": 51,
+      "max_tests_per_search_saved_vs_baseline_pct": -155.0,
+      "mean_tests_per_search": 12.178378378378378,
+      "mean_tests_per_search_saved_vs_baseline_pct": 32.48679626924374,
+      "params": {
+        "Lookback_hours": 225
+      },
+      "total_bisection_tests": 14089,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3935,
+      "total_tests": 18024,
+      "total_tests_saved_vs_baseline_pct": 32.48679626924373
+    },
+    {
+      "combo": "TWLB+RWBLS",
+      "max_tests_per_search": 42,
+      "max_tests_per_search_saved_vs_baseline_pct": -110.0,
+      "mean_tests_per_search": 12.62027027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": 30.0370828182942,
+      "params": {
+        "Lookback_hours": 192
+      },
+      "total_bisection_tests": 14524,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4154,
+      "total_tests": 18678,
+      "total_tests_saved_vs_baseline_pct": 30.03708281829419
+    },
+    {
+      "combo": "TWLB-FF+GB",
+      "max_tests_per_search": 46,
+      "max_tests_per_search_saved_vs_baseline_pct": -130.0,
+      "mean_tests_per_search": 13.47972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 25.272502528373977,
+      "params": {
+        "Lookback_hours": 175,
+        "Lookback_max_trials": 29
+      },
+      "total_bisection_tests": 15253,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4697,
+      "total_tests": 19950,
+      "total_tests_saved_vs_baseline_pct": 25.272502528373973
+    },
+    {
+      "combo": "TWLB-FF+TKRB",
+      "max_tests_per_search": 50,
+      "max_tests_per_search_saved_vs_baseline_pct": -150.0,
+      "mean_tests_per_search": 14.406081081081082,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.137094055511856,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_hours": 217,
+        "Lookback_max_trials": 317
+      },
+      "total_bisection_tests": 17476,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3845,
+      "total_tests": 21321,
+      "total_tests_saved_vs_baseline_pct": 20.137094055511856
+    },
+    {
+      "combo": "TWLB-FF+RWBS",
+      "max_tests_per_search": 46,
+      "max_tests_per_search_saved_vs_baseline_pct": -130.0,
+      "mean_tests_per_search": 12.305405405405406,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.78259729557628,
+      "params": {
+        "Lookback_hours": 175,
+        "Lookback_max_trials": 29
+      },
+      "total_bisection_tests": 13515,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4697,
+      "total_tests": 18212,
+      "total_tests_saved_vs_baseline_pct": 31.78259729557628
+    },
+    {
+      "combo": "TWLB-FF+RWBLS",
+      "max_tests_per_search": 35,
+      "max_tests_per_search_saved_vs_baseline_pct": -75.0,
+      "mean_tests_per_search": 12.633783783783784,
+      "mean_tests_per_search_saved_vs_baseline_pct": 29.962168033861484,
+      "params": {
+        "Lookback_hours": 217,
+        "Lookback_max_trials": 15
+      },
+      "total_bisection_tests": 14969,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3729,
+      "total_tests": 18698,
+      "total_tests_saved_vs_baseline_pct": 29.96216803386148
+    },
+    {
+      "combo": "TWLB-AD+GB",
+      "max_tests_per_search": 52,
+      "max_tests_per_search_saved_vs_baseline_pct": -160.0,
+      "mean_tests_per_search": 13.24527027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": 26.57227403828146,
+      "params": {
+        "Lookback_alpha": 0.9989865918341292,
+        "Lookback_hours": 231
+      },
+      "total_bisection_tests": 15884,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3719,
+      "total_tests": 19603,
+      "total_tests_saved_vs_baseline_pct": 26.572274038281456
+    },
+    {
+      "combo": "TWLB-AD+TKRB",
+      "max_tests_per_search": 53,
+      "max_tests_per_search_saved_vs_baseline_pct": -165.0,
+      "mean_tests_per_search": 14.453378378378378,
+      "mean_tests_per_search_saved_vs_baseline_pct": 19.87489230999738,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.9961365747119246,
+        "Lookback_hours": 175
+      },
+      "total_bisection_tests": 16892,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4499,
+      "total_tests": 21391,
+      "total_tests_saved_vs_baseline_pct": 19.874892309997378
+    },
+    {
+      "combo": "TWLB-AD+RWBS",
+      "max_tests_per_search": 56,
+      "max_tests_per_search_saved_vs_baseline_pct": -180.0,
+      "mean_tests_per_search": 12.139864864864865,
+      "mean_tests_per_search_saved_vs_baseline_pct": 32.700303404876955,
+      "params": {
+        "Lookback_alpha": 0.9834961535512851,
+        "Lookback_hours": 183
+      },
+      "total_bisection_tests": 13479,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4488,
+      "total_tests": 17967,
+      "total_tests_saved_vs_baseline_pct": 32.700303404876955
+    },
+    {
+      "combo": "TWLB-AD+RWBLS",
+      "max_tests_per_search": 62,
+      "max_tests_per_search_saved_vs_baseline_pct": -210.0,
+      "mean_tests_per_search": 12.705405405405406,
+      "mean_tests_per_search_saved_vs_baseline_pct": 29.56511967636813,
+      "params": {
+        "Lookback_alpha": 0.9800151369807526,
+        "Lookback_hours": 192
+      },
+      "total_bisection_tests": 14424,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4380,
+      "total_tests": 18804,
+      "total_tests_saved_vs_baseline_pct": 29.56511967636813
+    },
+    {
+      "combo": "TWLB-AD-FF+GB",
+      "max_tests_per_search": 57,
+      "max_tests_per_search_saved_vs_baseline_pct": -185.0,
+      "mean_tests_per_search": 13.237837837837837,
+      "mean_tests_per_search_saved_vs_baseline_pct": 26.613477169719452,
+      "params": {
+        "Lookback_alpha": 0.999161610536574,
+        "Lookback_hours": 231,
+        "Lookback_max_trials": 59
+      },
+      "total_bisection_tests": 15888,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3704,
+      "total_tests": 19592,
+      "total_tests_saved_vs_baseline_pct": 26.613477169719445
+    },
+    {
+      "combo": "TWLB-AD-FF+TKRB",
+      "max_tests_per_search": 50,
+      "max_tests_per_search_saved_vs_baseline_pct": -150.0,
+      "mean_tests_per_search": 14.420945945945945,
+      "mean_tests_per_search_saved_vs_baseline_pct": 20.05468779263588,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 0.9831314841681323,
+        "Lookback_hours": 228,
+        "Lookback_max_trials": 42
+      },
+      "total_bisection_tests": 17551,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3792,
+      "total_tests": 21343,
+      "total_tests_saved_vs_baseline_pct": 20.054687792635878
+    },
+    {
+      "combo": "TWLB-AD-FF+RWBS",
+      "max_tests_per_search": 63,
+      "max_tests_per_search_saved_vs_baseline_pct": -215.0,
+      "mean_tests_per_search": 12.16081081081081,
+      "mean_tests_per_search_saved_vs_baseline_pct": 32.58418548900626,
+      "params": {
+        "Lookback_alpha": 0.9820676977663347,
+        "Lookback_hours": 183,
+        "Lookback_max_trials": 176
+      },
+      "total_bisection_tests": 13475,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4523,
+      "total_tests": 17998,
+      "total_tests_saved_vs_baseline_pct": 32.58418548900625
+    },
+    {
+      "combo": "TWLB-AD-FF+RWBLS",
+      "max_tests_per_search": 56,
+      "max_tests_per_search_saved_vs_baseline_pct": -180.0,
+      "mean_tests_per_search": 12.714864864864865,
+      "mean_tests_per_search_saved_vs_baseline_pct": 29.512679327265243,
+      "params": {
+        "Lookback_alpha": 0.9841919644927566,
+        "Lookback_hours": 195,
+        "Lookback_max_trials": 173
+      },
+      "total_bisection_tests": 14542,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 4276,
+      "total_tests": 18818,
+      "total_tests_saved_vs_baseline_pct": 29.512679327265236
+    },
+    {
+      "combo": "TWLB-AI+GB",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 12.881756756756756,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.5874817395213,
+      "params": {
+        "Lookback_alpha": 1.4955664601471623,
+        "Lookback_hours": 119
+      },
+      "total_bisection_tests": 15648,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3417,
+      "total_tests": 19065,
+      "total_tests_saved_vs_baseline_pct": 28.587481739521294
+    },
+    {
+      "combo": "TWLB-AI+TKRB",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 14.06081081081081,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.051166797767543,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.6933007358270293,
+        "Lookback_hours": 71
+      },
+      "total_bisection_tests": 16969,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3841,
+      "total_tests": 20810,
+      "total_tests_saved_vs_baseline_pct": 22.05116679776754
+    },
+    {
+      "combo": "TWLB-AI+RWBS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 11.697972972972973,
+      "mean_tests_per_search_saved_vs_baseline_pct": 35.15001685582649,
+      "params": {
+        "Lookback_alpha": 1.3450065280917425,
+        "Lookback_hours": 105
+      },
+      "total_bisection_tests": 13448,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3865,
+      "total_tests": 17313,
+      "total_tests_saved_vs_baseline_pct": 35.1500168558265
+    },
+    {
+      "combo": "TWLB-AI+RWBLS",
+      "max_tests_per_search": 27,
+      "max_tests_per_search_saved_vs_baseline_pct": -35.0,
+      "mean_tests_per_search": 12.32027027027027,
+      "mean_tests_per_search_saved_vs_baseline_pct": 31.700191032700307,
+      "params": {
+        "Lookback_alpha": 1.6896884096565585,
+        "Lookback_hours": 70
+      },
+      "total_bisection_tests": 14369,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3865,
+      "total_tests": 18234,
+      "total_tests_saved_vs_baseline_pct": 31.700191032700303
+    },
+    {
+      "combo": "TWLB-AI-FF+GB",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 12.888513513513514,
+      "mean_tests_per_search_saved_vs_baseline_pct": 28.55002434730494,
+      "params": {
+        "Lookback_alpha": 1.5853032951060193,
+        "Lookback_hours": 84,
+        "Lookback_max_trials": 452
+      },
+      "total_bisection_tests": 15307,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3768,
+      "total_tests": 19075,
+      "total_tests_saved_vs_baseline_pct": 28.55002434730494
+    },
+    {
+      "combo": "TWLB-AI-FF+TKRB",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 14.005405405405405,
+      "mean_tests_per_search_saved_vs_baseline_pct": 22.35831741394165,
+      "params": {
+        "Bisection_k": 1,
+        "Lookback_alpha": 1.6107869849028464,
+        "Lookback_hours": 75,
+        "Lookback_max_trials": 13
+      },
+      "total_bisection_tests": 16869,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3859,
+      "total_tests": 20728,
+      "total_tests_saved_vs_baseline_pct": 22.35831741394164
+    },
+    {
+      "combo": "TWLB-AI-FF+RWBS",
+      "max_tests_per_search": 26,
+      "max_tests_per_search_saved_vs_baseline_pct": -30.0,
+      "mean_tests_per_search": 11.667567567567568,
+      "mean_tests_per_search_saved_vs_baseline_pct": 35.31857512080009,
+      "params": {
+        "Lookback_alpha": 1.488099923196872,
+        "Lookback_hours": 92,
+        "Lookback_max_trials": 220
+      },
+      "total_bisection_tests": 13492,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3776,
+      "total_tests": 17268,
+      "total_tests_saved_vs_baseline_pct": 35.31857512080009
+    },
+    {
+      "combo": "TWLB-AI-FF+RWBLS",
+      "max_tests_per_search": 28,
+      "max_tests_per_search_saved_vs_baseline_pct": -40.0,
+      "mean_tests_per_search": 12.221621621621622,
+      "mean_tests_per_search_saved_vs_baseline_pct": 32.24706895905907,
+      "params": {
+        "Lookback_alpha": 1.3284408965533585,
+        "Lookback_hours": 127,
+        "Lookback_max_trials": 19
+      },
+      "total_bisection_tests": 14509,
+      "total_culprits_found": 1480,
+      "total_lookback_tests": 3579,
+      "total_tests": 18088,
+      "total_tests_saved_vs_baseline_pct": 32.24706895905907
+    }
+  ],
+  "risk_predictions": {
+    "num_commits_with_risk": 19586,
+    "path": "analysis/git_bisect/risk_predictions_final_test.json"
+  },
+  "tuned_from_eval": {
+    "path": "analysis/git_bisect/results/200t_new_s_opt/simulation_optuna_eval.json",
+    "present": true
+  }
+}

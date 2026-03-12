@@ -1,0 +1,68 @@
+[
+  {
+    "combo": "RWLBS-AI+RWBS",
+    "max_tests_per_search": 26,
+    "mean_tests_per_search": 11.636486486486486,
+    "p25": 9,
+    "p75": 14,
+    "p90": 16,
+    "p95": 18,
+    "p99": 22,
+    "total_tests": 17222
+  },
+  {
+    "combo": "FSLB-AI+RWBS",
+    "max_tests_per_search": 25,
+    "mean_tests_per_search": 11.73445945945946,
+    "p25": 9,
+    "p75": 14,
+    "p90": 17,
+    "p95": 18,
+    "p99": 23,
+    "total_tests": 17367
+  },
+  {
+    "combo": "RATLB-AI+GB",
+    "max_tests_per_search": 24,
+    "mean_tests_per_search": 14.00472972972973,
+    "p25": 11,
+    "p75": 16,
+    "p90": 23,
+    "p95": 24,
+    "p99": 24,
+    "total_tests": 20727
+  },
+  {
+    "combo": "RATLB-AD-FF+RWBLS",
+    "max_tests_per_search": 23,
+    "mean_tests_per_search": 14.833783783783783,
+    "p25": 11,
+    "p75": 19,
+    "p90": 20,
+    "p95": 20,
+    "p99": 22,
+    "total_tests": 21954
+  },
+  {
+    "combo": "RATLB-AD-FF+GB",
+    "max_tests_per_search": 21,
+    "mean_tests_per_search": 15.893243243243242,
+    "p25": 11,
+    "p75": 20,
+    "p90": 20,
+    "p95": 20,
+    "p99": 21,
+    "total_tests": 23522
+  },
+  {
+    "combo": "NLB+GB",
+    "max_tests_per_search": 20,
+    "mean_tests_per_search": 18.038513513513514,
+    "p25": 18,
+    "p75": 19,
+    "p90": 19,
+    "p95": 19,
+    "p99": 20,
+    "total_tests": 26697
+  }
+]
