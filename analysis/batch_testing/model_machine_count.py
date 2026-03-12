@@ -7,12 +7,17 @@ For each worker-pool multiplier, this script:
   2) replays the chosen configuration(s) on the FINAL set, and
   3) records FINAL latency metrics for plotting.
 
-It then writes one plot per combo (batching × bisection, plus Exhaustive Testing (ET) when enabled) showing:
+By default it writes one plot per combo (batching × bisection, plus Exhaustive
+Testing (ET) when enabled) showing:
   - mean_feedback_time_hr
   - mean_time_to_culprit_hr
   - max_time_to_culprit_hr
   - total_tests_run (when --show-total-tests-run is set)
 vs worker-pool multiplier.
+
+With --compare-bisect-strats, it instead writes one plot per selected batching
+strategy, overlaying mean_time_to_culprit_hr for each selected bisection
+strategy on the same frame.
 """
 
 from __future__ import annotations
@@ -305,6 +310,15 @@ def get_args(*, sim, bisection_mod) -> argparse.Namespace:
         help="If set, add total_tests_run on a secondary axis in the plots.",
     )
     ap.add_argument(
+        "--compare-bisect-strats",
+        action="store_true",
+        help=(
+            "Group plots by batching strategy and compare only mean_time_to_culprit_hr "
+            "across the selected bisection strategies. In this mode, one figure is "
+            "written per selected batching strategy."
+        ),
+    )
+    ap.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -318,6 +332,108 @@ def get_args(*, sim, bisection_mod) -> argparse.Namespace:
     )
 
     return ap.parse_args()
+
+
+def write_standard_plots(
+    *,
+    plt,
+    combo_keys: list[str],
+    sweep_results: dict[str, list[dict]],
+    plots_dir: str,
+    show_total_tests_run: bool,
+) -> None:
+    for combo_key in combo_keys:
+        rows = sweep_results.get(combo_key, [])
+        xs = [r["multiplier"] for r in rows]
+        mft = [r["mean_feedback_time_hr"] for r in rows]
+        mean_ttc = [r["mean_time_to_culprit_hr"] for r in rows]
+        max_ttc = [r["max_time_to_culprit_hr"] for r in rows]
+        tests = [r.get("total_tests_run", 0) for r in rows]
+
+        fig, ax1 = plt.subplots(figsize=(11, 6.5))
+        ax1.plot(xs, mft, label="mean_feedback_time_hr", linewidth=2)
+        ax1.plot(xs, mean_ttc, label="mean_time_to_culprit_hr", linewidth=2)
+        ax1.plot(xs, max_ttc, label="max_time_to_culprit_hr", linewidth=2)
+
+        ax1.set_xlabel("Worker pool multiplier (x)")
+        ax1.set_ylabel("Hours (lower is better)")
+        ax1.set_title(f"{combo_key}: FINAL latency vs worker capacity")
+        ax1.grid(True, linestyle=":", linewidth=0.6)
+
+        if show_total_tests_run:
+            ax2 = ax1.twinx()
+            ax2.plot(
+                xs,
+                tests,
+                label="total_tests_run",
+                linewidth=2,
+                linestyle="--",
+                color="tab:gray",
+            )
+            ax2.set_ylabel("Total tests run")
+
+        handles1, labels1 = ax1.get_legend_handles_labels()
+        if show_total_tests_run:
+            handles2, labels2 = ax2.get_legend_handles_labels()
+            ax1.legend(handles1 + handles2, labels1 + labels2)
+        else:
+            ax1.legend(handles1, labels1)
+
+        fig.tight_layout()
+
+        out_name = f"{sanitize_filename(combo_key)}__machine_count_sweep.png"
+        out_path = os.path.join(str(plots_dir), out_name)
+        fig.savefig(out_path, dpi=200)
+        plt.close(fig)
+        logger.info("Wrote plot to %s", out_path)
+
+
+def write_compare_bisect_strat_plots(
+    *,
+    plt,
+    batching_list: list[str],
+    bisection_list: list[str],
+    sweep_results: dict[str, list[dict]],
+    plots_dir: str,
+) -> None:
+    for batching_name in batching_list:
+        fig, ax = plt.subplots(figsize=(11, 6.5))
+        plotted = False
+
+        for bisection_name in bisection_list:
+            combo_key = f"{batching_name} + {bisection_name}"
+            rows = sweep_results.get(combo_key, [])
+            if not rows:
+                continue
+            xs = [r["multiplier"] for r in rows]
+            mean_ttc = [r["mean_time_to_culprit_hr"] for r in rows]
+            ax.plot(xs, mean_ttc, label=bisection_name, linewidth=2)
+            plotted = True
+
+        if not plotted:
+            plt.close(fig)
+            logger.warning(
+                "Skipping compare-bisect plot for batching=%s because no matching combo rows were found.",
+                batching_name,
+            )
+            continue
+
+        ax.set_xlabel("Worker pool multiplier (x)")
+        ax.set_ylabel("Mean time to culprit (hours)")
+        ax.set_title(
+            f"{batching_name}: FINAL mean TTC vs worker capacity by bisection strategy"
+        )
+        ax.grid(True, linestyle=":", linewidth=0.6)
+        ax.legend()
+        fig.tight_layout()
+
+        out_name = (
+            f"{sanitize_filename(batching_name)}__compare_bisect_strats__machine_count_sweep.png"
+        )
+        out_path = os.path.join(str(plots_dir), out_name)
+        fig.savefig(out_path, dpi=200)
+        plt.close(fig)
+        logger.info("Wrote compare-bisect plot to %s", out_path)
 
 
 def main() -> None:
@@ -544,6 +660,7 @@ def main() -> None:
             "optimize_for_timeliness_metric": timeliness_metric_key,
             "baseline_opt_metric_multplier": baseline_opt_metric_multplier,
             "skip_exhaustive_testing": bool(getattr(args, "skip_exhaustive_testing", False)),
+            "compare_bisect_strats": bool(getattr(args, "compare_bisect_strats", False)),
         },
         "results": sweep_results,
     }
@@ -567,50 +684,27 @@ def main() -> None:
             "(or run with --skip-plots)."
         ) from exc
 
-    for combo_key in combo_keys:
-        rows = sweep_results.get(combo_key, [])
-        xs = [r["multiplier"] for r in rows]
-        mft = [r["mean_feedback_time_hr"] for r in rows]
-        mean_ttc = [r["mean_time_to_culprit_hr"] for r in rows]
-        max_ttc = [r["max_time_to_culprit_hr"] for r in rows]
-        tests = [r.get("total_tests_run", 0) for r in rows]
-
-        fig, ax1 = plt.subplots(figsize=(11, 6.5))
-        ax1.plot(xs, mft, label="mean_feedback_time_hr", linewidth=2)
-        ax1.plot(xs, mean_ttc, label="mean_time_to_culprit_hr", linewidth=2)
-        ax1.plot(xs, max_ttc, label="max_time_to_culprit_hr", linewidth=2)
-
-        ax1.set_xlabel("Worker pool multiplier (x)")
-        ax1.set_ylabel("Hours (lower is better)")
-        ax1.set_title(f"{combo_key}: FINAL latency vs worker capacity")
-        ax1.grid(True, linestyle=":", linewidth=0.6)
-
+    if args.compare_bisect_strats:
         if args.show_total_tests_run:
-            ax2 = ax1.twinx()
-            ax2.plot(
-                xs,
-                tests,
-                label="total_tests_run",
-                linewidth=2,
-                linestyle="--",
-                color="tab:gray",
+            logger.info(
+                "--show-total-tests-run is ignored when --compare-bisect-strats is set "
+                "because comparison plots only show mean_time_to_culprit_hr."
             )
-            ax2.set_ylabel("Total tests run")
-
-        handles1, labels1 = ax1.get_legend_handles_labels()
-        if args.show_total_tests_run:
-            handles2, labels2 = ax2.get_legend_handles_labels()
-            ax1.legend(handles1 + handles2, labels1 + labels2)
-        else:
-            ax1.legend(handles1, labels1)
-
-        fig.tight_layout()
-
-        out_name = f"{sanitize_filename(combo_key)}__machine_count_sweep.png"
-        out_path = os.path.join(str(args.plots_dir), out_name)
-        fig.savefig(out_path, dpi=200)
-        plt.close(fig)
-        logger.info("Wrote plot to %s", out_path)
+        write_compare_bisect_strat_plots(
+            plt=plt,
+            batching_list=batching_list,
+            bisection_list=bisection_list,
+            sweep_results=sweep_results,
+            plots_dir=str(args.plots_dir),
+        )
+    else:
+        write_standard_plots(
+            plt=plt,
+            combo_keys=combo_keys,
+            sweep_results=sweep_results,
+            plots_dir=str(args.plots_dir),
+            show_total_tests_run=bool(args.show_total_tests_run),
+        )
 
 
 if __name__ == "__main__":

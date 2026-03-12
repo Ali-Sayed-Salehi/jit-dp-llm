@@ -78,15 +78,27 @@ echo "Running script ..."
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --skip-exhaustive-testing \
-# --batching TWSB,RAPB,LAB,HATS \
-# --bisection PAR \
+# --compare-bisect-strats \
+# --batching "TWSB,\
+# TWB,TWB-s,TWB-hats,\
+# FSB,FSB-s,FSB-hats,\
+# RASB,RASB-s,RASB-hats,\
+# RASB-la,RASB-la-s,RASB-la-hats,\
+# RAPB,RAPB-s,RAPB-hats,\
+# RAPB-la,RAPB-la-s,RAPB-la-hats,\
+# RATB,RATB-s,RATB-hats,\
+# LAB,LAB-s,LAB-hats,\
+# LARAB,LARAB-s,LARAB-hats,\
+# LARAB-la,LARAB-la-s,LARAB-la-hats,\
+# HATS,RAHATS,RAHATS-la,ARAHATS,ARAHATS-la" \
+# --bisection PAR,TOB,RWAB,RWAB-LS,TKRB \
 # --optimize-for-timeliness-metric max_ttc \
 # --baseline-opt-metric-multplier 2 \
 # --base-workers-android 60 \
 # --base-workers-windows 120 \
 # --base-workers-linux 100 \
 # --base-workers-mac 250 \
-# --multiplier-list "0.2,0.35,0.5,1,3,5" \
+# --multiplier-list "0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1,1.5,2,2.5,3,4" \
 # --unknown-platform-pool mac \
 # --log-level INFO
 
