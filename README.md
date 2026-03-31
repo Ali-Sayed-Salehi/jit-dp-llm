@@ -1,6 +1,8 @@
 # Replication Package for "Risk-Aware Batch Testing for Performance Regression Detection"
 
-This repository is the replication package for the paper **"Risk-Aware Batch Testing for Performance Regression Detection"**. The manuscript is included in this repository as `Batching_for_Performance_Testing.pdf`.
+This repository is the replication package for the paper **"Risk-Aware Batch Testing for Performance Regression Detection"**.
+
+The companion **JIT-Mozilla-Perf** dataset is also archived separately on Zenodo at **https://doi.org/10.5281/zenodo.18829344**.
 
 The package supports reproduction of the full paper workflow:
 
@@ -21,7 +23,6 @@ The paper evaluates ModernBERT, CodeBERT, and LLaMA 3.1 8B as commit-level perfo
 
 The paper has three main technical components, each mapped to concrete repository paths.
 
-- **Paper**: `Batching_for_Performance_Testing.pdf`
 - **Dataset construction**: `data_extraction/treeherder/`, `data_extraction/bugzilla/`, `data_extraction/mercurial/`, and `data_extraction/data_preparation.py`
 - **Packaged dataset artifacts**: `datasets/mozilla_perf/`
 - **Model download, training, and inference**: `llama/`
@@ -68,6 +69,8 @@ The paper has three main technical components, each mapped to concrete repositor
 
 The core modeling dataset is stored under `datasets/mozilla_perf/`.
 
+The archived Zenodo release of the JIT-Mozilla-Perf dataset is available at **https://doi.org/10.5281/zenodo.18829344**. The files under `datasets/mozilla_perf/` in this replication package correspond to the same paper dataset family and are the artifacts consumed by the training and simulation code documented here.
+
 - `perf_llm_struc.jsonl`
   Primary structured-diff dataset used in the paper. It contains **11,384** chronologically ordered commit instances.
 - `perf_llm_struc_no_fw_2_6_18.jsonl`
@@ -91,15 +94,6 @@ The repository already includes prediction JSON files that can be used directly 
 
 - `analysis/batch_testing/final_test_results_perf_codebert_eval.json`
 - `analysis/batch_testing/final_test_results_perf_codebert_final_test.json`
-- `analysis/batch_testing/archive/final_test_results_perf_mbert_eval.json`
-- `analysis/batch_testing/archive/final_test_results_perf_mbert_final_test.json`
-
-The CodeBERT final-test prediction file reports a ROC-AUC of `0.6941`, matching the paper's reported CodeBERT test ROC-AUC at the displayed precision.
-
-### Packaged analysis artifacts
-
-- `analysis/batch_testing/results/machine_count_sweep.json`
-  Output of the worker-capacity sweep analysis.
 
 ## Environment Setup
 
@@ -132,7 +126,6 @@ python analysis/batch_testing/simulation.py \
   --mopt-trials 50 \
   --skip-exhaustive-testing \
   --optimize-for-timeliness-metric max_ttc \
-  --baseline-opt-metric-multplier 2 \
   --workers-android 60 \
   --workers-windows 120 \
   --workers-linux 100 \
@@ -218,15 +211,6 @@ python llama/run_inference.py \
   --eval_ds_as_final_test
 ```
 
-### 5. Generate historical repeat counts for HATS-style policies
-
-This step is needed for the history-aware subset-suite strategies used in the simulator.
-
-```bash
-python data_extraction/treeherder/find_historical_risk_scores.py \
-  --eval-preds-json analysis/batch_testing/final_test_results_perf_codebert_eval.json
-```
-
 ### 6. Run the simulator
 
 ```bash
@@ -245,12 +229,7 @@ For each batching and bisection configuration, the simulator reports:
 - mean feedback time,
 - mean time-to-culprit,
 - maximum time-to-culprit,
-- percentile TTC metrics,
 - number of true regressors found, and
 - feasibility with respect to detecting all regressors.
 
 These are the metrics used in the paper's cost-latency comparisons and Pareto analysis.
-
-## Citation
-
-If you use this replication package, please cite the paper and the software artifacts in this repository. See `CITATION.cff`.
