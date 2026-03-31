@@ -71,20 +71,13 @@ The core modeling dataset is stored under `datasets/mozilla_perf/`.
 
 The archived Zenodo release of the JIT-Mozilla-Perf dataset is available at **https://doi.org/10.5281/zenodo.18829344**. The files under `datasets/mozilla_perf/` in this replication package correspond to the same paper dataset family and are the artifacts consumed by the training and simulation code documented here.
 
-- `perf_llm_struc.jsonl`
-  Primary structured-diff dataset used in the paper. It contains **11,384** chronologically ordered commit instances.
 - `perf_llm_struc_no_fw_2_6_18.jsonl`
-  Post-processed variant that relabels commits after excluding selected Treeherder frameworks. This is the default dataset in the perf-specific training templates shipped in `llama/configs/templates/`.
+  Primary structured-diff dataset used in the paper. It contains **11,384** chronologically ordered commit instances.
 - `perf_bugs_with_diff.jsonl`
   Bug-linked net diffs extracted from Mozilla Autoland and aligned to Bugzilla performance bugs.
 - `alert_summary_fail_perf_sigs.csv`, `all_signatures.jsonl`, `sig_groups.jsonl`, `sig_group_job_durations.csv`, and `perf_jobs_per_revision_details_rectified.jsonl`
   Simulation metadata used to model test selection, signature-group coverage, and job duration.
 
-For the primary paper dataset `perf_llm_struc.jsonl`, the chronological split implemented by the training pipeline is:
-
-- Train: `7399` instances = `7328` clean + `71` regressors
-- Eval: `1138` instances = `1126` clean + `12` regressors
-- Test: `2847` instances = `2832` clean + `15` regressors
 
 These counts match the split reported in the paper.
 
