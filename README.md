@@ -287,12 +287,7 @@ splits, stored in this repository as:
 After generating the risk prediction JSON files, run `analysis/git_bisect/simulate.py` as shown in
 the quick-start section.
 
-## Included Split Sizes and Main Result Files
-
-The chronological splits used by the paper are reflected directly in the included artifacts:
-
-- evaluation split: 7,833 risk-scored examples
-- final-test split: 19,586 risk-scored examples
+## Included Main Result Files
 
 The main simulation outputs bundled with this package are:
 
