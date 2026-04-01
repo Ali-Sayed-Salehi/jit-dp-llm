@@ -133,8 +133,10 @@ differences.
   files with abbreviated strategy codes such as `RWLBS` and `RWLBLS`.
 - The paper's **RiskWeightedBisectionSum** and **RiskWeightedBisectionLogSurvival** appear in
   result files as `RWBS` and `RWBLS`.
-- Adaptive and constrained variants are encoded with suffixes in the simulator:
-  `-AD` for adaptive decrease, `-AI` for adaptive increase, and `-FF` for forced fallback.
+- Adaptive (dynamic) and constrained variants are encoded with suffixes in the simulator:
+  `-AD` for adaptive decrease is the same as -DD for dynamic decrease,
+  `-AI` for adaptive increase is the same as -DI for dynamic increase,
+  and `-FF` for forced fallback.
 - The paper refers to the dataset generically as MozillaJIT, but the snapshot files included in
   this repository use historical filenames such as `mozilla_jit_2022.jsonl` and
   `jit_llm_struc_2022.jsonl`.
