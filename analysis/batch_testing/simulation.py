@@ -410,6 +410,14 @@ def _split_metadata_for_output(
     }
 
 
+def _window_for_output(lower_cutoff, upper_cutoff) -> dict:
+    """Build a small JSON-serializable window payload for top-level outputs."""
+    return {
+        "lower": lower_cutoff.isoformat() if lower_cutoff is not None else None,
+        "upper": upper_cutoff.isoformat() if upper_cutoff is not None else None,
+    }
+
+
 def get_args():
     """
     Parse CLI arguments for evaluation/final runs.
@@ -2042,10 +2050,7 @@ def run_final_test_unified(
 
     final_results = {
         "Exhaustive Testing (ET)": et_results_final,
-        "final_window": {
-            "lower": final_lower.isoformat(),
-            "upper": final_upper.isoformat() if final_upper else None,
-        },
+        "final_window": _window_for_output(final_lower, final_upper),
         "splits": {
             "eval": (
                 eval_payload.get("eval_output", {}).get("splits", {}).get("eval")
@@ -2524,6 +2529,9 @@ def main():
 
         # Ensure split metadata is present even when reusing older eval files.
         if isinstance(reused_eval_output, dict):
+            reused_eval_output["eval_window"] = _window_for_output(
+                eval_lower, eval_upper
+            )
             reused_eval_output["splits"] = split_metadata
 
         # Shape expected by run_final_test_unified
@@ -2567,6 +2575,9 @@ def main():
         raise RuntimeError("Evaluation was unsuccessful. No eval payload present")
 
     if isinstance(eval_payload.get("eval_output"), dict):
+        eval_payload["eval_output"]["eval_window"] = _window_for_output(
+            eval_lower, eval_upper
+        )
         eval_payload["eval_output"]["splits"] = split_metadata
 
     os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
