@@ -12,6 +12,7 @@ Outputs:
       Measurements fetched with `replicates=True`
 
 Each JSONL line contains only:
+  - `signature_id`
   - `filter_stats`
   - `perf_measurement_data`
 
@@ -342,6 +343,7 @@ def process_signatures(
         )
 
         record = {
+            "signature_id": signature_id,
             "filter_stats": filter_stats,
             "perf_measurement_data": filtered_measurements,
         }
