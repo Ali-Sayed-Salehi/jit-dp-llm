@@ -11,8 +11,13 @@ Outputs:
   - `datasets/mozilla_perf_bisect/per_sig_perf_data_replicates.jsonl`
       Measurements fetched with `replicates=True`
 
-Each JSONL line contains one signature and its filtered `performance/summary`
-measurement payload.
+Each JSONL line contains only:
+  - `filter_stats`
+  - `perf_measurement_data`
+
+The script preserves that minimal output shape while still supporting restartable
+writes by inferring already-processed signatures from line order when explicit
+signature metadata is absent.
 
 Time window:
   - Inclusive start: 2025-06-01T00:00:00+00:00
@@ -21,7 +26,8 @@ Time window:
 Notes:
   - Treeherder's `interval` is a relative lookback from "now", so we fetch a
     lookback large enough to cover the start date, then filter measurements by
-    `submit_time` into the target UTC window.
+    `submit_time` into the target UTC window. Measurements with missing, blank,
+    or unparseable `submit_time` are retained.
   - `--debug` restricts processing to 2 signatures for both output files.
   - Outputs are restartable: if a JSONL already exists, signatures already
     present in that file are skipped unless `--overwrite` is used.
@@ -179,16 +185,20 @@ def iter_jsonl(path: str):
                 continue
 
 
-def load_processed_signature_ids(path: str) -> set[int]:
+def load_processed_signature_ids(path: str, signature_ids: list[int]) -> set[int]:
     if not os.path.exists(path):
         return set()
 
     processed: set[int] = set()
+    inferred_processed_count = 0
     for record in iter_jsonl(path):
         if not isinstance(record, dict):
             continue
         signature_id = record.get("signature_id")
         if signature_id is None:
+            if inferred_processed_count < len(signature_ids):
+                processed.add(signature_ids[inferred_processed_count])
+                inferred_processed_count += 1
             continue
         try:
             processed.add(int(signature_id))
@@ -254,25 +264,26 @@ def filter_measurements_to_window(
     stats = {
         "raw_measurements": len(measurements),
         "kept_measurements": 0,
-        "filtered_before_start": 0,
+        "kept_missing_submit_time": 0,
+        "kept_unparseable_submit_time": 0,
         "filtered_on_or_after_end": 0,
-        "filtered_missing_submit_time": 0,
-        "filtered_unparseable_submit_time": 0,
     }
 
     for row in measurements:
         submit_time = row.get("submit_time")
-        if submit_time is None:
-            stats["filtered_missing_submit_time"] += 1
+        submit_time_value = "" if submit_time is None else str(submit_time).strip()
+        if not submit_time_value:
+            kept.append(row)
+            stats["kept_missing_submit_time"] += 1
             continue
 
-        submit_dt = parse_iso_datetime(str(submit_time))
+        submit_dt = parse_iso_datetime(submit_time_value)
         if submit_dt is None:
-            stats["filtered_unparseable_submit_time"] += 1
+            kept.append(row)
+            stats["kept_unparseable_submit_time"] += 1
             continue
 
         if submit_dt < START_DATE:
-            stats["filtered_before_start"] += 1
             continue
 
         if submit_dt >= END_DATE_EXCLUSIVE:
@@ -307,7 +318,7 @@ def process_signatures(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     truncate_if_requested(output_path, overwrite)
 
-    processed = load_processed_signature_ids(output_path)
+    processed = load_processed_signature_ids(output_path, signature_ids)
     total = len(signature_ids)
 
     print(
@@ -331,14 +342,8 @@ def process_signatures(
         )
 
         record = {
-            "signature_id": signature_id,
-            "repository": REPOSITORY,
-            "replicates": replicates,
-            "start_date_utc": START_DATE.isoformat(),
-            "end_date_exclusive_utc": END_DATE_EXCLUSIVE.isoformat(),
-            "interval_seconds": interval_seconds,
-            "perf_measurement_data": filtered_measurements,
             "filter_stats": filter_stats,
+            "perf_measurement_data": filtered_measurements,
         }
         append_jsonl(output_path, record)
         processed.add(signature_id)

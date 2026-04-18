@@ -41,7 +41,7 @@ OUTPUT_CSV = os.path.join(
 )
 
 EXCLUDED_FRAMEWORKS = {2, 6, 18}
-CREATED_CUTOFF = datetime(2025, 6, 19, tzinfo=UTC)
+CREATED_CUTOFF = datetime(2025, 6, 20, tzinfo=UTC)
 
 
 def parse_created(created_raw: str) -> datetime | None:
