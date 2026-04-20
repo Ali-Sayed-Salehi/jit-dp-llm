@@ -416,6 +416,7 @@ def write_output_jsonl(
                 total_samples_written += len(perf_measurement_data)
 
             output_record = dict(entry.record)
+            output_record.pop("desc", None)
             output_record["perf_measurement_data"] = perf_measurement_data
             f.write(json.dumps(output_record))
             f.write("\n")
