@@ -3,7 +3,7 @@
 #SBATCH --job-name=extract-data
 #SBATCH --output=/speed-scratch/a_s87063/repos/jit-dp-llm/slurm_jobs/%x-%j.out
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=100G
+#SBATCH --mem=50G
 #SBATCH --time=168:00:00
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
@@ -31,5 +31,46 @@ echo "running the data extraction script . . ."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/get_bug_diffs.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/fetch_all_commit.py
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode mozilla_jit_struc
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode mozilla_jit_struc
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_all_drevs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_drevs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_duration.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_failing_perf_sigs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_num_perf_tests.py --debug
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_job_wait_times.py --dry-run
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_ttc_stats.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_all_bugs.py --start-offset 83250
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/link_bug_diffs.py --cutoff-date 2025-01-01
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_sigs_per_job.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_sigs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_sig_groups.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/rectify_job_count_per_revision.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/filter_perf_llm_struc.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/find_historical_risk_scores.py \
+# --eval-preds-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_eval.json
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/filter_fail_perf_sigs.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_test_data_per_sig.py --debug --overwrite
+
+
 echo "extraction finished"
