@@ -29,6 +29,8 @@ Notes:
     lookback large enough to cover the start date, then filter measurements by
     `submit_time` into the target UTC window. Measurements with missing, blank,
     or unparseable `submit_time` are retained.
+  - Per-signature replicate counts are derived separately by
+    `get_perf_data_info.py` from `per_sig_perf_data_replicates.jsonl`.
   - `--debug` restricts processing to 2 signatures for both output files.
   - Outputs are restartable: if a JSONL already exists, signatures already
     present in that file are skipped unless `--overwrite` is used.
