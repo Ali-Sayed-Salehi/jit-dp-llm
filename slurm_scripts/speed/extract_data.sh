@@ -72,6 +72,8 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_test_data_per_sig.py --debug --overwrite
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_data_info.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_data_info.py
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_test_data_per_revision.py
 
 echo "extraction finished"
