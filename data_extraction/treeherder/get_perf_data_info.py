@@ -18,12 +18,12 @@ Each JSONL line contains only:
   - `replicate_counts`
   - `job_duration`
 
-`replicate_counts` is inferred by sampling measurements from the input record's
-`perf_measurement_data`, taking each sampled row's `id`, and counting how many
-measurements in that same signature share that `id`. Sampling continues until
-two back-to-back draws produce the same replicate count; mismatches emit
-warnings. The sample sequence is pseudo-random but deterministic per signature
-so reruns keep the same value.
+`replicate_counts` is inferred by sorting the input record's
+`perf_measurement_data` chronologically, taking the newest row's `id`, and
+counting how many measurements in that same signature share that `id`.
+Validation then walks backward to the next older row with a different `id` and
+compares its replicate count against the newest sample's count. Mismatches emit
+warnings and keep the larger of the two replicate counts.
 
 Notes:
   - `--debug` restricts processing to 2 signatures.
@@ -39,7 +39,6 @@ from collections import Counter
 import csv
 import json
 import os
-import random
 from typing import Any
 
 
@@ -235,38 +234,80 @@ def load_group_to_duration_minutes(durations_csv: str) -> dict[int, float]:
     return group_to_duration
 
 
+def measurement_sort_key(
+    measurement: dict[str, Any],
+    *,
+    original_index: int,
+) -> tuple[str, int, int]:
+    push_timestamp = measurement.get("push_timestamp")
+    submit_time = measurement.get("submit_time")
+    push_id = measurement.get("push_id")
+
+    timestamp_key = ""
+    if isinstance(push_timestamp, str) and push_timestamp.strip():
+        timestamp_key = push_timestamp.strip()
+    elif isinstance(submit_time, str) and submit_time.strip():
+        timestamp_key = submit_time.strip()
+
+    try:
+        push_id_key = int(push_id)
+    except Exception:
+        push_id_key = -1
+
+    return (timestamp_key, push_id_key, original_index)
+
+
 def infer_replicate_counts(
     measurements: list[dict[str, Any]],
     *,
     signature_id: int,
 ) -> int:
-    measurement_ids = [
-        row_id
-        for row in measurements
-        if isinstance(row, dict) and (row_id := row.get("id")) is not None
+    ordered_measurements = [
+        row
+        for _, row in sorted(
+            (
+                (
+                    measurement_sort_key(row, original_index=original_index),
+                    row,
+                )
+                for original_index, row in enumerate(measurements)
+                if isinstance(row, dict) and row.get("id") is not None
+            ),
+            key=lambda item: item[0],
+        )
     ]
-    if not measurement_ids:
+    if not ordered_measurements:
         return 0
 
+    measurement_ids = [row["id"] for row in ordered_measurements]
     replicate_counts_by_id = Counter(measurement_ids)
-    unique_counts = set(replicate_counts_by_id.values())
-    if len(unique_counts) == 1:
-        return next(iter(unique_counts))
+    newest_measurement = ordered_measurements[-1]
+    newest_id = newest_measurement["id"]
+    newest_count = replicate_counts_by_id[newest_id]
 
-    rng = random.Random(signature_id)
-    previous_count = replicate_counts_by_id[rng.choice(measurement_ids)]
+    validation_measurement = None
+    for measurement in reversed(ordered_measurements[:-1]):
+        if measurement["id"] != newest_id:
+            validation_measurement = measurement
+            break
 
-    while True:
-        current_count = replicate_counts_by_id[rng.choice(measurement_ids)]
-        if current_count == previous_count:
-            return current_count
+    if validation_measurement is None:
+        return newest_count
 
+    validation_id = validation_measurement["id"]
+    validation_count = replicate_counts_by_id[validation_id]
+    if validation_count != newest_count:
+        selected_count = max(newest_count, validation_count)
         print(
             f"[WARN] Signature {signature_id} replicate count mismatch between "
-            f"consecutive samples: {previous_count} then {current_count}. "
-            "Retrying until two back-to-back samples agree."
+            f"newest sample id {newest_id!r} "
+            f"(push_timestamp={newest_measurement.get('push_timestamp')!r}) -> "
+            f"{newest_count} and older validation sample id {validation_id!r} "
+            f"(push_timestamp={validation_measurement.get('push_timestamp')!r}) "
+            f"-> {validation_count}. Keeping the larger count: {selected_count}."
         )
-        previous_count = current_count
+        return selected_count
+    return newest_count
 
 
 def process_signatures(
