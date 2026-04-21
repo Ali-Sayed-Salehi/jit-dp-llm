@@ -76,4 +76,6 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/get_perf_test_data_per_revision.py
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset.py
+
 echo "extraction finished"
