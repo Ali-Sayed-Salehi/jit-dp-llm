@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract per-signature replicate-count info from performance measurement data.
+Extract per-signature perf metadata from performance measurement data.
 
 Input:
   - `datasets/mozilla_perf_bisect/per_sig_perf_data_replicates.jsonl`
@@ -17,6 +17,9 @@ Each JSONL line contains only:
   - `signature_id`
   - `replicate_counts`
   - `job_duration`
+  - `lower_is_better`
+  - `alert_threshold`
+  - `platform`
 
 `replicate_counts` is inferred by sorting the input record's
 `perf_measurement_data` chronologically, taking the newest row's `id`, and
@@ -26,9 +29,12 @@ compares its replicate count against the newest sample's count. Mismatches emit
 warnings and keep the larger of the two replicate counts.
 
 Notes:
+  - `lower_is_better`, `alert_threshold`, and `platform` are fetched per
+    signature from Treeherder's `performance/summary` endpoint using a fixed
+    one-month lookback interval.
   - `--debug` restricts processing to 2 signatures.
   - Outputs are restartable: if the output JSONL already exists, signatures
-    already present in that file with a `job_duration` field are skipped unless
+    already present in that file with the full output schema are skipped unless
     `--overwrite` is used.
 """
 
@@ -40,6 +46,8 @@ import csv
 import json
 import os
 from typing import Any
+
+from requests.exceptions import RequestException, Timeout
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -64,13 +72,26 @@ DEFAULT_SIG_GROUP_DURATIONS_CSV = os.path.join(
 )
 
 DEBUG_SIGNATURE_LIMIT = 2
+REPOSITORY = "autoland"
+SUMMARY_METADATA_FIELDS = (
+    "lower_is_better",
+    "alert_threshold",
+    "platform",
+)
+REQUIRED_OUTPUT_FIELDS = (
+    "replicate_counts",
+    "job_duration",
+    *SUMMARY_METADATA_FIELDS,
+)
+SUMMARY_INTERVAL_SECONDS = 30 * 24 * 60 * 60
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Extract per-signature replicate counts from replicate measurement "
-            "JSONL produced by get_perf_test_data_per_sig.py."
+            "Extract per-signature replicate counts plus Treeherder summary "
+            "metadata from replicate measurement JSONL produced by "
+            "get_perf_test_data_per_sig.py."
         )
     )
     parser.add_argument(
@@ -81,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT_JSONL,
-        help="Output JSONL path for per-signature replicate-count info.",
+        help="Output JSONL path for per-signature perf metadata.",
     )
     parser.add_argument(
         "--sig-groups-jsonl",
@@ -134,6 +155,52 @@ def truncate_if_requested(path: str, overwrite: bool) -> None:
         os.remove(path)
 
 
+def record_has_required_fields(record: dict[str, Any]) -> bool:
+    return all(field in record for field in REQUIRED_OUTPUT_FIELDS)
+
+
+def normalize_existing_output(path: str) -> None:
+    if not os.path.exists(path):
+        return
+
+    records_by_signature_id: dict[int, dict[str, Any]] = {}
+    changed = False
+
+    for record in iter_jsonl(path):
+        if not isinstance(record, dict):
+            changed = True
+            continue
+
+        raw_signature_id = record.get("signature_id")
+        try:
+            signature_id = int(raw_signature_id)
+        except Exception:
+            changed = True
+            continue
+
+        normalized_record = dict(record)
+        normalized_record["signature_id"] = signature_id
+        if not record_has_required_fields(normalized_record):
+            changed = True
+            continue
+
+        if signature_id in records_by_signature_id:
+            changed = True
+        records_by_signature_id[signature_id] = normalized_record
+
+    if not changed:
+        return
+
+    with open(path, "w", encoding="utf-8") as f:
+        for record in records_by_signature_id.values():
+            f.write(json.dumps(record) + "\n")
+
+    print(
+        f"Normalized existing output at {path}; kept "
+        f"{len(records_by_signature_id)} complete signature records."
+    )
+
+
 def load_processed_signature_ids(path: str) -> set[int]:
     if not os.path.exists(path):
         return set()
@@ -144,7 +211,7 @@ def load_processed_signature_ids(path: str) -> set[int]:
             continue
 
         signature_id = record.get("signature_id")
-        if "job_duration" not in record:
+        if not record_has_required_fields(record):
             continue
         try:
             processed.add(int(signature_id))
@@ -310,12 +377,61 @@ def infer_replicate_counts(
     return newest_count
 
 
+def fetch_signature_summary_metadata(
+    client: Any,
+    signature_id: int,
+    *,
+    interval_seconds: int,
+) -> dict[str, Any]:
+    params = {
+        "repository": REPOSITORY,
+        "signature": signature_id,
+        "interval": interval_seconds,
+        "all_data": True,
+        "replicates": False,
+    }
+
+    try:
+        summary_list = client._get_json("performance/summary", **params)
+    except Timeout as e:
+        print(f"[WARN] Timeout fetching summary metadata for signature {signature_id}: {e}")
+        return {field: None for field in SUMMARY_METADATA_FIELDS}
+    except RequestException as e:
+        print(
+            f"[WARN] Request error fetching summary metadata for signature "
+            f"{signature_id}: {e}"
+        )
+        return {field: None for field in SUMMARY_METADATA_FIELDS}
+    except Exception as e:
+        print(
+            f"[WARN] Unexpected error fetching summary metadata for signature "
+            f"{signature_id}: {e}"
+        )
+        return {field: None for field in SUMMARY_METADATA_FIELDS}
+
+    if not summary_list:
+        print(f"[WARN] No Treeherder summary returned for signature {signature_id}.")
+        return {field: None for field in SUMMARY_METADATA_FIELDS}
+
+    first_summary = summary_list[0]
+    if not isinstance(first_summary, dict):
+        print(
+            f"[WARN] Treeherder summary for signature {signature_id} had an "
+            "unexpected shape."
+        )
+        return {field: None for field in SUMMARY_METADATA_FIELDS}
+
+    return {field: first_summary.get(field) for field in SUMMARY_METADATA_FIELDS}
+
+
 def process_signatures(
+    client: Any,
     input_jsonl: str,
     output_path: str,
     signature_to_group_id: dict[int, int],
     group_to_duration_minutes: dict[int, float],
     *,
+    interval_seconds: int,
     limit: int,
     overwrite: bool,
 ) -> None:
@@ -327,13 +443,15 @@ def process_signatures(
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     truncate_if_requested(output_path, overwrite)
+    normalize_existing_output(output_path)
 
     processed = load_processed_signature_ids(output_path)
     scoped_total = 0
 
     print(
         f"Processing signatures from {input_jsonl} into {output_path} "
-        f"(already_have={len(processed)}, limit={limit or 'all'})."
+        f"(already_have={len(processed)}, limit={limit or 'all'}, "
+        f"summary_interval={interval_seconds}s)."
     )
 
     for record in iter_jsonl(input_jsonl):
@@ -377,6 +495,11 @@ def process_signatures(
                     f"[WARN] No duration_minutes found for Sig_group_id {group_id} "
                     f"(signature {signature_id})."
                 )
+        summary_metadata = fetch_signature_summary_metadata(
+            client,
+            signature_id,
+            interval_seconds=interval_seconds,
+        )
 
         append_jsonl(
             output_path,
@@ -384,6 +507,7 @@ def process_signatures(
                 "signature_id": signature_id,
                 "replicate_counts": replicate_counts,
                 "job_duration": job_duration,
+                **summary_metadata,
             },
         )
         processed.add(signature_id)
@@ -394,16 +518,27 @@ def process_signatures(
 def main() -> int:
     args = parse_args()
 
+    try:
+        from thclient import TreeherderClient  # type: ignore
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "Missing dependency 'thclient'. Install the Treeherder client "
+            "dependency in your Python environment and re-run."
+        ) from e
+
     limit = DEBUG_SIGNATURE_LIMIT if args.debug else args.limit
     signature_to_group_id = load_signature_to_group_id(args.sig_groups_jsonl)
     group_to_duration_minutes = load_group_to_duration_minutes(
         args.sig_group_durations_csv
     )
+    client = TreeherderClient()
     process_signatures(
+        client,
         args.input_jsonl,
         args.output,
         signature_to_group_id,
         group_to_duration_minutes,
+        interval_seconds=SUMMARY_INTERVAL_SECONDS,
         limit=limit,
         overwrite=args.overwrite,
     )
