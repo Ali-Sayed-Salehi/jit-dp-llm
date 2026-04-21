@@ -396,6 +396,11 @@ def create_dataset(
                 stats["rows_skipped_non_forward_revision_range"] += 1
                 continue
 
+            num_candidate_revisions = bad_index - good_index - 1
+            if num_candidate_revisions <= 1:
+                stats["rows_skipped_too_few_candidate_revisions"] += 1
+                continue
+
             try:
                 alerts = parse_alerts(row.get("alerts") or "", row_num=row_num)
             except ValueError as e:
@@ -416,7 +421,7 @@ def create_dataset(
                 "alert_summary_id": summary_id,
                 "good_revision": good_revision,
                 "bad_revision": bad_revision,
-                "num_candidate_revisions": bad_index - good_index - 1,
+                "num_candidate_revisions": num_candidate_revisions,
                 "culprit_revision": culprit_revision,
                 "failing_sigs": failing_sigs,
             }
@@ -455,6 +460,10 @@ def create_dataset(
     print(
         "  rows_skipped_non_forward_revision_range="
         f"{stats['rows_skipped_non_forward_revision_range']}"
+    )
+    print(
+        "  rows_skipped_too_few_candidate_revisions="
+        f"{stats['rows_skipped_too_few_candidate_revisions']}"
     )
     print(
         "  failing_sigs_missing_alert_threshold="
