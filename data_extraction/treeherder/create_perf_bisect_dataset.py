@@ -9,7 +9,7 @@ Inputs:
   - Optional: `datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl`
 
 Output:
-  - `datasets/mozilla_perf/perf_bisect_regressions.jsonl`
+  - `datasets/mozilla_perf_bisect/perf_bisect_regressions.jsonl`
 
 Each output JSONL row contains:
   - `alert_summary_id`
@@ -81,7 +81,7 @@ DEFAULT_SIG_INFO_JSONL = os.path.join(
 DEFAULT_OUTPUT_JSONL = os.path.join(
     REPO_ROOT,
     "datasets",
-    "mozilla_perf",
+    "mozilla_perf_bisect",
     "perf_bisect_regressions.jsonl",
 )
 
