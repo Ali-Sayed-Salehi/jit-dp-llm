@@ -84,6 +84,7 @@ REQUIRED_OUTPUT_FIELDS = (
     *SUMMARY_METADATA_FIELDS,
 )
 SUMMARY_INTERVAL_SECONDS = 30 * 24 * 60 * 60
+DEFAULT_ALERT_THRESHOLD = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -159,6 +160,13 @@ def record_has_required_fields(record: dict[str, Any]) -> bool:
     return all(field in record for field in REQUIRED_OUTPUT_FIELDS)
 
 
+def normalize_alert_threshold(record: dict[str, Any]) -> dict[str, Any]:
+    normalized_record = dict(record)
+    if normalized_record.get("alert_threshold") is None:
+        normalized_record["alert_threshold"] = DEFAULT_ALERT_THRESHOLD
+    return normalized_record
+
+
 def normalize_existing_output(path: str) -> None:
     if not os.path.exists(path):
         return
@@ -178,7 +186,7 @@ def normalize_existing_output(path: str) -> None:
             changed = True
             continue
 
-        normalized_record = dict(record)
+        normalized_record = normalize_alert_threshold(record)
         normalized_record["signature_id"] = signature_id
         if not record_has_required_fields(normalized_record):
             changed = True
@@ -395,23 +403,31 @@ def fetch_signature_summary_metadata(
         summary_list = client._get_json("performance/summary", **params)
     except Timeout as e:
         print(f"[WARN] Timeout fetching summary metadata for signature {signature_id}: {e}")
-        return {field: None for field in SUMMARY_METADATA_FIELDS}
+        return normalize_alert_threshold(
+            {field: None for field in SUMMARY_METADATA_FIELDS}
+        )
     except RequestException as e:
         print(
             f"[WARN] Request error fetching summary metadata for signature "
             f"{signature_id}: {e}"
         )
-        return {field: None for field in SUMMARY_METADATA_FIELDS}
+        return normalize_alert_threshold(
+            {field: None for field in SUMMARY_METADATA_FIELDS}
+        )
     except Exception as e:
         print(
             f"[WARN] Unexpected error fetching summary metadata for signature "
             f"{signature_id}: {e}"
         )
-        return {field: None for field in SUMMARY_METADATA_FIELDS}
+        return normalize_alert_threshold(
+            {field: None for field in SUMMARY_METADATA_FIELDS}
+        )
 
     if not summary_list:
         print(f"[WARN] No Treeherder summary returned for signature {signature_id}.")
-        return {field: None for field in SUMMARY_METADATA_FIELDS}
+        return normalize_alert_threshold(
+            {field: None for field in SUMMARY_METADATA_FIELDS}
+        )
 
     first_summary = summary_list[0]
     if not isinstance(first_summary, dict):
@@ -419,9 +435,13 @@ def fetch_signature_summary_metadata(
             f"[WARN] Treeherder summary for signature {signature_id} had an "
             "unexpected shape."
         )
-        return {field: None for field in SUMMARY_METADATA_FIELDS}
+        return normalize_alert_threshold(
+            {field: None for field in SUMMARY_METADATA_FIELDS}
+        )
 
-    return {field: first_summary.get(field) for field in SUMMARY_METADATA_FIELDS}
+    return normalize_alert_threshold(
+        {field: first_summary.get(field) for field in SUMMARY_METADATA_FIELDS}
+    )
 
 
 def process_signatures(
