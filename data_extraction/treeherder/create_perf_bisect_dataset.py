@@ -17,9 +17,10 @@ Each output JSONL row contains:
   - `bad_revision`
   - `num_candidate_revisions`
   - `culprit_revision`
-  - `failing_sigs`
+  - `failing_sig`
 
-`failing_sigs` is a dict keyed by signature id string. Each value contains:
+`failing_sig` contains exactly one failing signature:
+  - `signature_id`
   - `Good_value`
   - `bad_value`
   - `alert_threshold`
@@ -281,15 +282,19 @@ def parse_alerts(raw_alerts: str, *, row_num: int) -> list[dict[str, Any]]:
     return [alert for alert in parsed if isinstance(alert, dict)]
 
 
-def build_failing_sigs(
+def build_failing_sig_records(
     alerts: list[dict[str, Any]],
     *,
     signature_metadata: dict[int, dict[str, Any]],
     stats: Counter[str],
-) -> dict[str, dict[str, Any]]:
-    failing_sigs: dict[str, dict[str, Any]] = {}
+) -> list[dict[str, Any]]:
+    failing_sig_records: list[dict[str, Any]] = []
+    seen_signature_ids: set[int] = set()
 
     for alert in alerts:
+        if not alert.get("is_regression"):
+            continue
+
         series_signature = alert.get("series_signature")
         if not isinstance(series_signature, dict):
             stats["alerts_missing_series_signature"] += 1
@@ -302,10 +307,10 @@ def build_failing_sigs(
             stats["alerts_missing_signature_id"] += 1
             continue
 
-        signature_key = str(signature_id)
-        if signature_key in failing_sigs:
+        if signature_id in seen_signature_ids:
             stats["duplicate_signature_ids_within_summary"] += 1
             continue
+        seen_signature_ids.add(signature_id)
 
         metadata = signature_metadata.get(signature_id, {})
         alert_threshold = metadata.get("alert_threshold")
@@ -322,14 +327,48 @@ def build_failing_sigs(
         if platform is None:
             stats["failing_sigs_missing_platform"] += 1
 
-        failing_sigs[signature_key] = {
-            "Good_value": alert.get("prev_value"),
-            "bad_value": alert.get("new_value"),
-            "alert_threshold": alert_threshold,
-            "platform": platform,
-        }
+        failing_sig_records.append(
+            {
+                "signature_id": signature_id,
+                "Good_value": alert.get("prev_value"),
+                "bad_value": alert.get("new_value"),
+                "alert_threshold": alert_threshold,
+                "platform": platform,
+            }
+        )
 
-    return failing_sigs
+    return failing_sig_records
+
+
+def write_output_rows(
+    dst,
+    *,
+    summary_id: int,
+    good_revision: str,
+    bad_revision: str,
+    num_candidate_revisions: int,
+    culprit_revision: str,
+    failing_sig_records: list[dict[str, Any]],
+    stats: Counter[str],
+    limit: int,
+) -> bool:
+    for failing_sig in failing_sig_records:
+        if limit > 0 and stats["rows_written"] >= limit:
+            return True
+
+        output_record = {
+            "alert_summary_id": summary_id,
+            "good_revision": good_revision,
+            "bad_revision": bad_revision,
+            "num_candidate_revisions": num_candidate_revisions,
+            "culprit_revision": culprit_revision,
+            "failing_sig": failing_sig,
+        }
+        dst.write(json.dumps(output_record))
+        dst.write("\n")
+        stats["rows_written"] += 1
+
+    return False
 
 
 def create_dataset(
@@ -408,26 +447,28 @@ def create_dataset(
                 stats["rows_skipped_invalid_alerts"] += 1
                 continue
 
-            failing_sigs = build_failing_sigs(
+            failing_sig_records = build_failing_sig_records(
                 alerts,
                 signature_metadata=signature_metadata,
                 stats=stats,
             )
-            if not failing_sigs:
+            if not failing_sig_records:
                 stats["rows_skipped_no_valid_failing_sigs"] += 1
                 continue
 
-            output_record = {
-                "alert_summary_id": summary_id,
-                "good_revision": good_revision,
-                "bad_revision": bad_revision,
-                "num_candidate_revisions": num_candidate_revisions,
-                "culprit_revision": culprit_revision,
-                "failing_sigs": failing_sigs,
-            }
-            dst.write(json.dumps(output_record))
-            dst.write("\n")
-            stats["rows_written"] += 1
+            limit_reached = write_output_rows(
+                dst,
+                summary_id=summary_id,
+                good_revision=good_revision,
+                bad_revision=bad_revision,
+                num_candidate_revisions=num_candidate_revisions,
+                culprit_revision=culprit_revision,
+                failing_sig_records=failing_sig_records,
+                stats=stats,
+                limit=limit,
+            )
+            if limit_reached:
+                break
 
     print(f"Wrote {stats['rows_written']} rows to {output_jsonl}.")
     print("Summary:")
@@ -473,6 +514,8 @@ def create_dataset(
         "  failing_sigs_missing_platform="
         f"{stats['failing_sigs_missing_platform']}"
     )
+
+
 def main() -> None:
     args = parse_args()
     create_dataset(
