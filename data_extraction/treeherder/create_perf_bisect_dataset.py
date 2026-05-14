@@ -9,7 +9,8 @@ Inputs:
   - Optional: `datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl`
 
 Output:
-  - `datasets/mozilla_perf_bisect/perf_bisect_regressions.jsonl`
+  - `datasets/mozilla_perf_bisect/perf_bisect_regressions_eval.jsonl`
+  - `datasets/mozilla_perf_bisect/perf_bisect_regressions_final_test.jsonl`
 
 Each output JSONL row contains:
   - `alert_summary_id`
@@ -32,6 +33,9 @@ Implementation notes:
   - `num_candidate_revisions` is computed from commit indices in
     `all_commits.jsonl`, which is validated to be parent-before-child ordered.
     This avoids relying on Mercurial timestamps.
+  - Eval and final-test split boundaries are computed from the shuffled
+    `samples` arrays in the prediction JSON files by locating those commits in
+    the parent-before-child `all_commits.jsonl` order.
   - If `per_sig_perf_data_info.jsonl` is present, its `alert_threshold` and
     `platform` fields are used. Otherwise `alert_threshold` remains `null`,
     and `platform` falls back to the alert payload's
@@ -44,6 +48,7 @@ import argparse
 import ast
 from collections import Counter
 import csv
+from dataclasses import dataclass
 import json
 import os
 import sys
@@ -79,21 +84,52 @@ DEFAULT_SIG_INFO_JSONL = os.path.join(
     "mozilla_perf_bisect",
     "per_sig_perf_data_info.jsonl",
 )
-DEFAULT_OUTPUT_JSONL = os.path.join(
+DEFAULT_EVAL_PREDS_JSON = os.path.join(
     REPO_ROOT,
     "datasets",
     "mozilla_perf_bisect",
-    "perf_bisect_regressions.jsonl",
+    "final_test_results_perf_codebert_eval.json",
+)
+DEFAULT_FINAL_TEST_PREDS_JSON = os.path.join(
+    REPO_ROOT,
+    "datasets",
+    "mozilla_perf_bisect",
+    "final_test_results_perf_codebert_final_test.json",
+)
+DEFAULT_EVAL_OUTPUT_JSONL = os.path.join(
+    REPO_ROOT,
+    "datasets",
+    "mozilla_perf_bisect",
+    "perf_bisect_regressions_eval.jsonl",
+)
+DEFAULT_FINAL_TEST_OUTPUT_JSONL = os.path.join(
+    REPO_ROOT,
+    "datasets",
+    "mozilla_perf_bisect",
+    "perf_bisect_regressions_final_test.jsonl",
 )
 
 NULL_NODE = "0000000000000000000000000000000000000000"
 
 
+@dataclass(frozen=True)
+class SplitBoundary:
+    name: str
+    start_index: int
+    end_index: int
+    start_revision: str
+    end_revision: str
+    sample_count: int
+    unique_commit_count: int
+    known_commit_count: int
+    missing_commit_count: int
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create perf_bisect_regressions.jsonl from Treeherder alert "
-            "summaries and Mercurial commit history."
+            "Create eval and final-test perf bisect regression JSONL files "
+            "from Treeherder alert summaries and Mercurial commit history."
         )
     )
     parser.add_argument(
@@ -123,15 +159,35 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--output",
-        default=DEFAULT_OUTPUT_JSONL,
-        help="Output JSONL path.",
+        "--eval-preds-json",
+        default=DEFAULT_EVAL_PREDS_JSON,
+        help=(
+            "Prediction JSON whose samples define the eval split boundary."
+        ),
+    )
+    parser.add_argument(
+        "--final-test-preds-json",
+        default=DEFAULT_FINAL_TEST_PREDS_JSON,
+        help=(
+            "Prediction JSON whose samples define the final-test split "
+            "boundary."
+        ),
+    )
+    parser.add_argument(
+        "--eval-output",
+        default=DEFAULT_EVAL_OUTPUT_JSONL,
+        help="Eval output JSONL path.",
+    )
+    parser.add_argument(
+        "--final-test-output",
+        default=DEFAULT_FINAL_TEST_OUTPUT_JSONL,
+        help="Final-test output JSONL path.",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=0,
-        help="If > 0, stop after writing the first N output rows.",
+        help="If > 0, stop after writing the first N total output rows.",
     )
     return parser.parse_args()
 
@@ -201,6 +257,132 @@ def load_commit_indices(commits_jsonl: str) -> dict[str, int]:
 
     print(f"Loaded {total_commits} commits from {commits_jsonl}.")
     return node_to_index
+
+
+def load_prediction_sample_commit_ids(predictions_json: str) -> tuple[set[str], int]:
+    ensure_file_exists(predictions_json)
+
+    try:
+        with open(predictions_json, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {predictions_json}: {e}") from e
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Expected top-level object in {predictions_json}, "
+            f"got {type(payload).__name__}."
+        )
+
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        raise ValueError(
+            f"Expected {predictions_json} to contain a list field named "
+            "'samples'."
+        )
+
+    commit_ids: set[str] = set()
+    duplicate_commit_ids = 0
+    invalid_samples = 0
+
+    for sample in samples:
+        if not isinstance(sample, dict):
+            invalid_samples += 1
+            continue
+
+        commit_id = sample.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id.strip():
+            invalid_samples += 1
+            continue
+
+        commit_id = commit_id.strip()
+        if commit_id in commit_ids:
+            duplicate_commit_ids += 1
+        commit_ids.add(commit_id)
+
+    if not commit_ids:
+        raise ValueError(
+            f"No valid sample commit_id values found in {predictions_json}."
+        )
+
+    print(
+        f"Loaded {len(commit_ids)} unique sample commit ids from "
+        f"{len(samples)} samples in {predictions_json}."
+    )
+    if duplicate_commit_ids:
+        print(
+            f"[WARN] Ignored {duplicate_commit_ids} duplicate sample commit ids "
+            f"in {predictions_json}."
+        )
+    if invalid_samples:
+        print(
+            f"[WARN] Ignored {invalid_samples} samples without a valid commit_id "
+            f"in {predictions_json}."
+        )
+
+    return commit_ids, len(samples)
+
+
+def build_split_boundary(
+    *,
+    name: str,
+    predictions_json: str,
+    node_to_index: dict[str, int],
+) -> SplitBoundary:
+    commit_ids, sample_count = load_prediction_sample_commit_ids(predictions_json)
+
+    known_commits: list[tuple[int, str]] = []
+    missing_commit_count = 0
+    for commit_id in commit_ids:
+        index = node_to_index.get(commit_id)
+        if index is None:
+            missing_commit_count += 1
+            continue
+        known_commits.append((index, commit_id))
+
+    if not known_commits:
+        raise ValueError(
+            f"None of the sample commit ids in {predictions_json} were found "
+            "in all_commits.jsonl."
+        )
+
+    start_index, start_revision = min(known_commits)
+    end_index, end_revision = max(known_commits)
+
+    if missing_commit_count:
+        print(
+            f"[WARN] {missing_commit_count} unique sample commit ids from "
+            f"{predictions_json} were not found in all_commits.jsonl."
+        )
+
+    print(
+        f"{name} boundary: {start_revision} (index {start_index}) -> "
+        f"{end_revision} (index {end_index}); "
+        f"{len(known_commits)} known unique commits."
+    )
+
+    return SplitBoundary(
+        name=name,
+        start_index=start_index,
+        end_index=end_index,
+        start_revision=start_revision,
+        end_revision=end_revision,
+        sample_count=sample_count,
+        unique_commit_count=len(commit_ids),
+        known_commit_count=len(known_commits),
+        missing_commit_count=missing_commit_count,
+    )
+
+
+def revisions_within_boundary(
+    good_index: int,
+    bad_index: int,
+    boundary: SplitBoundary,
+) -> bool:
+    return (
+        boundary.start_index <= good_index <= boundary.end_index
+        and boundary.start_index <= bad_index <= boundary.end_index
+    )
 
 
 def load_signature_metadata(sig_info_jsonl: str) -> dict[int, dict[str, Any]]:
@@ -343,6 +525,7 @@ def build_failing_sig_records(
 def write_output_rows(
     dst,
     *,
+    split_name: str,
     summary_id: int,
     good_revision: str,
     bad_revision: str,
@@ -367,6 +550,7 @@ def write_output_rows(
         dst.write(json.dumps(output_record))
         dst.write("\n")
         stats["rows_written"] += 1
+        stats[f"rows_written_{split_name}"] += 1
 
     return False
 
@@ -377,24 +561,49 @@ def create_dataset(
     commits_jsonl: str,
     filter_csv: str,
     sig_info_jsonl: str,
-    output_jsonl: str,
+    eval_preds_json: str,
+    final_test_preds_json: str,
+    eval_output_jsonl: str,
+    final_test_output_jsonl: str,
     limit: int,
 ) -> None:
     ensure_file_exists(alert_summaries_csv)
     ensure_file_exists(commits_jsonl)
-    ensure_parent_dir(output_jsonl)
+    ensure_parent_dir(eval_output_jsonl)
+    ensure_parent_dir(final_test_output_jsonl)
 
     node_to_index = load_commit_indices(commits_jsonl)
+    eval_boundary = build_split_boundary(
+        name="eval",
+        predictions_json=eval_preds_json,
+        node_to_index=node_to_index,
+    )
+    final_test_boundary = build_split_boundary(
+        name="final_test",
+        predictions_json=final_test_preds_json,
+        node_to_index=node_to_index,
+    )
+    if (
+        eval_boundary.start_index <= final_test_boundary.end_index
+        and final_test_boundary.start_index <= eval_boundary.end_index
+    ):
+        print(
+            "[WARN] Eval and final-test split boundaries overlap; rows whose "
+            "good_revision and bad_revision fit both ranges will be written "
+            "to the eval output only."
+        )
+
     allowed_summary_ids = load_allowed_summary_ids(filter_csv)
     signature_metadata = load_signature_metadata(sig_info_jsonl)
     stats: Counter[str] = Counter()
     seen_summary_ids: set[int] = set()
 
     with open(alert_summaries_csv, "r", newline="", encoding="utf-8") as src, open(
-        output_jsonl, "w", encoding="utf-8"
-    ) as dst:
+        eval_output_jsonl, "w", encoding="utf-8"
+    ) as eval_dst, open(
+        final_test_output_jsonl, "w", encoding="utf-8"
+    ) as final_test_dst:
         reader = csv.DictReader(src)
-
         for row_num, row in enumerate(reader, start=2):
             if limit > 0 and stats["rows_written"] >= limit:
                 break
@@ -435,6 +644,27 @@ def create_dataset(
                 stats["rows_skipped_non_forward_revision_range"] += 1
                 continue
 
+            matches_eval = revisions_within_boundary(
+                good_index,
+                bad_index,
+                eval_boundary,
+            )
+            matches_final_test = revisions_within_boundary(
+                good_index,
+                bad_index,
+                final_test_boundary,
+            )
+
+            if matches_eval:
+                matching_outputs = [(eval_boundary.name, eval_dst)]
+                if matches_final_test:
+                    stats["rows_matching_multiple_split_boundaries"] += 1
+            elif matches_final_test:
+                matching_outputs = [(final_test_boundary.name, final_test_dst)]
+            else:
+                stats["rows_skipped_outside_split_boundaries"] += 1
+                continue
+
             num_candidate_revisions = bad_index - good_index - 1
             if num_candidate_revisions <= 1:
                 stats["rows_skipped_too_few_candidate_revisions"] += 1
@@ -456,24 +686,35 @@ def create_dataset(
                 stats["rows_skipped_no_valid_failing_sigs"] += 1
                 continue
 
-            limit_reached = write_output_rows(
-                dst,
-                summary_id=summary_id,
-                good_revision=good_revision,
-                bad_revision=bad_revision,
-                num_candidate_revisions=num_candidate_revisions,
-                culprit_revision=culprit_revision,
-                failing_sig_records=failing_sig_records,
-                stats=stats,
-                limit=limit,
-            )
+            for split_name, dst in matching_outputs:
+                limit_reached = write_output_rows(
+                    dst,
+                    split_name=split_name,
+                    summary_id=summary_id,
+                    good_revision=good_revision,
+                    bad_revision=bad_revision,
+                    num_candidate_revisions=num_candidate_revisions,
+                    culprit_revision=culprit_revision,
+                    failing_sig_records=failing_sig_records,
+                    stats=stats,
+                    limit=limit,
+                )
+                if limit_reached:
+                    break
             if limit_reached:
                 break
 
-    print(f"Wrote {stats['rows_written']} rows to {output_jsonl}.")
+    print(f"Wrote {stats['rows_written_eval']} rows to {eval_output_jsonl}.")
+    print(
+        f"Wrote {stats['rows_written_final_test']} rows to "
+        f"{final_test_output_jsonl}."
+    )
+    print(f"Wrote {stats['rows_written']} rows total.")
     print("Summary:")
     print(f"  rows_total={stats['rows_total']}")
     print(f"  rows_written={stats['rows_written']}")
+    print(f"  rows_written_eval={stats['rows_written_eval']}")
+    print(f"  rows_written_final_test={stats['rows_written_final_test']}")
     print(
         "  rows_skipped_missing_revision_fields="
         f"{stats['rows_skipped_missing_revision_fields']}"
@@ -489,6 +730,14 @@ def create_dataset(
     print(
         "  rows_skipped_missing_commit_nodes="
         f"{stats['rows_skipped_missing_commit_nodes']}"
+    )
+    print(
+        "  rows_skipped_outside_split_boundaries="
+        f"{stats['rows_skipped_outside_split_boundaries']}"
+    )
+    print(
+        "  rows_matching_multiple_split_boundaries="
+        f"{stats['rows_matching_multiple_split_boundaries']}"
     )
     print(
         "  rows_skipped_invalid_alerts="
@@ -523,7 +772,10 @@ def main() -> None:
         commits_jsonl=args.commits_jsonl,
         filter_csv=args.filter_csv,
         sig_info_jsonl=args.sig_info_jsonl,
-        output_jsonl=args.output,
+        eval_preds_json=args.eval_preds_json,
+        final_test_preds_json=args.final_test_preds_json,
+        eval_output_jsonl=args.eval_output,
+        final_test_output_jsonl=args.final_test_output,
         limit=args.limit,
     )
 
