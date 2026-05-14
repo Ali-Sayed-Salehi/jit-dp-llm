@@ -1,0 +1,184 @@
+# Mozilla Performance Bisect Simulation
+
+This directory contains a simulator for historical Mozilla performance
+regressions. For each regression row, the simulator tries to localize the exact
+culprit revision between a known-good revision and a known-bad revision, then
+reports aggregate localization metrics.
+
+## Files
+
+- `simulation.py`: CLI entry point, dataset loading, run orchestration, and output
+  writing.
+- `localization.py`: culprit localization algorithms. The initial algorithm is
+  `Backfill`.
+- `test_oracle.py`: test-oracle implementations, revision/signature indexes, and
+  the simulated test executor. The initial oracle is `SummaryComparison`.
+- `per_bisect_results_eval.json`: aggregate metrics for the eval split.
+- `per_bisect_results_eval_details.json`: per-regression eval details.
+- `per_bisect_results_final_test.json`: aggregate metrics for the final-test
+  split.
+- `per_bisect_results_final_test_details.json`: per-regression final-test
+  details.
+
+In the detail files, each oracle decision includes `expected_decision` and
+`decision_correct` when the known culprit is present in the candidate range.
+`expected_decision` is `clean` before the culprit and `bad` at or after the
+culprit. If the known culprit is not in the reconstructed candidate range, these
+fields are `null` because the simulator cannot label each probed candidate's
+side from that path.
+
+## Inputs
+
+The default inputs are loaded from `datasets/mozilla_perf_bisect`:
+
+- `perf_bisect_regressions_eval.jsonl`
+- `perf_bisect_regressions_final_test.jsonl`
+- `per_sig_perf_data_info.jsonl`
+- `per_revision_perf_data.jsonl`
+
+The regression rows provide the `good_revision`, `bad_revision`,
+`culprit_revision`, and failing signature values. The signature-info file
+provides the number of replicate tests to submit for each signature. The
+revision-performance file provides the revision graph and historical summary
+measurements.
+
+`simulation.py` also has a fallback for regression files under
+`datasets/mozilla_perf`, matching the originally described path, but the current
+workspace data lives under `datasets/mozilla_perf_bisect`.
+
+## Simulation Flow
+
+Each regression is simulated independently. That means each regression gets a
+fresh `TestExecutor` with an empty queue and no carry-over pressure from earlier
+regressions.
+
+For one regression:
+
+1. The simulator reconstructs a good-to-bad revision path from
+   `per_revision_perf_data.jsonl`.
+2. The selected localization algorithm chooses revisions to probe.
+3. The selected test oracle submits simulated performance tests through the
+   executor.
+4. The oracle classifies each tested revision as `clean` or `bad`.
+5. The localizer decides whether the culprit was found.
+6. The simulator records per-regression details and updates aggregate metrics.
+
+## Test Executor
+
+The executor models worker queueing. The default is one worker and one minute per
+test run. If a signature has `replicate_counts = 25`, one oracle probe submits 25
+test runs.
+
+Backfill submits the first probe batch for all candidate revisions at the same
+simulation timestamp. With one worker, those tests still complete sequentially
+because the worker queue is shared. Increasing `--workers` reduces queueing time.
+
+## SummaryComparison Oracle
+
+`SummaryComparison` compares one drawn summary value to a baseline.
+
+The baseline is:
+
+```text
+(Good_value + bad_value) / 2
+```
+
+The oracle does not use an effect size. It classifies every drawn value with a
+single baseline comparison:
+
+- value above baseline: `bad`
+- value at or below baseline: `clean`
+
+For each probe attempt, the oracle draws a summary value as follows:
+
+1. Use the next available `replicate: false` summary value for the tested commit
+   and signature.
+2. If the tested commit has no unused direct summary value, randomly draw from
+   the pool of unused summary values from other commits on the same side of the
+   known culprit.
+3. If no same-side summary exists, use the regression row's `Good_value` or
+   `bad_value` depending on which side of the culprit the tested commit is on.
+
+The same-side fallback assumes all commits before the culprit follow the clean
+distribution and all commits at or after the culprit follow the bad distribution.
+Same-side fallback draws are without replacement within a regression simulation:
+once a summary observation has been drawn directly or as a same-side fallback,
+it is not available for later same-side fallback draws.
+
+Same-side fallback randomness is seeded by `--random-seed`, which defaults to
+`0`. Each regression gets a derived seed based on its split order, so default
+runs are reproducible.
+
+## Backfill Localizer
+
+`Backfill` probes every revision after `good_revision` through `bad_revision`.
+It succeeds only when the final oracle decisions are monotonic:
+
+- every revision before the actual culprit is `clean`
+- the culprit and every later revision are `bad`
+
+The found culprit is the first `bad` revision in that monotonic sequence. If the
+clean/bad pattern is not monotonic, the localization result is undefined. There
+are no uncertain oracle decisions in the baseline-only oracle; noisy draws can
+instead create wrong clean/bad decisions and lower the success rate.
+
+## Metrics
+
+Each summary output reports:
+
+- `mean_trtc_minutes`: mean time from regression to culprit for successful
+  localizations only.
+- `max_trtc_minutes`: max time from regression to culprit for successful
+  localizations only.
+- `mean_test_runs`: mean number of test runs across all regressions, including
+  undefined localizations.
+- `max_test_runs`: max number of test runs across all regressions.
+- `success_rate_percent`: percentage of regressions where the exact culprit was
+  found.
+- `successful_localizations`: count of exact culprit matches.
+- `undefined_localizations`: count of regressions that did not localize exactly.
+
+Undefined results do not affect TRTC metrics, but they do affect success rate and
+test-run metrics.
+
+## Running
+
+Run both splits with defaults:
+
+```bash
+python analysis/perf_bisect/simulation.py --dataset all
+```
+
+Run one split:
+
+```bash
+python analysis/perf_bisect/simulation.py --dataset eval
+python analysis/perf_bisect/simulation.py --dataset final_test
+```
+
+Change executor capacity or test duration:
+
+```bash
+python analysis/perf_bisect/simulation.py --workers 4 --test-duration-minutes 2
+```
+
+Change the same-side fallback random seed:
+
+```bash
+python analysis/perf_bisect/simulation.py --random-seed 42
+```
+
+Write outputs elsewhere:
+
+```bash
+python analysis/perf_bisect/simulation.py --output-dir /tmp/perf_bisect
+```
+
+## Extending
+
+To add a new oracle, implement `TestOracle` in `test_oracle.py`, register it in
+`ORACLES` in `simulation.py`, and expose any required CLI configuration there.
+
+To add a new localization algorithm, implement `CulpritLocalizer` in
+`localization.py`, register it in `LOCALIZERS`, and update `build_localizer` in
+`simulation.py` if the algorithm needs custom parameters.

@@ -1,0 +1,30 @@
+{
+  "dataset": "eval",
+  "generated_at": "2026-05-14T03:24:39.762989+00:00",
+  "inputs": {
+    "regressions": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/perf_bisect_regressions_eval.jsonl",
+    "revision_data": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl",
+    "signature_info": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl"
+  },
+  "runs": [
+    {
+      "localizer": "Backfill",
+      "metrics": {
+        "max_test_runs": 2300,
+        "max_trtc_minutes": 850.0,
+        "mean_test_runs": 559.8947368421053,
+        "mean_trtc_minutes": 291.04347826086956,
+        "success_rate_percent": 60.526315789473685,
+        "successful_localizations": 23,
+        "total_regressions": 38,
+        "undefined_localizations": 15
+      },
+      "test_oracle": "SummaryComparison"
+    }
+  ],
+  "settings": {
+    "random_seed": 0,
+    "test_duration_minutes": 1.0,
+    "workers": 1
+  }
+}
