@@ -33,6 +33,8 @@ Implementation notes:
   - `num_candidate_revisions` is computed from commit indices in
     `all_commits.jsonl`, which is validated to be parent-before-child ordered.
     This avoids relying on Mercurial timestamps.
+  - Rows are excluded if the culprit revision is not inside the Mercurial DAG
+    range `(good_revision, bad_revision]`.
   - Eval and final-test split boundaries are computed from the shuffled
     `samples` arrays in the prediction JSON files by locating those commits in
     the parent-before-child `all_commits.jsonl` order.
@@ -125,6 +127,39 @@ class SplitBoundary:
     missing_commit_count: int
 
 
+@dataclass
+class CommitGraph:
+    node_to_index: dict[str, int]
+    parents_by_node: dict[str, list[str]]
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        if ancestor == descendant:
+            return ancestor in self.node_to_index
+
+        ancestor_index = self.node_to_index.get(ancestor)
+        descendant_index = self.node_to_index.get(descendant)
+        if ancestor_index is None or descendant_index is None:
+            return False
+        if ancestor_index > descendant_index:
+            return False
+
+        stack = [descendant]
+        seen: set[str] = set()
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            if node == ancestor:
+                return True
+            for parent in self.parents_by_node.get(node, []):
+                parent_index = self.node_to_index.get(parent)
+                if parent_index is not None and parent_index >= ancestor_index:
+                    stack.append(parent)
+
+        return False
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -215,8 +250,9 @@ def iter_jsonl(path: str):
                 raise ValueError(f"Invalid JSON at {path}:{line_num}: {e}") from e
 
 
-def load_commit_indices(commits_jsonl: str) -> dict[str, int]:
+def load_commit_graph(commits_jsonl: str) -> CommitGraph:
     node_to_index: dict[str, int] = {}
+    parents_by_node: dict[str, list[str]] = {}
     total_commits = 0
 
     for _, record in iter_jsonl(commits_jsonl):
@@ -253,10 +289,40 @@ def load_commit_indices(commits_jsonl: str) -> dict[str, int]:
                 )
 
         node_to_index[node] = current_index
+        parents_by_node[node] = [parent for parent in parents if parent != NULL_NODE]
         total_commits += 1
 
     print(f"Loaded {total_commits} commits from {commits_jsonl}.")
-    return node_to_index
+    return CommitGraph(node_to_index=node_to_index, parents_by_node=parents_by_node)
+
+
+def classify_culprit_boundary(
+    *,
+    commit_graph: CommitGraph,
+    good_revision: str,
+    bad_revision: str,
+    culprit_revision: str,
+) -> str | None:
+    if not commit_graph.is_ancestor(good_revision, bad_revision):
+        return "good_revision_is_not_an_ancestor_of_bad_revision"
+    if culprit_revision == good_revision:
+        return "culprit_revision_equals_good_revision"
+
+    good_ancestor_culprit = commit_graph.is_ancestor(
+        good_revision,
+        culprit_revision,
+    )
+    culprit_ancestor_bad = commit_graph.is_ancestor(
+        culprit_revision,
+        bad_revision,
+    )
+    if good_ancestor_culprit and culprit_ancestor_bad:
+        return None
+    if not good_ancestor_culprit and culprit_ancestor_bad:
+        return "culprit_revision_is_not_after_good_revision"
+    if good_ancestor_culprit and not culprit_ancestor_bad:
+        return "culprit_revision_is_not_at_or_before_bad_revision"
+    return "culprit_revision_is_not_on_good_to_bad_ancestry_range"
 
 
 def load_prediction_sample_commit_ids(predictions_json: str) -> tuple[set[str], int]:
@@ -572,7 +638,8 @@ def create_dataset(
     ensure_parent_dir(eval_output_jsonl)
     ensure_parent_dir(final_test_output_jsonl)
 
-    node_to_index = load_commit_indices(commits_jsonl)
+    commit_graph = load_commit_graph(commits_jsonl)
+    node_to_index = commit_graph.node_to_index
     eval_boundary = build_split_boundary(
         name="eval",
         predictions_json=eval_preds_json,
@@ -636,7 +703,8 @@ def create_dataset(
 
             good_index = node_to_index.get(good_revision)
             bad_index = node_to_index.get(bad_revision)
-            if good_index is None or bad_index is None:
+            culprit_index = node_to_index.get(culprit_revision)
+            if good_index is None or bad_index is None or culprit_index is None:
                 stats["rows_skipped_missing_commit_nodes"] += 1
                 continue
 
@@ -668,6 +736,25 @@ def create_dataset(
             num_candidate_revisions = bad_index - good_index - 1
             if num_candidate_revisions <= 1:
                 stats["rows_skipped_too_few_candidate_revisions"] += 1
+                continue
+
+            culprit_boundary_reason = classify_culprit_boundary(
+                commit_graph=commit_graph,
+                good_revision=good_revision,
+                bad_revision=bad_revision,
+                culprit_revision=culprit_revision,
+            )
+            if culprit_boundary_reason is not None:
+                stats["rows_skipped_culprit_outside_revision_range"] += 1
+                stats[f"rows_skipped_{culprit_boundary_reason}"] += 1
+                print(
+                    "[WARN] Excluding alert summary "
+                    f"{summary_id} from CSV row {row_num}: "
+                    f"{culprit_boundary_reason}; "
+                    f"good_revision={good_revision}, "
+                    f"culprit_revision={culprit_revision}, "
+                    f"bad_revision={bad_revision}."
+                )
                 continue
 
             try:
@@ -750,6 +837,10 @@ def create_dataset(
     print(
         "  rows_skipped_non_forward_revision_range="
         f"{stats['rows_skipped_non_forward_revision_range']}"
+    )
+    print(
+        "  rows_skipped_culprit_outside_revision_range="
+        f"{stats['rows_skipped_culprit_outside_revision_range']}"
     )
     print(
         "  rows_skipped_too_few_candidate_revisions="
