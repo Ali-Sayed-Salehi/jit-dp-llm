@@ -136,12 +136,13 @@ echo "Running script ..."
 # --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
 # --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
 # --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
-# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 # --workers 1 \
 # --test-duration-minutes 1.0 \
 # --oracles SummaryComparison \
 # --localizers Backfill \
-# --random-seed 0
+# --random-seed 0 \
+# --backfill-non-monotonic-retrigger-count 5
 
 
 echo "Script finished"

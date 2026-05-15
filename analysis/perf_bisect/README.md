@@ -175,6 +175,12 @@ Run both splits with defaults:
 python analysis/perf_bisect/simulation.py --dataset all
 ```
 
+Or use the local runner:
+
+```bash
+analysis/perf_bisect/run_local.sh
+```
+
 By default, result files are written to
 `analysis/perf_bisect/results`.
 
