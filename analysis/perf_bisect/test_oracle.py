@@ -13,6 +13,7 @@ class OracleDecision(str, Enum):
 
     CLEAN = "clean"
     BAD = "bad"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -64,16 +65,17 @@ class SignatureInfoIndex:
 
 @dataclass
 class RevisionRecord:
-    """Revision graph node and its summary performance measurements."""
+    """Revision graph node and its performance measurements."""
 
     node: str
     parents: list[str]
     date: Any = None
     summary_values: dict[int, list[float]] = field(default_factory=dict)
+    replicate_values: dict[int, list[float]] = field(default_factory=dict)
 
 
 class RevisionPerfIndex:
-    """Revision graph plus summary performance measurements."""
+    """Revision graph plus performance measurements."""
 
     def __init__(self, records: Sequence[RevisionRecord]) -> None:
         """Index revision records by node hash."""
@@ -87,6 +89,14 @@ class RevisionPerfIndex:
         if record is None:
             return []
         return record.summary_values.get(signature_id, [])
+
+    def get_replicate_values(self, revision: str, signature_id: int) -> list[float]:
+        """Return all replicate values recorded for a revision/signature pair."""
+
+        record = self.records.get(revision)
+        if record is None:
+            return []
+        return record.replicate_values.get(signature_id, [])
 
     def get_summary_value(
         self,
@@ -211,7 +221,7 @@ class OracleResult:
 
     revision: str
     decision: OracleDecision
-    value: float
+    value: float | None
     baseline: float
     attempt: int
     draw_index: int | None
@@ -259,7 +269,7 @@ class TestOracle:
 
 
 class SummaryComparison(TestOracle):
-    """Classify revisions by comparing summary values against the midpoint baseline."""
+    """Classify revisions by comparing measurement values against the midpoint."""
 
     name = "SummaryComparison"
 
@@ -279,7 +289,6 @@ class SummaryComparison(TestOracle):
         self.query_count = 0
         self._attempt_counts: dict[str, int] = {}
         self._rng = random.Random(random_seed)
-        self._drawn_summary_values: set[tuple[int, str, int]] = set()
 
     def classify(
         self,
@@ -323,7 +332,7 @@ class SummaryComparison(TestOracle):
 
         batches = self.executor.submit_batches_and_wait(batches_to_submit)
         self.query_count += len(revisions)
-        drawn_values = self._draw_summary_values_for_requests(
+        drawn_values = self._draw_measurement_values_for_requests(
             requests=requests,
             failing_sig=failing_sig,
             regression=regression,
@@ -342,80 +351,97 @@ class SummaryComparison(TestOracle):
             for revision, attempt, batch_key in requests
         ]
 
-    def _draw_summary_values_for_requests(
+    def _draw_measurement_values_for_requests(
         self,
         *,
         requests: Sequence[tuple[str, int, str]],
         failing_sig: FailingSignature,
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
-    ) -> dict[str, tuple[float, str | None, str | None, int | None]]:
-        """Reserve direct draws first, then randomly draw same-side fallbacks."""
+    ) -> dict[str, tuple[float | None, str | None, str | None, int | None]]:
+        """Draw direct values first, then randomly draw same-side fallbacks."""
 
-        drawn_values: dict[str, tuple[float, str | None, str | None, int | None]] = {}
+        drawn_values: dict[
+            str,
+            tuple[float | None, str | None, str | None, int | None],
+        ] = {}
         fallback_requests = []
 
         for revision, attempt, batch_key in requests:
-            direct_value = self._direct_summary_value(
+            direct_value = self._direct_measurement_value(
                 revision=revision,
-                draw_index=attempt,
                 signature=failing_sig,
+                measurement_kind="summary",
+                value_source="direct_summary",
             )
+            if direct_value is None:
+                direct_value = self._direct_measurement_value(
+                    revision=revision,
+                    signature=failing_sig,
+                    measurement_kind="replicate",
+                    value_source="direct_replicate",
+                )
             if direct_value is None:
                 fallback_requests.append((revision, batch_key))
                 continue
             drawn_values[batch_key] = direct_value
 
         for revision, batch_key in fallback_requests:
-            fallback_value = self._same_side_summary_value(
+            fallback_value = self._same_side_measurement_value(
                 revision=revision,
                 signature=failing_sig,
                 regression=regression,
                 revision_path=revision_path,
+                measurement_kind="summary",
+                value_source="same_side_summary",
             )
-            if fallback_value is not None:
-                drawn_values[batch_key] = fallback_value
-                continue
-
-            if self._is_bad_side(revision, regression, revision_path):
-                drawn_values[batch_key] = (
-                    failing_sig.bad_value,
-                    "regression_bad_value",
+            if fallback_value is None:
+                fallback_value = self._same_side_measurement_value(
+                    revision=revision,
+                    signature=failing_sig,
+                    regression=regression,
+                    revision_path=revision_path,
+                    measurement_kind="replicate",
+                    value_source="same_side_replicate",
+                )
+            if fallback_value is None:
+                fallback_value = self._boundary_replicate_value(
+                    revision=revision,
+                    signature=failing_sig,
+                    regression=regression,
+                    revision_path=revision_path,
+                )
+            if fallback_value is None:
+                fallback_value = (
+                    None,
+                    "missing_measurement",
                     None,
                     None,
                 )
-            else:
-                drawn_values[batch_key] = (
-                    failing_sig.good_value,
-                    "regression_good_value",
-                    None,
-                    None,
-                )
+            drawn_values[batch_key] = fallback_value
 
         return drawn_values
 
-    def _direct_summary_value(
+    def _direct_measurement_value(
         self,
         *,
         revision: str,
-        draw_index: int,
         signature: FailingSignature,
+        measurement_kind: str,
+        value_source: str,
     ) -> tuple[float, str | None, str | None, int | None] | None:
-        """Draw and reserve the requested direct summary observation if available."""
+        """Randomly draw one direct observation if available."""
 
-        direct_values = self.revision_perf.get_summary_values(
-            revision,
-            signature.signature_id,
+        direct_values = self._measurement_values(
+            revision=revision,
+            signature_id=signature.signature_id,
+            measurement_kind=measurement_kind,
         )
-        if draw_index >= len(direct_values):
+        if not direct_values:
             return None
 
-        observation_key = (signature.signature_id, revision, draw_index)
-        if observation_key in self._drawn_summary_values:
-            return None
-
-        self._drawn_summary_values.add(observation_key)
-        return direct_values[draw_index], "direct_summary", revision, draw_index
+        value_idx, value = self._rng.choice(list(enumerate(direct_values)))
+        return value, value_source, revision, value_idx
 
     def _classify_with_completed_batch(
         self,
@@ -425,12 +451,16 @@ class SummaryComparison(TestOracle):
         failing_sig: FailingSignature,
         replicate_count: int,
         batch: TestBatch,
-        drawn_value: tuple[float, str | None, str | None, int | None],
+        drawn_value: tuple[float | None, str | None, str | None, int | None],
     ) -> OracleResult:
-        """Turn a completed test batch and selected summary draw into a decision."""
+        """Turn a completed test batch and selected measurement into a decision."""
 
         value, source, source_revision, draw_index = drawn_value
-        decision = self._compare(value, failing_sig.baseline)
+        decision = (
+            OracleDecision.UNKNOWN
+            if value is None
+            else self._compare(value, failing_sig.baseline)
+        )
         return OracleResult(
             revision=revision,
             decision=decision,
@@ -446,15 +476,17 @@ class SummaryComparison(TestOracle):
             value_source_revision=source_revision,
         )
 
-    def _same_side_summary_value(
+    def _same_side_measurement_value(
         self,
         *,
         revision: str,
         signature: FailingSignature,
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
+        measurement_kind: str,
+        value_source: str,
     ) -> tuple[float, str | None, str | None, int | None] | None:
-        """Randomly draw one unused fallback value from the same culprit side."""
+        """Randomly draw one fallback value from the same culprit side."""
 
         if revision not in revision_path:
             return None
@@ -464,11 +496,14 @@ class SummaryComparison(TestOracle):
         revision_idx = revision_path.index(revision)
         culprit_idx = revision_path.index(str(regression["culprit_revision"]))
         is_bad_side = revision_idx >= culprit_idx
+        boundary_indices = {0, len(revision_path) - 1}
 
         side_indices = [
             idx
             for idx in range(len(revision_path))
-            if (idx >= culprit_idx) == is_bad_side and idx != revision_idx
+            if (idx >= culprit_idx) == is_bad_side
+            and idx != revision_idx
+            and idx not in boundary_indices
         ]
         side_indices.sort(key=lambda idx: abs(idx - revision_idx))
 
@@ -476,37 +511,72 @@ class SummaryComparison(TestOracle):
         for idx in side_indices:
             source_revision = revision_path[idx]
             for value_idx, value in enumerate(
-                self.revision_perf.get_summary_values(
-                    source_revision,
-                    signature.signature_id,
+                self._measurement_values(
+                    revision=source_revision,
+                    signature_id=signature.signature_id,
+                    measurement_kind=measurement_kind,
                 )
             ):
-                observation_key = (signature.signature_id, source_revision, value_idx)
-                if observation_key in self._drawn_summary_values:
-                    continue
-                same_side_values.append((value, source_revision, value_idx, observation_key))
+                same_side_values.append((value, source_revision, value_idx))
 
         if not same_side_values:
             return None
 
-        value, source_revision, value_idx, observation_key = self._rng.choice(
-            same_side_values
-        )
-        self._drawn_summary_values.add(observation_key)
-        return value, "same_side_summary", source_revision, value_idx
+        value, source_revision, value_idx = self._rng.choice(same_side_values)
+        return value, value_source, source_revision, value_idx
 
-    @staticmethod
-    def _is_bad_side(
+    def _boundary_replicate_value(
+        self,
+        *,
         revision: str,
+        signature: FailingSignature,
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
-    ) -> bool:
-        """Return whether a revision is on or after the known culprit revision."""
+    ) -> tuple[float, str | None, str | None, int | None] | None:
+        """Randomly draw one replicate value from the same-side boundary."""
 
-        culprit = regression.get("culprit_revision")
-        if revision in revision_path and culprit in revision_path:
-            return revision_path.index(revision) >= revision_path.index(culprit)
-        return revision == culprit or revision == regression.get("bad_revision")
+        if revision not in revision_path:
+            return None
+        if regression.get("culprit_revision") not in revision_path:
+            return None
+
+        revision_idx = revision_path.index(revision)
+        culprit_idx = revision_path.index(str(regression["culprit_revision"]))
+        is_bad_side = revision_idx >= culprit_idx
+        source_revision = revision_path[-1] if is_bad_side else revision_path[0]
+        value_source = (
+            "bad_boundary_replicate" if is_bad_side else "good_boundary_replicate"
+        )
+
+        boundary_values = []
+        for value_idx, value in enumerate(
+            self.revision_perf.get_replicate_values(
+                source_revision,
+                signature.signature_id,
+            )
+        ):
+            boundary_values.append((value, value_idx))
+
+        if not boundary_values:
+            return None
+
+        value, value_idx = self._rng.choice(boundary_values)
+        return value, value_source, source_revision, value_idx
+
+    def _measurement_values(
+        self,
+        *,
+        revision: str,
+        signature_id: int,
+        measurement_kind: str,
+    ) -> list[float]:
+        """Return summary or replicate values for one revision/signature pair."""
+
+        if measurement_kind == "summary":
+            return self.revision_perf.get_summary_values(revision, signature_id)
+        if measurement_kind == "replicate":
+            return self.revision_perf.get_replicate_values(revision, signature_id)
+        raise ValueError(f"unknown measurement kind: {measurement_kind}")
 
     @staticmethod
     def _compare(

@@ -39,8 +39,8 @@ The default inputs are loaded from `datasets/mozilla_perf_bisect`:
 The regression rows provide the `good_revision`, `bad_revision`,
 `culprit_revision`, and failing signature values. The signature-info file
 provides the number of replicate tests to submit for each signature. The
-revision-performance file provides the revision graph and historical summary
-measurements.
+revision-performance file provides the revision graph and historical summary and
+replicate measurements.
 
 `simulation.py` also has a fallback for regression files under
 `datasets/mozilla_perf`, matching the originally described path, but the current
@@ -75,7 +75,7 @@ because the worker queue is shared. Increasing `--workers` reduces queueing time
 
 ## SummaryComparison Oracle
 
-`SummaryComparison` compares one drawn summary value to a baseline.
+`SummaryComparison` compares one drawn measurement value to a baseline.
 
 The baseline is:
 
@@ -89,21 +89,31 @@ single baseline comparison:
 - value above baseline: `bad`
 - value at or below baseline: `clean`
 
-For each probe attempt, the oracle draws a summary value as follows:
+For each probe attempt, the oracle draws a measurement value as follows:
 
-1. Use the next available `replicate: false` summary value for the tested commit
-   and signature.
-2. If the tested commit has no unused direct summary value, randomly draw from
-   the pool of unused summary values from other commits on the same side of the
-   known culprit.
-3. If no same-side summary exists, use the regression row's `Good_value` or
-   `bad_value` depending on which side of the culprit the tested commit is on.
+1. Randomly draw a `replicate: false` summary value from the tested commit and
+   signature.
+2. If the tested commit has no direct summary value, randomly draw one of its
+   `replicate: true` values.
+3. If the tested commit has neither, randomly draw a summary value from another
+   non-boundary commit on the same side of the known culprit.
+4. If no same-side summary exists, randomly draw a replicate value from
+   another non-boundary commit on the same side.
+5. If no non-boundary same-side replicate exists, randomly draw a replicate
+   value from the same-side boundary commit: `good_revision` before the culprit,
+   or `bad_revision` at/after the culprit.
+
+If none of those sources exists, the oracle records `missing_measurement` and an
+`unknown` decision. It does not fall back to the regression row's `Good_value` or
+`bad_value`.
+
+Both summary and replicate draws use the signature's `replicate_counts` as the
+simulated test cost for the probe.
 
 The same-side fallback assumes all commits before the culprit follow the clean
 distribution and all commits at or after the culprit follow the bad distribution.
-Same-side fallback draws are without replacement within a regression simulation:
-once a summary observation has been drawn directly or as a same-side fallback,
-it is not available for later same-side fallback draws.
+All measurement draws are with replacement, so multiple probes can draw the same
+source observation.
 
 Same-side fallback randomness is seeded by `--random-seed`, which defaults to
 `0`. Each regression gets a derived seed based on its split order, so default
@@ -137,6 +147,8 @@ Each summary output reports:
   found.
 - `successful_localizations`: count of exact culprit matches.
 - `undefined_localizations`: count of regressions that did not localize exactly.
+- `undefined_causes`: counts of undefined localizations grouped by
+  `undefined_reason`.
 
 Undefined results do not affect TRTC metrics, but they do affect success rate and
 test-run metrics.

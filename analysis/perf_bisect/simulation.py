@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -331,15 +332,23 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         if result.trtc_minutes is not None
     ]
     test_runs = [result.test_runs for result in results]
+    undefined_causes = Counter(
+        result.undefined_reason or "unknown"
+        for result in results
+        if not result.success
+    )
 
     return {
         "total_regressions": total,
         "successful_localizations": len(successes),
         "undefined_localizations": total - len(successes),
-        "success_rate_percent": (len(successes) / total * 100.0) if total else 0.0,
-        "mean_trtc_minutes": mean(trtc_values) if trtc_values else None,
-        "max_trtc_minutes": max(trtc_values) if trtc_values else None,
-        "mean_test_runs": mean(test_runs) if test_runs else None,
+        "undefined_causes": dict(sorted(undefined_causes.items())),
+        "success_rate_percent": (
+            round(len(successes) / total * 100.0, 1) if total else 0.0
+        ),
+        "mean_trtc_minutes": round(mean(trtc_values), 1) if trtc_values else None,
+        "max_trtc_minutes": round(max(trtc_values), 1) if trtc_values else None,
+        "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }
 
@@ -367,16 +376,19 @@ def load_signature_info(path: Path) -> SignatureInfoIndex:
 
 
 def load_revision_perf(path: Path) -> RevisionPerfIndex:
-    """Load revision graph nodes and non-replicate summary measurements."""
+    """Load revision graph nodes plus summary and replicate measurements."""
 
     records = []
     for raw in load_jsonl(path):
         summary_values: dict[int, list[float]] = {}
+        replicate_values: dict[int, list[float]] = {}
         for measurement in raw.get("perf_measurement_data", []):
-            if measurement.get("replicate") is not False:
-                continue
             signature_id = int(measurement["signature_id"])
-            summary_values.setdefault(signature_id, []).append(float(measurement["value"]))
+            value = float(measurement["value"])
+            if measurement.get("replicate") is True:
+                replicate_values.setdefault(signature_id, []).append(value)
+            elif measurement.get("replicate") is False:
+                summary_values.setdefault(signature_id, []).append(value)
 
         records.append(
             RevisionRecord(
@@ -384,6 +396,7 @@ def load_revision_perf(path: Path) -> RevisionPerfIndex:
                 parents=[str(parent) for parent in raw.get("parents", [])],
                 date=raw.get("date"),
                 summary_values=summary_values,
+                replicate_values=replicate_values,
             )
         )
     return RevisionPerfIndex(records)

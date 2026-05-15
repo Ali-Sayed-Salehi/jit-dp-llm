@@ -246,6 +246,8 @@ class Backfill(CulpritLocalizer):
             expected = OracleDecision.BAD if idx >= culprit_idx else OracleDecision.CLEAN
             if decision is None:
                 return None, "missing_oracle_decision"
+            if decision is OracleDecision.UNKNOWN:
+                return None, "missing_oracle_measurement"
             if decision is not expected:
                 return None, "non_monotonic_oracle_decisions"
 
