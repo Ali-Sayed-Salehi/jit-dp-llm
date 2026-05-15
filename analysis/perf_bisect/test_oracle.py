@@ -226,6 +226,7 @@ class OracleResult:
     attempt: int
     draw_index: int | None
     replicate_count: int
+    measurement_count: int
     test_runs: int
     submitted_at_minutes: float
     completed_at_minutes: float
@@ -469,6 +470,7 @@ class SummaryComparison(TestOracle):
             attempt=attempt + 1,
             draw_index=draw_index,
             replicate_count=replicate_count,
+            measurement_count=0 if value is None else 1,
             test_runs=replicate_count,
             submitted_at_minutes=batch.submitted_at_minutes,
             completed_at_minutes=batch.completed_at_minutes,

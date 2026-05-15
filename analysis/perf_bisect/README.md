@@ -13,19 +13,22 @@ reports aggregate localization metrics.
   `Backfill`.
 - `test_oracle.py`: test-oracle implementations, revision/signature indexes, and
   the simulated test executor. The initial oracle is `SummaryComparison`.
-- `per_bisect_results_eval.json`: aggregate metrics for the eval split.
-- `per_bisect_results_eval_details.json`: per-regression eval details.
-- `per_bisect_results_final_test.json`: aggregate metrics for the final-test
-  split.
-- `per_bisect_results_final_test_details.json`: per-regression final-test
-  details.
+- `results/per_bisect_results_eval.json`: aggregate metrics for the eval split.
+- `results/per_bisect_results_eval_details.json`: per-regression eval details.
+- `results/per_bisect_results_final_test.json`: aggregate metrics for the
+  final-test split.
+- `results/per_bisect_results_final_test_details.json`: per-regression
+  final-test details.
 
 In the detail files, each oracle decision includes `expected_decision` and
 `decision_correct` when the known culprit is present in the candidate range.
 `expected_decision` is `clean` before the culprit and `bad` at or after the
 culprit. If the known culprit is not in the reconstructed candidate range, these
 fields are `null` because the simulator cannot label each probed candidate's
-side from that path.
+side from that path. Raw probe attempts are recorded in `decisions`; the
+decisions actually used for localization are recorded in `final_decisions`.
+Backfill results also record `non_monotonic_retrigger_count` and
+`non_monotonic_retrigger_intervals`.
 
 ## Inputs
 
@@ -72,6 +75,8 @@ test runs.
 Backfill submits the first probe batch for all candidate revisions at the same
 simulation timestamp. With one worker, those tests still complete sequentially
 because the worker queue is shared. Increasing `--workers` reduces queueing time.
+If Backfill retriggers a non-monotonic interval, that retrigger is submitted
+after the earlier batch has completed.
 
 ## SummaryComparison Oracle
 
@@ -124,13 +129,22 @@ runs are reproducible.
 `Backfill` probes every revision after `good_revision` through `bad_revision`.
 It succeeds only when the final oracle decisions are monotonic:
 
-- every revision before the actual culprit is `clean`
-- the culprit and every later revision are `bad`
+- zero or more initial candidate revisions are `clean`
+- every candidate revision after the first `bad` revision is also `bad`
 
 The found culprit is the first `bad` revision in that monotonic sequence. If the
-clean/bad pattern is not monotonic, the localization result is undefined. There
-are no uncertain oracle decisions in the baseline-only oracle; noisy draws can
-instead create wrong clean/bad decisions and lower the success rate.
+observed clean/bad pattern contains a `bad` decision followed by a later `clean`
+decision, Backfill treats the shortest such interval as the adjacent bad-to-clean
+pair and retriggers those two commits. After a retrigger, `final_decisions`
+reconciles repeated results for each retriggered commit by majority vote over
+the actual drawn clean/bad decisions, breaking ties with the latest draw. It
+does not average measurement values; every `final_decisions.value` is an actual
+drawn summary or replicate value. The raw attempts remain in `decisions`.
+
+This process repeats up to `--backfill-non-monotonic-retrigger-count` times
+before the localization remains undefined as `non_monotonic_oracle_decisions`.
+The default is `2`, which models a small number of human retriggers without
+turning a noisy interval into an unbounded retry loop.
 
 ## Metrics
 
@@ -161,6 +175,9 @@ Run both splits with defaults:
 python analysis/perf_bisect/simulation.py --dataset all
 ```
 
+By default, result files are written to
+`analysis/perf_bisect/results`.
+
 Run one split:
 
 ```bash
@@ -174,16 +191,22 @@ Change executor capacity or test duration:
 python analysis/perf_bisect/simulation.py --workers 4 --test-duration-minutes 2
 ```
 
+Change the number of Backfill non-monotonic interval retriggers:
+
+```bash
+python analysis/perf_bisect/simulation.py --backfill-non-monotonic-retrigger-count 3
+```
+
 Change the same-side fallback random seed:
 
 ```bash
 python analysis/perf_bisect/simulation.py --random-seed 42
 ```
 
-Write outputs elsewhere:
+Write outputs to a different repo-local directory:
 
 ```bash
-python analysis/perf_bisect/simulation.py --output-dir /tmp/perf_bisect
+python analysis/perf_bisect/simulation.py --output-dir analysis/perf_bisect/results_experiment
 ```
 
 ## Extending

@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - supports direct script execution.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BISECT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
 PROMPT_REGRESSION_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
 
 DATASETS = {
     "eval": "perf_bisect_regressions_eval.jsonl",
@@ -109,6 +109,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             localizer_names=args.localizers,
             workers=args.workers,
             test_duration_minutes=args.test_duration_minutes,
+            backfill_non_monotonic_retrigger_count=(
+                args.backfill_non_monotonic_retrigger_count
+            ),
             random_seed=args.random_seed,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
@@ -157,7 +160,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory for per_bisect_results_*.json outputs.",
+        help=(
+            "Directory for per_bisect_results_*.json outputs. Defaults to "
+            "analysis/perf_bisect/results under the repo root."
+        ),
     )
     parser.add_argument(
         "--workers",
@@ -186,12 +192,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Culprit localization algorithms to run.",
     )
     parser.add_argument(
+        "--backfill-non-monotonic-retrigger-count",
+        type=int,
+        default=2,
+        help=(
+            "Number of adjacent non-monotonic Backfill intervals to retrigger "
+            "before leaving the localization undefined."
+        ),
+    )
+    parser.add_argument(
         "--random-seed",
         type=int,
         default=0,
         help="Seed for random same-side fallback draws.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.backfill_non_monotonic_retrigger_count < 0:
+        parser.error("--backfill-non-monotonic-retrigger-count must be non-negative")
+    return args
 
 
 def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
@@ -223,6 +241,7 @@ def run_dataset(
     localizer_names: Sequence[str],
     workers: int,
     test_duration_minutes: float,
+    backfill_non_monotonic_retrigger_count: int,
     random_seed: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
@@ -233,6 +252,9 @@ def run_dataset(
     for localizer_name in localizer_names:
         localizer = build_localizer(
             localizer_name,
+            backfill_non_monotonic_retrigger_count=(
+                backfill_non_monotonic_retrigger_count
+            ),
         )
         for oracle_name in oracle_names:
             results = [
@@ -275,6 +297,9 @@ def run_dataset(
         "settings": {
             "workers": workers,
             "test_duration_minutes": test_duration_minutes,
+            "backfill_non_monotonic_retrigger_count": (
+                backfill_non_monotonic_retrigger_count
+            ),
             "random_seed": random_seed,
         },
     }
@@ -286,10 +311,19 @@ def run_dataset(
 
 def build_localizer(
     localizer_name: str,
+    *,
+    backfill_non_monotonic_retrigger_count: int,
 ) -> CulpritLocalizer:
     """Construct a localizer from the registry."""
 
-    return LOCALIZERS[localizer_name]()
+    localizer_cls = LOCALIZERS[localizer_name]
+    if localizer_name == "Backfill":
+        return localizer_cls(
+            backfill_non_monotonic_retrigger_count=(
+                backfill_non_monotonic_retrigger_count
+            )
+        )
+    return localizer_cls()
 
 
 def run_one_regression(

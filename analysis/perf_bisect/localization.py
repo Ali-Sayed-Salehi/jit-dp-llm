@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any, Mapping, Sequence
 
 try:
     from .test_oracle import OracleDecision, OracleResult, RevisionPerfIndex, TestOracle
@@ -32,6 +32,7 @@ class LocalizationResult:
     candidate_revisions_tested: int
     decisions: list[OracleResult] = field(default_factory=list)
     final_decisions: list[OracleResult] = field(default_factory=list)
+    non_monotonic_retrigger_intervals: list[list[str]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         """Serialize the localization result into JSON-compatible primitives."""
@@ -56,6 +57,12 @@ class LocalizationResult:
             "oracle_queries": self.oracle_queries,
             "path_length": self.path_length,
             "candidate_revisions_tested": self.candidate_revisions_tested,
+            "non_monotonic_retrigger_count": len(
+                self.non_monotonic_retrigger_intervals
+            ),
+            "non_monotonic_retrigger_intervals": (
+                self.non_monotonic_retrigger_intervals
+            ),
             "decisions": [
                 self._decision_to_json(
                     decision,
@@ -115,6 +122,7 @@ class LocalizationResult:
             "attempt": decision.attempt,
             "draw_index": decision.draw_index,
             "replicate_count": decision.replicate_count,
+            "measurement_count": decision.measurement_count,
             "test_runs": decision.test_runs,
             "submitted_at_minutes": decision.submitted_at_minutes,
             "completed_at_minutes": decision.completed_at_minutes,
@@ -144,6 +152,17 @@ class Backfill(CulpritLocalizer):
     """Probe every revision after the known-good revision and find the first bad one."""
 
     name = "Backfill"
+
+    def __init__(self, *, backfill_non_monotonic_retrigger_count: int = 2) -> None:
+        """Configure how often non-monotonic adjacent intervals are retriggered."""
+
+        if backfill_non_monotonic_retrigger_count < 0:
+            raise ValueError(
+                "backfill_non_monotonic_retrigger_count must be non-negative"
+            )
+        self.backfill_non_monotonic_retrigger_count = (
+            backfill_non_monotonic_retrigger_count
+        )
 
     def localize(
         self,
@@ -189,13 +208,46 @@ class Backfill(CulpritLocalizer):
             revision_path=path,
         )
         all_decisions = list(decisions)
-        final_decisions = decisions
+        final_decisions = self._final_decisions_from_draws(
+            revisions=revisions_to_probe,
+            decisions=all_decisions,
+        )
 
         found_revision, undefined_reason = self._evaluate_backfill(
             path=path,
             decisions=final_decisions,
             culprit_revision=culprit_revision,
         )
+        retrigger_intervals = []
+        for _ in range(self.backfill_non_monotonic_retrigger_count):
+            if undefined_reason != "non_monotonic_oracle_decisions":
+                break
+
+            interval = self._shortest_non_monotonic_interval(
+                path=path,
+                decisions=final_decisions,
+            )
+            if interval is None:
+                break
+
+            retrigger_intervals.append(interval)
+            all_decisions.extend(
+                oracle.classify_many(
+                    interval,
+                    regression=regression,
+                    revision_path=path,
+                )
+            )
+            final_decisions = self._final_decisions_from_draws(
+                revisions=revisions_to_probe,
+                decisions=all_decisions,
+            )
+            found_revision, undefined_reason = self._evaluate_backfill(
+                path=path,
+                decisions=final_decisions,
+                culprit_revision=culprit_revision,
+            )
+
         success = found_revision is not None and found_revision == culprit_revision
         executor = getattr(oracle, "executor", None)
         trtc_minutes = executor.now_minutes if success and executor is not None else None
@@ -222,6 +274,7 @@ class Backfill(CulpritLocalizer):
             candidate_revisions_tested=len(revisions_to_probe),
             decisions=all_decisions,
             final_decisions=final_decisions,
+            non_monotonic_retrigger_intervals=retrigger_intervals,
         )
 
     @staticmethod
@@ -231,25 +284,24 @@ class Backfill(CulpritLocalizer):
         decisions: list[OracleResult],
         culprit_revision: str | None,
     ) -> tuple[str | None, str | None]:
-        """Validate monotonic decisions and identify the first bad revision."""
+        """Validate observed monotonicity and identify the first bad revision."""
 
-        if culprit_revision is None:
-            return None, "missing_culprit_revision"
-        if culprit_revision not in path[1:]:
-            return None, "culprit_not_in_search_range"
+        decision_by_revision = {
+            decision.revision: decision.decision for decision in decisions
+        }
 
-        decision_by_revision = {decision.revision: decision.decision for decision in decisions}
-        culprit_idx = path.index(culprit_revision)
-
-        for idx, revision in enumerate(path[1:], start=1):
+        for revision in path[1:]:
             decision = decision_by_revision.get(revision)
-            expected = OracleDecision.BAD if idx >= culprit_idx else OracleDecision.CLEAN
             if decision is None:
                 return None, "missing_oracle_decision"
             if decision is OracleDecision.UNKNOWN:
                 return None, "missing_oracle_measurement"
-            if decision is not expected:
-                return None, "non_monotonic_oracle_decisions"
+
+        if Backfill._shortest_non_monotonic_interval(
+            path=path,
+            decisions=decisions,
+        ) is not None:
+            return None, "non_monotonic_oracle_decisions"
 
         first_bad = next(
             (
@@ -261,9 +313,107 @@ class Backfill(CulpritLocalizer):
         )
         if first_bad is None:
             return None, "no_bad_revision_found"
+        if culprit_revision is None:
+            return first_bad, "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return first_bad, "culprit_not_in_search_range"
         if first_bad != culprit_revision:
-            return None, "first_bad_is_not_culprit"
+            return first_bad, "first_bad_is_not_culprit"
         return first_bad, None
+
+    @staticmethod
+    def _shortest_non_monotonic_interval(
+        *,
+        path: list[str],
+        decisions: list[OracleResult],
+    ) -> list[str] | None:
+        """Return the first adjacent bad-to-clean inversion in path order."""
+
+        decision_by_revision = {
+            decision.revision: decision.decision for decision in decisions
+        }
+        revisions_to_probe = path[1:]
+        for left_revision, right_revision in zip(
+            revisions_to_probe,
+            revisions_to_probe[1:],
+        ):
+            if (
+                decision_by_revision.get(left_revision) is OracleDecision.BAD
+                and decision_by_revision.get(right_revision) is OracleDecision.CLEAN
+            ):
+                return [left_revision, right_revision]
+        return None
+
+    @staticmethod
+    def _final_decisions_from_draws(
+        *,
+        revisions: Sequence[str],
+        decisions: list[OracleResult],
+    ) -> list[OracleResult]:
+        """Select final decisions from actual drawn values for the final pass."""
+
+        decisions_by_revision: dict[str, list[OracleResult]] = {
+            revision: [] for revision in revisions
+        }
+        for decision in decisions:
+            if decision.revision in decisions_by_revision:
+                decisions_by_revision[decision.revision].append(decision)
+
+        return [
+            Backfill._select_revision_decision(revision_decisions)
+            for revision in revisions
+            if (revision_decisions := decisions_by_revision[revision])
+        ]
+
+    @staticmethod
+    def _select_revision_decision(
+        decisions: list[OracleResult],
+    ) -> OracleResult:
+        """Choose one actual draw, using majority decision after retriggers."""
+
+        if len(decisions) == 1:
+            return decisions[0]
+
+        known_decisions = [
+            decision
+            for decision in decisions
+            if decision.decision is not OracleDecision.UNKNOWN
+        ]
+        vote_pool = known_decisions or decisions
+        latest_decision = max(
+            vote_pool,
+            key=lambda decision: decision.completed_at_minutes,
+        )
+        clean_count = sum(
+            decision.decision is OracleDecision.CLEAN for decision in known_decisions
+        )
+        bad_count = sum(
+            decision.decision is OracleDecision.BAD for decision in known_decisions
+        )
+
+        if bad_count > clean_count:
+            selected_decision = OracleDecision.BAD
+        elif clean_count > bad_count:
+            selected_decision = OracleDecision.CLEAN
+        else:
+            selected_decision = latest_decision.decision
+
+        selected_draw = max(
+            (
+                decision
+                for decision in vote_pool
+                if decision.decision is selected_decision
+            ),
+            key=lambda decision: decision.completed_at_minutes,
+        )
+        numeric_draw_count = sum(
+            decision.value is not None for decision in decisions
+        )
+
+        return replace(
+            selected_draw,
+            measurement_count=numeric_draw_count,
+        )
 
     @staticmethod
     def _signature_id(regression: Mapping[str, Any]) -> int | None:
