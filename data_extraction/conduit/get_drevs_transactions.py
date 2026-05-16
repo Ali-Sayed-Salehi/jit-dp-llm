@@ -11,8 +11,9 @@ For each DREV row, it fetches all transactions with Conduit's
 
     datasets/mozilla_code_review/per_commit_drev_transactions.jsonl
 
-Each output row contains `commit_id`, `drev_id`, and `transactions`, where
-`transactions` is the list of raw transaction objects returned by Conduit.
+Each output row contains `commit_id`, `drev_id`, `dataset_split`, and
+`transactions`, where `transactions` is the list of raw transaction objects
+returned by Conduit.
 
 Use `--debug` to process only the last 10 DREV rows from
 per_commit_drevs.jsonl. The debug subset is selected before initializing the
@@ -49,6 +50,7 @@ DEFAULT_PHABRICATOR_API_URL = "https://phabricator.services.mozilla.com/api/"
 class DrevRef:
     commit_id: str
     drev_id: int
+    dataset_split: str
     phid: str
 
 
@@ -231,6 +233,7 @@ def iter_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
 
 def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None:
     commit_id = record.get("commit_id")
+    dataset_split = record.get("dataset_split")
     drev = record.get("drev")
     if not isinstance(drev, dict):
         # Backward compatibility with the previous flat per_commit_drevs.jsonl
@@ -243,6 +246,13 @@ def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None
     if not isinstance(commit_id, str) or not commit_id:
         print(f"[WARN] Skipping {line_label}: missing commit_id.", file=sys.stderr)
         return None
+    if dataset_split not in {"eval", "final test"}:
+        print(
+            f"[WARN] Skipping {line_label}: invalid dataset_split "
+            f"{dataset_split!r}.",
+            file=sys.stderr,
+        )
+        return None
     if not isinstance(phid, str) or not phid:
         print(f"[WARN] Skipping {line_label}: missing DREV phid.", file=sys.stderr)
         return None
@@ -253,7 +263,12 @@ def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None
         print(f"[WARN] Skipping {line_label}: invalid DREV id {drev_id!r}.", file=sys.stderr)
         return None
 
-    return DrevRef(commit_id=commit_id, drev_id=drev_id_int, phid=phid)
+    return DrevRef(
+        commit_id=commit_id,
+        drev_id=drev_id_int,
+        dataset_split=dataset_split,
+        phid=phid,
+    )
 
 
 def load_drev_refs(path: Path, *, tail_count: int | None = None) -> list[DrevRef]:
@@ -309,6 +324,7 @@ def write_transactions(
                 output_row = {
                     "commit_id": ref.commit_id,
                     "drev_id": ref.drev_id,
+                    "dataset_split": ref.dataset_split,
                     "transactions": transactions,
                 }
                 output_file.write(json.dumps(output_row) + "\n")

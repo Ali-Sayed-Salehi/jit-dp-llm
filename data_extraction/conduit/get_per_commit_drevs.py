@@ -13,17 +13,24 @@ through Conduit and only published, closed revisions are written to:
 
     datasets/mozilla_code_review/per_commit_drevs.jsonl
 
-Each output row contains `commit_id` with the commit hash, followed by `drev`
-with the raw revision object returned by `differential.revision.search`.
+Each output row contains `commit_id` with the commit hash, `dataset_split`
+(`eval` or `final test`), and `drev` with the raw revision object returned by
+`differential.revision.search`.
 
-Use `--debug` to process only the last 10 commits by first-parent graph order.
-The debug subset is selected before extracting DREV URLs or initializing the
-Phabricator client, so skipped commits do not cause API calls.
+The script uses risk_predictions_eval.json and risk_predictions_final_test.json
+to derive Mercurial-order split boundaries. It only considers commits from the
+start of the eval boundary through the end of the final-test boundary.
+
+Use `--debug` to process only the last 10 eligible commits by first-parent graph
+order. The debug subset is selected before extracting DREV URLs or initializing
+the Phabricator client, so skipped commits do not cause API calls.
 """
 
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -39,6 +46,15 @@ DEFAULT_INPUT_JSONL = (
 DEFAULT_OUTPUT_JSONL = (
     REPO_ROOT / "datasets" / "mozilla_code_review" / "per_commit_drevs.jsonl"
 )
+DEFAULT_EVAL_PREDICTIONS_JSON = (
+    REPO_ROOT / "datasets" / "mozilla_code_review" / "risk_predictions_eval.json"
+)
+DEFAULT_FINAL_TEST_PREDICTIONS_JSON = (
+    REPO_ROOT
+    / "datasets"
+    / "mozilla_code_review"
+    / "risk_predictions_final_test.json"
+)
 DEFAULT_PHABRICATOR_API_URL = "https://phabricator.services.mozilla.com/api/"
 
 NULL_NODE = "0000000000000000000000000000000000000000"
@@ -46,6 +62,23 @@ DREV_URL_RE = re.compile(
     r"https://phabricator\.services\.mozilla\.com/D(\d+)\s*\Z",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class SplitBoundary:
+    name: str
+    start_index: int
+    end_index: int
+    start_commit_id: str
+    end_commit_id: str
+    sample_commit_ids: frozenset[str]
+    sample_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class CommitWorkItem:
+    commit: dict[str, Any]
+    dataset_split: str
 
 
 class ConduitCaller:
@@ -136,9 +169,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to write per-commit DREV JSONL.",
     )
     parser.add_argument(
+        "--eval-predictions-json",
+        default=str(DEFAULT_EVAL_PREDICTIONS_JSON),
+        help="Path to risk_predictions_eval.json.",
+    )
+    parser.add_argument(
+        "--final-test-predictions-json",
+        default=str(DEFAULT_FINAL_TEST_PREDICTIONS_JSON),
+        help="Path to risk_predictions_final_test.json.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
-        help="Process only the last debug-count commits by first-parent graph order.",
+        help=(
+            "Process only the last debug-count eligible commits by first-parent "
+            "graph order."
+        ),
     )
     parser.add_argument(
         "--debug-count",
@@ -228,7 +274,7 @@ def is_published_and_closed(revision: dict[str, Any]) -> bool:
     return is_published and is_closed
 
 
-def load_commits_for_debug(path: Path) -> list[dict[str, Any]]:
+def load_commits(path: Path) -> list[dict[str, Any]]:
     commits: list[dict[str, Any]] = []
     node_to_index: dict[str, int] = {}
 
@@ -263,6 +309,155 @@ def load_commits_for_debug(path: Path) -> list[dict[str, Any]]:
         commits.append(record)
 
     return commits
+
+
+def load_prediction_commit_ids(path: Path) -> list[str]:
+    with path.open("r", encoding="utf-8") as input_file:
+        data = json.load(input_file)
+
+    rows = data.get("samples")
+    if not isinstance(rows, list):
+        rows = data.get("results")
+    if not isinstance(rows, list):
+        raise ValueError(f"{path} must contain a list field named samples or results")
+
+    commit_ids: list[str] = []
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}: row {row_index} is not an object")
+        commit_id = row.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id:
+            raise ValueError(f"{path}: row {row_index} has invalid commit_id")
+        commit_ids.append(commit_id)
+
+    if not commit_ids:
+        raise ValueError(f"{path} contains no prediction commit ids")
+    return commit_ids
+
+
+def build_split_boundary(
+    *,
+    name: str,
+    predictions_json: Path,
+    node_to_index: dict[str, int],
+) -> SplitBoundary:
+    commit_ids = load_prediction_commit_ids(predictions_json)
+    missing_commit_ids = [
+        commit_id for commit_id in commit_ids if commit_id not in node_to_index
+    ]
+    if missing_commit_ids:
+        preview = ", ".join(missing_commit_ids[:5])
+        raise ValueError(
+            f"{predictions_json} contains {len(missing_commit_ids)} commit ids "
+            f"that are not in all_commits.jsonl. First missing ids: {preview}"
+        )
+
+    indexed_commit_ids = sorted(
+        (node_to_index[commit_id], commit_id) for commit_id in commit_ids
+    )
+    start_index, start_commit_id = indexed_commit_ids[0]
+    end_index, end_commit_id = indexed_commit_ids[-1]
+
+    return SplitBoundary(
+        name=name,
+        start_index=start_index,
+        end_index=end_index,
+        start_commit_id=start_commit_id,
+        end_commit_id=end_commit_id,
+        sample_commit_ids=frozenset(commit_ids),
+        sample_indices=tuple(index for index, _ in indexed_commit_ids),
+    )
+
+
+def nearest_sample_distance(sample_indices: tuple[int, ...], index: int) -> int:
+    position = bisect_left(sample_indices, index)
+    distances: list[int] = []
+    if position < len(sample_indices):
+        distances.append(abs(sample_indices[position] - index))
+    if position > 0:
+        distances.append(abs(sample_indices[position - 1] - index))
+    if not distances:
+        raise ValueError("Cannot compute distance for an empty sample index list")
+    return min(distances)
+
+
+def classify_dataset_split(
+    *,
+    commit_id: str,
+    index: int,
+    eval_boundary: SplitBoundary,
+    final_test_boundary: SplitBoundary,
+) -> str:
+    in_eval_boundary = eval_boundary.start_index <= index <= eval_boundary.end_index
+    in_final_test_boundary = (
+        final_test_boundary.start_index <= index <= final_test_boundary.end_index
+    )
+
+    if commit_id in eval_boundary.sample_commit_ids:
+        return eval_boundary.name
+    if commit_id in final_test_boundary.sample_commit_ids:
+        return final_test_boundary.name
+
+    if in_eval_boundary and not in_final_test_boundary:
+        return eval_boundary.name
+    if in_final_test_boundary and not in_eval_boundary:
+        return final_test_boundary.name
+
+    eval_distance = nearest_sample_distance(eval_boundary.sample_indices, index)
+    final_test_distance = nearest_sample_distance(
+        final_test_boundary.sample_indices,
+        index,
+    )
+    if eval_distance < final_test_distance:
+        return eval_boundary.name
+    if final_test_distance < eval_distance:
+        return final_test_boundary.name
+
+    return (
+        final_test_boundary.name
+        if index >= final_test_boundary.start_index
+        else eval_boundary.name
+    )
+
+
+def build_work_items(
+    *,
+    commits: list[dict[str, Any]],
+    node_to_index: dict[str, int],
+    eval_boundary: SplitBoundary,
+    final_test_boundary: SplitBoundary,
+) -> list[CommitWorkItem]:
+    start_index = eval_boundary.start_index
+    end_index = final_test_boundary.end_index
+    if start_index > end_index:
+        raise ValueError(
+            "Eval start boundary comes after final-test end boundary: "
+            f"{eval_boundary.start_commit_id} > {final_test_boundary.end_commit_id}"
+        )
+
+    work_items: list[CommitWorkItem] = []
+    for index in range(start_index, end_index + 1):
+        commit = commits[index]
+        commit_id = commit["node"]
+        dataset_split = classify_dataset_split(
+            commit_id=commit_id,
+            index=node_to_index[commit_id],
+            eval_boundary=eval_boundary,
+            final_test_boundary=final_test_boundary,
+        )
+        work_items.append(
+            CommitWorkItem(commit=commit, dataset_split=dataset_split)
+        )
+
+    return work_items
+
+
+def describe_boundary(boundary: SplitBoundary) -> str:
+    return (
+        f"{boundary.name}: {boundary.start_commit_id} "
+        f"(index {boundary.start_index}) -> {boundary.end_commit_id} "
+        f"(index {boundary.end_index}), samples={len(boundary.sample_indices)}"
+    )
 
 
 def select_last_commits_by_first_parent(
@@ -326,41 +521,48 @@ def select_last_commits_by_first_parent(
     return list(reversed(selected_newest_first))
 
 
-def get_commits_to_process(
-    path: Path,
-    debug: bool,
-    debug_count: int,
-) -> list[dict[str, Any]] | None:
-    if not debug:
-        return None
-    if debug_count <= 0:
-        print("DEBUG: selected 0 commits from first-parent graph tail.", file=sys.stderr)
+def select_last_work_items_by_first_parent(
+    work_items: list[CommitWorkItem],
+    count: int,
+) -> list[CommitWorkItem]:
+    if count <= 0 or not work_items:
         return []
 
-    commits = load_commits_for_debug(path)
-    selected = select_last_commits_by_first_parent(commits, debug_count)
+    selected_commits = select_last_commits_by_first_parent(
+        [item.commit for item in work_items],
+        count,
+    )
+    item_by_node = {item.commit["node"]: item for item in work_items}
+    return [item_by_node[commit["node"]] for commit in selected_commits]
+
+
+def get_work_items_to_process(
+    *,
+    all_work_items: list[CommitWorkItem],
+    debug: bool,
+    debug_count: int,
+) -> list[CommitWorkItem]:
+    if not debug:
+        return all_work_items
+    if debug_count <= 0:
+        print(
+            "DEBUG: selected 0 eligible commits from first-parent graph tail.",
+            file=sys.stderr,
+        )
+        return []
+
+    selected = select_last_work_items_by_first_parent(all_work_items, debug_count)
     print(
-        f"DEBUG: selected {len(selected)} commits from first-parent graph tail.",
+        f"DEBUG: selected {len(selected)} eligible commits from "
+        "first-parent graph tail.",
         file=sys.stderr,
     )
     return selected
 
 
-def iter_commits_to_process(
-    path: Path,
-    debug_commits: list[dict[str, Any]] | None,
-) -> Iterator[dict[str, Any]]:
-    if debug_commits is not None:
-        yield from debug_commits
-        return
-
-    for _, record in iter_jsonl(path):
-        yield record
-
-
 def process_commits(
     *,
-    commits: Iterator[dict[str, Any]],
+    work_items: Iterator[CommitWorkItem],
     output_jsonl: Path,
     client: PhabricatorClient,
 ) -> dict[str, int]:
@@ -376,7 +578,8 @@ def process_commits(
     }
 
     with output_jsonl.open("w", encoding="utf-8") as output_file:
-        for commit in commits:
+        for work_item in work_items:
+            commit = work_item.commit
             stats["commits_seen"] += 1
             commit_id = commit.get("node")
             if not isinstance(commit_id, str) or not commit_id:
@@ -406,6 +609,7 @@ def process_commits(
 
             output_row = {
                 "commit_id": commit_id,
+                "dataset_split": work_item.dataset_split,
                 "drev": revision,
             }
             output_file.write(json.dumps(output_row) + "\n")
@@ -418,16 +622,59 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     input_jsonl = Path(args.input_jsonl)
     output_jsonl = Path(args.output_jsonl)
+    eval_predictions_json = Path(args.eval_predictions_json)
+    final_test_predictions_json = Path(args.final_test_predictions_json)
 
     if not input_jsonl.exists():
         raise FileNotFoundError(f"Input JSONL not found: {input_jsonl}")
+    if not eval_predictions_json.exists():
+        raise FileNotFoundError(
+            f"Eval predictions JSON not found: {eval_predictions_json}"
+        )
+    if not final_test_predictions_json.exists():
+        raise FileNotFoundError(
+            f"Final-test predictions JSON not found: {final_test_predictions_json}"
+        )
 
-    debug_commits = get_commits_to_process(
-        input_jsonl,
+    commits = load_commits(input_jsonl)
+    node_to_index = {
+        commit["node"]: index for index, commit in enumerate(commits)
+    }
+
+    eval_boundary = build_split_boundary(
+        name="eval",
+        predictions_json=eval_predictions_json,
+        node_to_index=node_to_index,
+    )
+    final_test_boundary = build_split_boundary(
+        name="final test",
+        predictions_json=final_test_predictions_json,
+        node_to_index=node_to_index,
+    )
+    print(describe_boundary(eval_boundary), file=sys.stderr)
+    print(describe_boundary(final_test_boundary), file=sys.stderr)
+
+    overlap_start = max(eval_boundary.start_index, final_test_boundary.start_index)
+    overlap_end = min(eval_boundary.end_index, final_test_boundary.end_index)
+    if overlap_start <= overlap_end:
+        print(
+            "Split boundary windows overlap for "
+            f"{overlap_end - overlap_start + 1} commits; explicit prediction "
+            "membership is used first, then nearest split sample.",
+            file=sys.stderr,
+        )
+
+    all_work_items = build_work_items(
+        commits=commits,
+        node_to_index=node_to_index,
+        eval_boundary=eval_boundary,
+        final_test_boundary=final_test_boundary,
+    )
+    work_items = get_work_items_to_process(
+        all_work_items=all_work_items,
         debug=args.debug,
         debug_count=args.debug_count,
     )
-    commits = iter_commits_to_process(input_jsonl, debug_commits)
 
     caller = ConduitCaller(
         min_interval_seconds=args.rate_limit_min_interval,
@@ -437,7 +684,7 @@ def main(argv: list[str] | None = None) -> None:
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
 
     stats = process_commits(
-        commits=commits,
+        work_items=iter(work_items),
         output_jsonl=output_jsonl,
         client=client,
     )
