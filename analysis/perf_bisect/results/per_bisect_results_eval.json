@@ -1,6 +1,6 @@
 {
   "dataset": "eval",
-  "generated_at": "2026-05-15T20:40:16.768934+00:00",
+  "generated_at": "2026-05-16T03:10:31.233338+00:00",
   "inputs": {
     "regressions": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/perf_bisect_regressions_eval.jsonl",
     "revision_data": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl",
@@ -29,6 +29,7 @@
   "settings": {
     "backfill_non_monotonic_retrigger_count": 2,
     "random_seed": 0,
+    "random_seed_derivation": "random_seed + regression_id - 1 when available; otherwise random_seed + split row index",
     "test_duration_minutes": 1.0,
     "workers": 1
   }

@@ -24,15 +24,17 @@ reports aggregate localization metrics.
 - `results/per_bisect_results_final_test_details.json`: per-regression
   final-test details.
 
-In the detail files, each oracle decision includes `expected_decision` and
-`decision_correct` when the known culprit is present in the candidate range.
-`expected_decision` is `clean` before the culprit and `bad` at or after the
-culprit. If the known culprit is not in the reconstructed candidate range, these
-fields are `null` because the simulator cannot label each probed candidate's
-side from that path. Raw probe attempts are recorded in `decisions`; the
-decisions actually used for localization are recorded in `final_decisions`.
-Backfill results also record `non_monotonic_retrigger_count` and
-`non_monotonic_retrigger_intervals`.
+In the detail files, each per-regression result includes `regression_id`, which
+is unique across the eval and final-test splits and can be used to join against
+`per_regression_oracle_metrics.jsonl`. Each oracle decision includes
+`expected_decision` and `decision_correct` when the known culprit is present in
+the candidate range. `expected_decision` is `clean` before the culprit and `bad`
+at or after the culprit. If the known culprit is not in the reconstructed
+candidate range, these fields are `null` because the simulator cannot label each
+probed candidate's side from that path. Raw probe attempts are recorded in
+`decisions`; the decisions actually used for localization are recorded in
+`final_decisions`. Backfill results also record
+`non_monotonic_retrigger_count` and `non_monotonic_retrigger_intervals`.
 
 ## Inputs
 
@@ -44,11 +46,11 @@ The default inputs are loaded from `datasets/mozilla_perf_bisect`:
 - `per_revision_perf_data.jsonl`
 - `all_commits.jsonl`
 
-The regression rows provide the `good_revision`, `bad_revision`,
-`culprit_revision`, and failing signature values. The signature-info file
-provides the number of replicate tests to submit for each signature. The
-revision-performance file provides the revision graph and historical summary and
-replicate measurements.
+The regression rows provide the globally unique `regression_id`,
+`good_revision`, `bad_revision`, `culprit_revision`, and failing signature
+values. The signature-info file provides the number of replicate tests to submit
+for each signature. The revision-performance file provides the revision graph
+and historical summary and replicate measurements.
 
 `calculate_oracle_metrics.py` uses `all_commits.jsonl` for Mercurial parent
 relationships and `per_revision_perf_data.jsonl` for the real summary and
@@ -130,8 +132,10 @@ All measurement draws are with replacement, so multiple probes can draw the same
 source observation.
 
 Same-side fallback randomness is seeded by `--random-seed`, which defaults to
-`0`. Each regression gets a derived seed based on its split order, so default
-runs are reproducible.
+`0`. Each regression gets a derived seed based on `regression_id - 1` when
+`regression_id` is present, so default runs are reproducible and stable across
+split order. Older rows without `regression_id` fall back to their split row
+order.
 
 ## Backfill Localizer
 

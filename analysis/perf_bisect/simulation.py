@@ -301,6 +301,10 @@ def run_dataset(
                 backfill_non_monotonic_retrigger_count
             ),
             "random_seed": random_seed,
+            "random_seed_derivation": (
+                "random_seed + regression_id - 1 when available; "
+                "otherwise random_seed + split row index"
+            ),
         },
     }
     return (
@@ -340,7 +344,15 @@ def run_one_regression(
 ):
     """Run one regression with a fresh oracle and test executor."""
 
-    regression_seed = None if random_seed is None else random_seed + regression_index
+    regression_seed_offset = regression_seed_index(
+        regression,
+        fallback_index=regression_index,
+    )
+    regression_seed = (
+        None
+        if random_seed is None
+        else random_seed + regression_seed_offset
+    )
     oracle = oracle_spec.build(
         signature_info=signature_info,
         revision_perf=revision_perf,
@@ -392,6 +404,38 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
     with path.open() as fh:
         return [json.loads(line) for line in fh if line.strip()]
+
+
+def regression_seed_index(
+    regression: Mapping[str, Any],
+    *,
+    fallback_index: int,
+) -> int:
+    """Return the stable per-regression seed offset."""
+
+    regression_id = parse_regression_id(regression, context="regression seed")
+    if regression_id is None:
+        return fallback_index
+    return regression_id - 1
+
+
+def parse_regression_id(
+    regression: Mapping[str, Any],
+    *,
+    context: str,
+) -> int | None:
+    """Parse an optional positive regression_id from one regression row."""
+
+    raw_id = regression.get("regression_id")
+    if raw_id is None:
+        return None
+    try:
+        regression_id = int(raw_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid regression_id at {context}: {raw_id!r}") from exc
+    if regression_id < 1:
+        raise ValueError(f"regression_id must be positive at {context}: {raw_id!r}")
+    return regression_id
 
 
 def load_signature_info(path: Path) -> SignatureInfoIndex:

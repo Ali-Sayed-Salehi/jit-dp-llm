@@ -1,6 +1,6 @@
 {
   "dataset": "final_test",
-  "generated_at": "2026-05-15T20:40:16.800885+00:00",
+  "generated_at": "2026-05-16T03:10:31.269666+00:00",
   "inputs": {
     "regressions": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/perf_bisect_regressions_final_test.jsonl",
     "revision_data": "/home/ali/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl",
@@ -12,15 +12,16 @@
       "metrics": {
         "max_test_runs": 1750,
         "max_trtc_minutes": 1050.0,
-        "mean_test_runs": 468.3,
-        "mean_trtc_minutes": 277.5,
-        "success_rate_percent": 57.9,
-        "successful_localizations": 11,
+        "mean_test_runs": 467.2,
+        "mean_trtc_minutes": 252.2,
+        "success_rate_percent": 52.6,
+        "successful_localizations": 10,
         "total_regressions": 19,
         "undefined_causes": {
+          "first_bad_is_not_culprit": 1,
           "non_monotonic_oracle_decisions": 8
         },
-        "undefined_localizations": 8
+        "undefined_localizations": 9
       },
       "test_oracle": "SummaryComparison"
     }
@@ -28,6 +29,7 @@
   "settings": {
     "backfill_non_monotonic_retrigger_count": 2,
     "random_seed": 0,
+    "random_seed_derivation": "random_seed + regression_id - 1 when available; otherwise random_seed + split row index",
     "test_duration_minutes": 1.0,
     "workers": 1
   }

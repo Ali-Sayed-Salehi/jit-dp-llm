@@ -17,6 +17,7 @@ class LocalizationResult:
 
     localizer: str
     oracle: str
+    regression_id: int | None
     alert_summary_id: int | None
     signature_id: int | None
     good_revision: str
@@ -44,6 +45,7 @@ class LocalizationResult:
         return {
             "localizer": self.localizer,
             "oracle": self.oracle,
+            "regression_id": self.regression_id,
             "alert_summary_id": self.alert_summary_id,
             "signature_id": self.signature_id,
             "good_revision": self.good_revision,
@@ -177,6 +179,7 @@ class Backfill(CulpritLocalizer):
         bad_revision = str(regression["bad_revision"])
         culprit_revision = regression.get("culprit_revision")
         culprit_revision = str(culprit_revision) if culprit_revision is not None else None
+        regression_id = self._regression_id(regression)
         signature_id = self._signature_id(regression)
 
         path = revision_perf.path_between(good_revision, bad_revision)
@@ -184,6 +187,7 @@ class Backfill(CulpritLocalizer):
             return LocalizationResult(
                 localizer=self.name,
                 oracle=oracle.name,
+                regression_id=regression_id,
                 alert_summary_id=regression.get("alert_summary_id"),
                 signature_id=signature_id,
                 good_revision=good_revision,
@@ -255,6 +259,7 @@ class Backfill(CulpritLocalizer):
         return LocalizationResult(
             localizer=self.name,
             oracle=oracle.name,
+            regression_id=regression_id,
             alert_summary_id=regression.get("alert_summary_id"),
             signature_id=signature_id,
             good_revision=good_revision,
@@ -425,6 +430,15 @@ class Backfill(CulpritLocalizer):
             signature_id, raw = next(iter(regression["failing_sigs"].items()))
             return int(raw.get("signature_id", signature_id))
         return None
+
+    @staticmethod
+    def _regression_id(regression: Mapping[str, Any]) -> int | None:
+        """Extract the stable regression row id when available."""
+
+        raw_id = regression.get("regression_id")
+        if raw_id is None:
+            return None
+        return int(raw_id)
 
 
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
