@@ -17,6 +17,6 @@ cd "${REPO_ROOT}"
   --test-duration-minutes 1.0 \
   --oracles SummaryComparison \
   --localizers Backfill \
-  --backfill-non-monotonic-retrigger-count 2 \
+  --backfill-retrigger-count 2 \
   --random-seed 0 \
   "$@"

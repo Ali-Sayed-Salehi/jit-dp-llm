@@ -33,7 +33,7 @@ class LocalizationResult:
     candidate_revisions_tested: int
     decisions: list[OracleResult] = field(default_factory=list)
     final_decisions: list[OracleResult] = field(default_factory=list)
-    non_monotonic_retrigger_intervals: list[list[str]] = field(default_factory=list)
+    retrigger_intervals: list[list[str]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         """Serialize the localization result into JSON-compatible primitives."""
@@ -59,12 +59,8 @@ class LocalizationResult:
             "oracle_queries": self.oracle_queries,
             "path_length": self.path_length,
             "candidate_revisions_tested": self.candidate_revisions_tested,
-            "non_monotonic_retrigger_count": len(
-                self.non_monotonic_retrigger_intervals
-            ),
-            "non_monotonic_retrigger_intervals": (
-                self.non_monotonic_retrigger_intervals
-            ),
+            "retrigger_count": len(self.retrigger_intervals),
+            "retrigger_intervals": self.retrigger_intervals,
             "decisions": [
                 self._decision_to_json(
                     decision,
@@ -153,16 +149,12 @@ class Backfill(CulpritLocalizer):
 
     name = "Backfill"
 
-    def __init__(self, *, backfill_non_monotonic_retrigger_count: int = 2) -> None:
-        """Configure how often non-monotonic adjacent intervals are retriggered."""
+    def __init__(self, *, backfill_retrigger_count: int = 2) -> None:
+        """Configure how often suspicious Backfill decisions are retriggered."""
 
-        if backfill_non_monotonic_retrigger_count < 0:
-            raise ValueError(
-                "backfill_non_monotonic_retrigger_count must be non-negative"
-            )
-        self.backfill_non_monotonic_retrigger_count = (
-            backfill_non_monotonic_retrigger_count
-        )
+        if backfill_retrigger_count < 0:
+            raise ValueError("backfill_retrigger_count must be non-negative")
+        self.backfill_retrigger_count = backfill_retrigger_count
 
     def localize(
         self,
@@ -221,11 +213,8 @@ class Backfill(CulpritLocalizer):
             culprit_revision=culprit_revision,
         )
         retrigger_intervals = []
-        for _ in range(self.backfill_non_monotonic_retrigger_count):
-            if undefined_reason != "non_monotonic_oracle_decisions":
-                break
-
-            interval = self._shortest_non_monotonic_interval(
+        for _ in range(self.backfill_retrigger_count):
+            interval = self._retrigger_interval(
                 path=path,
                 decisions=final_decisions,
             )
@@ -277,7 +266,7 @@ class Backfill(CulpritLocalizer):
             candidate_revisions_tested=len(revisions_to_probe),
             decisions=all_decisions,
             final_decisions=final_decisions,
-            non_monotonic_retrigger_intervals=retrigger_intervals,
+            retrigger_intervals=retrigger_intervals,
         )
 
     @staticmethod
@@ -345,6 +334,40 @@ class Backfill(CulpritLocalizer):
                 and decision_by_revision.get(right_revision) is OracleDecision.CLEAN
             ):
                 return [left_revision, right_revision]
+        return None
+
+    @staticmethod
+    def _retrigger_interval(
+        *,
+        path: list[str],
+        decisions: list[OracleResult],
+    ) -> list[str] | None:
+        """Return the next set of revisions that should be retriggered."""
+
+        interval = Backfill._shortest_non_monotonic_interval(
+            path=path,
+            decisions=decisions,
+        )
+        if interval is not None:
+            return interval
+
+        decision_by_revision = {
+            decision.revision: decision.decision for decision in decisions
+        }
+        revisions_to_probe = path[1:]
+        revision_decisions = [
+            decision_by_revision.get(revision) for revision in revisions_to_probe
+        ]
+        if (
+            revision_decisions
+            and all(decision is OracleDecision.CLEAN for decision in revision_decisions)
+        ):
+            return list(revisions_to_probe)
+        if (
+            revision_decisions
+            and all(decision is OracleDecision.BAD for decision in revision_decisions)
+        ):
+            return list(revisions_to_probe)
         return None
 
     @staticmethod

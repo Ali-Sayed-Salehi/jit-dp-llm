@@ -34,7 +34,7 @@ candidate range, these fields are `null` because the simulator cannot label each
 probed candidate's side from that path. Raw probe attempts are recorded in
 `decisions`; the decisions actually used for localization are recorded in
 `final_decisions`. Backfill results also record
-`non_monotonic_retrigger_count` and `non_monotonic_retrigger_intervals`.
+`retrigger_count` and `retrigger_intervals`.
 
 ## Inputs
 
@@ -124,15 +124,16 @@ It succeeds only when the final oracle decisions are monotonic:
 The found culprit is the first `bad` revision in that monotonic sequence. If the
 observed clean/bad pattern contains a `bad` decision followed by a later `clean`
 decision, Backfill treats the shortest such interval as the adjacent bad-to-clean
-pair and retriggers those two commits. After a retrigger, `final_decisions`
-reconciles repeated results for each retriggered commit by majority vote over
-the drawn clean/bad decisions, breaking ties with the latest draw. It does not
-average measurement values. The raw attempts remain in `decisions`.
+pair and retriggers those two commits. If the whole candidate sequence is all
+`clean` or all `bad`, Backfill retriggers the full candidate sequence. After a
+retrigger, `final_decisions` reconciles repeated results for each retriggered
+commit by majority vote over the drawn clean/bad decisions, breaking ties with
+the latest draw. It does not average measurement values. The raw attempts remain
+in `decisions`.
 
-This process repeats up to `--backfill-non-monotonic-retrigger-count` times
-before the localization remains undefined as `non_monotonic_oracle_decisions`.
-The default is `2`, which models a small number of human retriggers without
-turning a noisy interval into an unbounded retry loop.
+This process repeats up to `--backfill-retrigger-count` times before the
+localization remains undefined. The default is `2`, which models a small number
+of human retriggers without turning noisy results into an unbounded retry loop.
 
 ## Metrics
 
@@ -229,10 +230,10 @@ Change executor capacity or test duration:
 python analysis/perf_bisect/simulation.py --workers 4 --test-duration-minutes 2
 ```
 
-Change the number of Backfill non-monotonic interval retriggers:
+Change the number of Backfill retriggers:
 
 ```bash
-python analysis/perf_bisect/simulation.py --backfill-non-monotonic-retrigger-count 3
+python analysis/perf_bisect/simulation.py --backfill-retrigger-count 3
 ```
 
 Change the noisy-oracle random seed:

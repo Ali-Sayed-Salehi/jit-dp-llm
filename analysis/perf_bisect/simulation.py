@@ -123,9 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             localizer_names=args.localizers,
             workers=args.workers,
             test_duration_minutes=args.test_duration_minutes,
-            backfill_non_monotonic_retrigger_count=(
-                args.backfill_non_monotonic_retrigger_count
-            ),
+            backfill_retrigger_count=args.backfill_retrigger_count,
             random_seed=args.random_seed,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
@@ -218,12 +216,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Culprit localization algorithms to run.",
     )
     parser.add_argument(
-        "--backfill-non-monotonic-retrigger-count",
+        "--backfill-retrigger-count",
         type=int,
         default=2,
         help=(
-            "Number of adjacent non-monotonic Backfill intervals to retrigger "
-            "before leaving the localization undefined."
+            "Number of suspicious Backfill decision sets to retrigger before "
+            "leaving the localization undefined. Suspicious sets include "
+            "adjacent non-monotonic intervals and all-clean/all-bad sequences."
         ),
     )
     parser.add_argument(
@@ -233,8 +232,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Seed for noisy oracle verdict draws.",
     )
     args = parser.parse_args(argv)
-    if args.backfill_non_monotonic_retrigger_count < 0:
-        parser.error("--backfill-non-monotonic-retrigger-count must be non-negative")
+    if args.backfill_retrigger_count < 0:
+        parser.error("--backfill-retrigger-count must be non-negative")
     return args
 
 
@@ -269,7 +268,7 @@ def run_dataset(
     localizer_names: Sequence[str],
     workers: int,
     test_duration_minutes: float,
-    backfill_non_monotonic_retrigger_count: int,
+    backfill_retrigger_count: int,
     random_seed: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
@@ -280,9 +279,7 @@ def run_dataset(
     for localizer_name in localizer_names:
         localizer = build_localizer(
             localizer_name,
-            backfill_non_monotonic_retrigger_count=(
-                backfill_non_monotonic_retrigger_count
-            ),
+            backfill_retrigger_count=backfill_retrigger_count,
         )
         for oracle_name in oracle_names:
             results = [
@@ -333,9 +330,7 @@ def run_dataset(
         "settings": {
             "workers": workers,
             "test_duration_minutes": test_duration_minutes,
-            "backfill_non_monotonic_retrigger_count": (
-                backfill_non_monotonic_retrigger_count
-            ),
+            "backfill_retrigger_count": backfill_retrigger_count,
             "random_seed": random_seed,
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
@@ -349,17 +344,13 @@ def run_dataset(
 def build_localizer(
     localizer_name: str,
     *,
-    backfill_non_monotonic_retrigger_count: int,
+    backfill_retrigger_count: int,
 ) -> CulpritLocalizer:
     """Construct a localizer from the registry."""
 
     localizer_cls = LOCALIZERS[localizer_name]
     if localizer_name == "Backfill":
-        return localizer_cls(
-            backfill_non_monotonic_retrigger_count=(
-                backfill_non_monotonic_retrigger_count
-            )
-        )
+        return localizer_cls(backfill_retrigger_count=backfill_retrigger_count)
     return localizer_cls()
 
 

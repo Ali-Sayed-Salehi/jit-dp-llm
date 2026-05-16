@@ -143,7 +143,7 @@ echo "Running script ..."
 # --oracles SummaryComparison \
 # --localizers Backfill \
 # --random-seed 0 \
-# --backfill-non-monotonic-retrigger-count 5
+# --backfill-retrigger-count 5
 
 
 echo "Script finished"
