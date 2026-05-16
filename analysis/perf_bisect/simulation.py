@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,23 @@ DATASETS = {
     "eval": "perf_bisect_regressions_eval.jsonl",
     "final_test": "perf_bisect_regressions_final_test.jsonl",
 }
+DEFAULT_BACKFILL_RETRIGGER_COUNT_MIN = 0
+DEFAULT_BACKFILL_RETRIGGER_COUNT_MAX = 5
+OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
+
+
+@dataclass(frozen=True)
+class SimulationParameters:
+    """Tunable algorithm parameters used by one simulation run."""
+
+    backfill_retrigger_count: int
+
+    def to_json(self) -> dict[str, Any]:
+        """Serialize parameter values into JSON-compatible primitives."""
+
+        return {
+            "backfill_retrigger_count": self.backfill_retrigger_count,
+        }
 
 
 @dataclass(frozen=True)
@@ -97,22 +115,72 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parse_args(argv)
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
+    default_parameters = SimulationParameters(
+        backfill_retrigger_count=args.backfill_retrigger_count,
+    )
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
     oracle_metrics = load_oracle_metrics(args.oracle_metrics)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    for dataset_name in dataset_names:
+    required_dataset_names = set(dataset_names)
+    if args.optuna_trials > 0:
+        required_dataset_names.add("eval")
+
+    regressions_by_dataset: dict[str, list[dict[str, Any]]] = {}
+    regressions_path_by_dataset: dict[str, Path] = {}
+    for dataset_name in sorted(required_dataset_names):
         regressions_path = resolve_regression_path(
             args.regression_dir,
             DATASETS[dataset_name],
         )
-        regressions = load_jsonl(regressions_path)
+        regressions_path_by_dataset[dataset_name] = regressions_path
+        regressions_by_dataset[dataset_name] = load_jsonl(regressions_path)
+
+    combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
+    combo_optuna: dict[tuple[str, str], dict[str, Any]] | None = None
+    optimization_settings = None
+    if args.optuna_trials > 0:
+        optimization_settings = {
+            "enabled": True,
+            "tuning_dataset": "eval",
+            "optuna_trials": args.optuna_trials,
+            "optuna_seed": args.optuna_seed,
+            "backfill_retrigger_count_min": args.backfill_retrigger_count_min,
+            "backfill_retrigger_count_max": args.backfill_retrigger_count_max,
+            "objectives": [
+                {"metric": "mean_trtc_minutes", "direction": "minimize"},
+                {"metric": "mean_test_runs", "direction": "minimize"},
+                {"metric": "success_rate_percent", "direction": "maximize"},
+            ],
+            "selection": (
+                "highest success_rate_percent on the Pareto frontier; ties "
+                "minimize mean_test_runs, then mean_trtc_minutes"
+            ),
+        }
+        combo_parameters, combo_optuna = optimize_parameters_on_eval(
+            regressions=regressions_by_dataset["eval"],
+            signature_info=signature_info,
+            revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
+            oracle_names=args.oracles,
+            localizer_names=args.localizers,
+            workers=args.workers,
+            test_duration_minutes=args.test_duration_minutes,
+            default_parameters=default_parameters,
+            backfill_retrigger_count_min=args.backfill_retrigger_count_min,
+            backfill_retrigger_count_max=args.backfill_retrigger_count_max,
+            optuna_trials=args.optuna_trials,
+            optuna_seed=args.optuna_seed,
+            random_seed=args.random_seed,
+        )
+
+    for dataset_name in dataset_names:
         summary_output, details_output = run_dataset(
             dataset_name=dataset_name,
-            regressions=regressions,
-            regressions_path=regressions_path,
+            regressions=regressions_by_dataset[dataset_name],
+            regressions_path=regressions_path_by_dataset[dataset_name],
             signature_info_path=args.signature_info,
             revision_data_path=args.revision_data,
             oracle_metrics_path=args.oracle_metrics,
@@ -123,7 +191,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             localizer_names=args.localizers,
             workers=args.workers,
             test_duration_minutes=args.test_duration_minutes,
-            backfill_retrigger_count=args.backfill_retrigger_count,
+            default_parameters=default_parameters,
+            combo_parameters=combo_parameters,
+            combo_optuna=combo_optuna,
+            optimization_settings=optimization_settings,
             random_seed=args.random_seed,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
@@ -222,8 +293,43 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Number of suspicious Backfill decision sets to retrigger before "
             "leaving the localization undefined. Suspicious sets include "
-            "adjacent non-monotonic intervals and all-clean sequences."
+            "adjacent non-monotonic intervals and all-clean sequences. Used "
+            "directly when Optuna is disabled, and as a fallback default for "
+            "combos without tuned parameters."
         ),
+    )
+    parser.add_argument(
+        "--optuna-trials",
+        "--mopt-trials",
+        dest="optuna_trials",
+        type=int,
+        default=0,
+        help=(
+            "Number of Optuna trials per localizer/oracle combo. When positive, "
+            "parameters are optimized on the eval split and replayed on the "
+            "requested split(s)."
+        ),
+    )
+    parser.add_argument(
+        "--optuna-seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for Optuna samplers, used to make optimization reproducible. "
+            "Defaults to --random-seed."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-retrigger-count-min",
+        type=int,
+        default=DEFAULT_BACKFILL_RETRIGGER_COUNT_MIN,
+        help="Minimum Backfill retrigger count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--backfill-retrigger-count-max",
+        type=int,
+        default=DEFAULT_BACKFILL_RETRIGGER_COUNT_MAX,
+        help="Maximum Backfill retrigger count sampled by Optuna.",
     )
     parser.add_argument(
         "--random-seed",
@@ -234,6 +340,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.backfill_retrigger_count < 0:
         parser.error("--backfill-retrigger-count must be non-negative")
+    if args.optuna_trials < 0:
+        parser.error("--optuna-trials must be non-negative")
+    if args.backfill_retrigger_count_min < 0:
+        parser.error("--backfill-retrigger-count-min must be non-negative")
+    if args.backfill_retrigger_count_max < args.backfill_retrigger_count_min:
+        parser.error(
+            "--backfill-retrigger-count-max must be greater than or equal to "
+            "--backfill-retrigger-count-min"
+        )
+    if args.optuna_seed is None:
+        args.optuna_seed = args.random_seed
+    elif args.optuna_trials > 0 and args.optuna_seed != args.random_seed:
+        parser.error("--optuna-seed must match --random-seed when Optuna is enabled")
     return args
 
 
@@ -268,7 +387,10 @@ def run_dataset(
     localizer_names: Sequence[str],
     workers: int,
     test_duration_minutes: float,
-    backfill_retrigger_count: int,
+    default_parameters: SimulationParameters,
+    combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
+    combo_optuna: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
+    optimization_settings: Mapping[str, Any] | None = None,
     random_seed: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
@@ -277,46 +399,49 @@ def run_dataset(
     detail_runs = []
 
     for localizer_name in localizer_names:
-        localizer = build_localizer(
-            localizer_name,
-            backfill_retrigger_count=backfill_retrigger_count,
-        )
         for oracle_name in oracle_names:
-            results = [
-                run_one_regression(
-                    regression_index=regression_index,
-                    regression=regression,
-                    localizer=localizer,
-                    oracle_spec=ORACLES[oracle_name],
-                    signature_info=signature_info,
-                    revision_perf=revision_perf,
-                    oracle_metrics=oracle_metrics,
-                    workers=workers,
-                    test_duration_minutes=test_duration_minutes,
-                    random_seed=random_seed,
-                )
-                for regression_index, regression in enumerate(regressions)
-            ]
-            summary_runs.append(
-                {
-                    "localizer": localizer_name,
-                    "test_oracle": oracle_name,
-                    "metrics": compute_metrics(results),
-                }
+            combo_key = (localizer_name, oracle_name)
+            parameters = (
+                combo_parameters.get(combo_key, default_parameters)
+                if combo_parameters is not None
+                else default_parameters
             )
+            results, metrics = run_combo(
+                regressions=regressions,
+                localizer_name=localizer_name,
+                oracle_name=oracle_name,
+                signature_info=signature_info,
+                revision_perf=revision_perf,
+                oracle_metrics=oracle_metrics,
+                workers=workers,
+                test_duration_minutes=test_duration_minutes,
+                parameters=parameters,
+                random_seed=random_seed,
+            )
+            summary_run = {
+                "localizer": localizer_name,
+                "test_oracle": oracle_name,
+                "parameters": parameters.to_json(),
+                "metrics": metrics,
+            }
+            if combo_optuna is not None and combo_key in combo_optuna:
+                summary_run["optuna"] = dict(combo_optuna[combo_key])
+            summary_runs.append(summary_run)
             print_undefined_localizations(
                 dataset_name=dataset_name,
                 localizer_name=localizer_name,
                 oracle_name=oracle_name,
                 results=results,
             )
-            detail_runs.append(
-                {
-                    "localizer": localizer_name,
-                    "test_oracle": oracle_name,
-                    "results": [result.to_json() for result in results],
-                }
-            )
+            detail_run = {
+                "localizer": localizer_name,
+                "test_oracle": oracle_name,
+                "parameters": parameters.to_json(),
+                "results": [result.to_json() for result in results],
+            }
+            if combo_optuna is not None and combo_key in combo_optuna:
+                detail_run["optuna"] = dict(combo_optuna[combo_key])
+            detail_runs.append(detail_run)
 
     base_output = {
         "dataset": dataset_name,
@@ -330,28 +455,327 @@ def run_dataset(
         "settings": {
             "workers": workers,
             "test_duration_minutes": test_duration_minutes,
-            "backfill_retrigger_count": backfill_retrigger_count,
+            "default_parameters": default_parameters.to_json(),
+            "backfill_retrigger_count": default_parameters.backfill_retrigger_count,
             "random_seed": random_seed,
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
     }
+    if optimization_settings is not None:
+        base_output["settings"]["optimization"] = dict(optimization_settings)
     return (
         {**base_output, "runs": summary_runs},
         {**base_output, "runs": detail_runs},
     )
 
 
+def run_combo(
+    *,
+    regressions: Sequence[Mapping[str, Any]],
+    localizer_name: str,
+    oracle_name: str,
+    signature_info: SignatureInfoIndex,
+    revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
+    workers: int,
+    test_duration_minutes: float,
+    parameters: SimulationParameters,
+    random_seed: int | None,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Run one localizer/oracle pair and return per-regression and summary metrics."""
+
+    localizer = build_localizer(
+        localizer_name,
+        parameters=parameters,
+    )
+    results = [
+        run_one_regression(
+            regression_index=regression_index,
+            regression=regression,
+            localizer=localizer,
+            oracle_spec=ORACLES[oracle_name],
+            signature_info=signature_info,
+            revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
+            workers=workers,
+            test_duration_minutes=test_duration_minutes,
+            random_seed=random_seed,
+        )
+        for regression_index, regression in enumerate(regressions)
+    ]
+    return results, compute_metrics(results)
+
+
 def build_localizer(
     localizer_name: str,
     *,
-    backfill_retrigger_count: int,
+    parameters: SimulationParameters,
 ) -> CulpritLocalizer:
     """Construct a localizer from the registry."""
 
     localizer_cls = LOCALIZERS[localizer_name]
     if localizer_name == "Backfill":
-        return localizer_cls(backfill_retrigger_count=backfill_retrigger_count)
+        return localizer_cls(
+            backfill_retrigger_count=parameters.backfill_retrigger_count,
+        )
     return localizer_cls()
+
+
+def optimize_parameters_on_eval(
+    *,
+    regressions: Sequence[Mapping[str, Any]],
+    signature_info: SignatureInfoIndex,
+    revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
+    oracle_names: Sequence[str],
+    localizer_names: Sequence[str],
+    workers: int,
+    test_duration_minutes: float,
+    default_parameters: SimulationParameters,
+    backfill_retrigger_count_min: int,
+    backfill_retrigger_count_max: int,
+    optuna_trials: int,
+    optuna_seed: int,
+    random_seed: int | None,
+) -> tuple[dict[tuple[str, str], SimulationParameters], dict[tuple[str, str], dict[str, Any]]]:
+    """Tune algorithm parameters on the eval split for every selected combo."""
+
+    combo_parameters: dict[tuple[str, str], SimulationParameters] = {}
+    combo_optuna: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for localizer_name in localizer_names:
+        for oracle_name in oracle_names:
+            combo_key = (localizer_name, oracle_name)
+            parameters, optuna_meta = optimize_combo_on_eval(
+                regressions=regressions,
+                localizer_name=localizer_name,
+                oracle_name=oracle_name,
+                signature_info=signature_info,
+                revision_perf=revision_perf,
+                oracle_metrics=oracle_metrics,
+                workers=workers,
+                test_duration_minutes=test_duration_minutes,
+                default_parameters=default_parameters,
+                backfill_retrigger_count_min=backfill_retrigger_count_min,
+                backfill_retrigger_count_max=backfill_retrigger_count_max,
+                optuna_trials=optuna_trials,
+                optuna_seed=optuna_seed,
+                random_seed=random_seed,
+            )
+            combo_parameters[combo_key] = parameters
+            combo_optuna[combo_key] = optuna_meta
+            print(
+                "optuna selected "
+                f"{localizer_name}/{oracle_name}: {parameters.to_json()}"
+            )
+
+    return combo_parameters, combo_optuna
+
+
+def optimize_combo_on_eval(
+    *,
+    regressions: Sequence[Mapping[str, Any]],
+    localizer_name: str,
+    oracle_name: str,
+    signature_info: SignatureInfoIndex,
+    revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
+    workers: int,
+    test_duration_minutes: float,
+    default_parameters: SimulationParameters,
+    backfill_retrigger_count_min: int,
+    backfill_retrigger_count_max: int,
+    optuna_trials: int,
+    optuna_seed: int,
+    random_seed: int | None,
+) -> tuple[SimulationParameters, dict[str, Any]]:
+    """Run one multi-objective Optuna study on eval for one localizer/oracle pair."""
+
+    if not has_tunable_parameters(localizer_name=localizer_name, oracle_name=oracle_name):
+        return (
+            default_parameters,
+            {
+                "skipped": True,
+                "reason": "no_tunable_parameters",
+                "n_trials": 0,
+                "seed": optuna_seed,
+            },
+        )
+
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
+
+    try:
+        sampler = optuna.samplers.NSGAIISampler(seed=int(optuna_seed))
+    except AttributeError:
+        sampler = optuna.samplers.RandomSampler(seed=int(optuna_seed))
+
+    study = optuna.create_study(
+        directions=["minimize", "minimize", "maximize"],
+        sampler=sampler,
+    )
+
+    def objective(trial: Any) -> tuple[float, float, float]:
+        parameters = suggest_parameters(
+            trial,
+            localizer_name=localizer_name,
+            oracle_name=oracle_name,
+            default_parameters=default_parameters,
+            backfill_retrigger_count_min=backfill_retrigger_count_min,
+            backfill_retrigger_count_max=backfill_retrigger_count_max,
+        )
+        _, metrics = run_combo(
+            regressions=regressions,
+            localizer_name=localizer_name,
+            oracle_name=oracle_name,
+            signature_info=signature_info,
+            revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
+            workers=workers,
+            test_duration_minutes=test_duration_minutes,
+            parameters=parameters,
+            random_seed=random_seed,
+        )
+        trial.set_user_attr("parameters", parameters.to_json())
+        trial.set_user_attr("metrics", metrics)
+        return objective_values(metrics)
+
+    study.optimize(objective, n_trials=int(optuna_trials), show_progress_bar=False)
+    if not study.best_trials:
+        raise RuntimeError(
+            f"Optuna produced no Pareto-optimal trials for {localizer_name}/{oracle_name}."
+        )
+
+    selected_trial = select_pareto_trial(study.best_trials)
+    selected_parameters = parameters_from_trial(selected_trial)
+    optuna_meta = {
+        "skipped": False,
+        "n_trials": int(optuna_trials),
+        "seed": int(optuna_seed),
+        "sampler": sampler.__class__.__name__,
+        "directions": ["minimize", "minimize", "maximize"],
+        "objectives": [
+            "mean_trtc_minutes",
+            "mean_test_runs",
+            "success_rate_percent",
+        ],
+        "selection": (
+            "highest success_rate_percent on the Pareto frontier; ties minimize "
+            "mean_test_runs, then mean_trtc_minutes"
+        ),
+        "pareto_front_trial_count": len(study.best_trials),
+        "selected_trial_number": int(selected_trial.number),
+        "selected_values": objective_values_to_json(selected_trial.values),
+        "selected_metrics": selected_trial.user_attrs["metrics"],
+        "selected_parameters": selected_parameters.to_json(),
+        "best_trial_params_raw": dict(selected_trial.params),
+        "pareto_front": [
+            trial_to_pareto_json(trial)
+            for trial in sorted(study.best_trials, key=lambda item: item.number)
+        ],
+    }
+    return selected_parameters, optuna_meta
+
+
+def has_tunable_parameters(*, localizer_name: str, oracle_name: str) -> bool:
+    """Return whether the selected combo currently exposes Optuna parameters."""
+
+    del oracle_name
+    return localizer_name == "Backfill"
+
+
+def suggest_parameters(
+    trial: Any,
+    *,
+    localizer_name: str,
+    oracle_name: str,
+    default_parameters: SimulationParameters,
+    backfill_retrigger_count_min: int,
+    backfill_retrigger_count_max: int,
+) -> SimulationParameters:
+    """Ask Optuna for one parameter set for the selected algorithm combo."""
+
+    del oracle_name
+    backfill_retrigger_count = default_parameters.backfill_retrigger_count
+    if localizer_name == "Backfill":
+        backfill_retrigger_count = trial.suggest_int(
+            "Backfill_backfill_retrigger_count",
+            int(backfill_retrigger_count_min),
+            int(backfill_retrigger_count_max),
+        )
+    return SimulationParameters(
+        backfill_retrigger_count=int(backfill_retrigger_count),
+    )
+
+
+def objective_values(metrics: Mapping[str, Any]) -> tuple[float, float, float]:
+    """Return Optuna objective values from aggregate simulation metrics."""
+
+    return (
+        finite_objective_value(metrics.get("mean_trtc_minutes")),
+        finite_objective_value(metrics.get("mean_test_runs")),
+        float(metrics.get("success_rate_percent") or 0.0),
+    )
+
+
+def finite_objective_value(value: Any) -> float:
+    """Convert missing or non-finite objective inputs into a finite penalty."""
+
+    if value is None:
+        return OBJECTIVE_FAILURE_PENALTY
+    objective_value = float(value)
+    if not math.isfinite(objective_value):
+        return OBJECTIVE_FAILURE_PENALTY
+    return objective_value
+
+
+def select_pareto_trial(trials: Sequence[Any]) -> Any:
+    """Choose the best Pareto trial by success rate, then cost tie-breakers."""
+
+    return max(
+        trials,
+        key=lambda trial: (
+            float(trial.values[2]),
+            -float(trial.values[1]),
+            -float(trial.values[0]),
+            -int(trial.number),
+        ),
+    )
+
+
+def parameters_from_trial(trial: Any) -> SimulationParameters:
+    """Read serialized simulation parameters from an Optuna trial."""
+
+    raw_parameters = trial.user_attrs["parameters"]
+    return SimulationParameters(
+        backfill_retrigger_count=int(raw_parameters["backfill_retrigger_count"]),
+    )
+
+
+def objective_values_to_json(values: Sequence[float] | None) -> dict[str, float] | None:
+    """Serialize Optuna objective values with metric names."""
+
+    if values is None:
+        return None
+    return {
+        "mean_trtc_minutes": float(values[0]),
+        "mean_test_runs": float(values[1]),
+        "success_rate_percent": float(values[2]),
+    }
+
+
+def trial_to_pareto_json(trial: Any) -> dict[str, Any]:
+    """Serialize one Pareto-front Optuna trial."""
+
+    return {
+        "trial_number": int(trial.number),
+        "values": objective_values_to_json(trial.values),
+        "params": dict(trial.params),
+        "parameters": trial.user_attrs.get("parameters"),
+        "metrics": trial.user_attrs.get("metrics"),
+    }
 
 
 def run_one_regression(

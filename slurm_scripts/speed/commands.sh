@@ -132,18 +132,20 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
-# --dataset all \
-# --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
-# --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
-# --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
-# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
-# --workers 1 \
-# --test-duration-minutes 1.0 \
-# --oracles SummaryComparison \
-# --localizers Backfill \
-# --random-seed 0 \
-# --backfill-retrigger-count 5
+python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
+--dataset all \
+--regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
+--signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
+--revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
+--output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
+--workers 1 \
+--test-duration-minutes 1.0 \
+--oracles SummaryComparison \
+--localizers Backfill \
+--random-seed 42 \
+--optuna-trials 50 \
+--backfill-retrigger-count-min 0 \
+--backfill-retrigger-count-max 200
 
 
 echo "Script finished"
