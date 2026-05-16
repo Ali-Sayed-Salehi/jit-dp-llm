@@ -130,6 +130,7 @@ echo "Running script ..."
 # --final-only
 # # --dry-run
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
 # --dataset all \

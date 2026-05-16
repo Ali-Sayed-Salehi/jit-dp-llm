@@ -35,6 +35,7 @@ DEFAULT_OUTPUT = (
     REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
 )
 DEFAULT_SMOOTHING_ALPHA = 0.5
+MINIMUM_ORACLE_ACCURACY = 0.51
 NULL_NODE = "0000000000000000000000000000000000000000"
 
 
@@ -144,6 +145,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for regression in regressions
     ]
+    output_rows, excluded_rows = exclude_low_accuracy_rows(
+        output_rows,
+        minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
+    )
     write_jsonl(args.output, output_rows)
 
     metric_stats = summarize_output_rows(output_rows)
@@ -152,6 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"measurement_keys={len(measurements)}")
     for key, value in sorted(path_stats.items()):
         print(f"{key}={value}")
+    print(f"oracle_metric_rows_excluded_low_accuracy={len(excluded_rows)}")
     for key, value in sorted(metric_stats.items()):
         print(f"{key}={value}")
     print(f"wrote {len(output_rows)} rows to {args.output}")
@@ -467,6 +473,39 @@ def accuracy(correct: int, total: int, *, smoothing_alpha: float) -> float | Non
     if total == 0:
         return None
     return (correct + smoothing_alpha) / (total + 2 * smoothing_alpha)
+
+
+def exclude_low_accuracy_rows(
+    rows: Sequence[dict[str, int | float | None]],
+    *,
+    minimum_accuracy: float,
+) -> tuple[list[dict[str, int | float | None]], list[dict[str, int | float | None]]]:
+    """Drop rows where either available oracle accuracy is below the threshold."""
+
+    kept_rows: list[dict[str, int | float | None]] = []
+    excluded_rows: list[dict[str, int | float | None]] = []
+    for row in rows:
+        summary_accuracy = row["summary_oracle_accuracy"]
+        replicate_accuracy = row["replicate_oracle_accuracy"]
+        should_exclude = (
+            (summary_accuracy is not None and summary_accuracy < minimum_accuracy)
+            or (
+                replicate_accuracy is not None
+                and replicate_accuracy < minimum_accuracy
+            )
+        )
+        if should_exclude:
+            excluded_rows.append(row)
+            print(
+                "[WARN] Excluding oracle metric row for "
+                f"regression_id={row['regression_id']}: "
+                f"summary_oracle_accuracy={summary_accuracy}, "
+                f"replicate_oracle_accuracy={replicate_accuracy}, "
+                f"minimum_accuracy={minimum_accuracy}."
+            )
+        else:
+            kept_rows.append(row)
+    return kept_rows, excluded_rows
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:

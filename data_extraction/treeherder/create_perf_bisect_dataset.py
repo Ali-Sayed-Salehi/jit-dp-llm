@@ -39,6 +39,9 @@ Implementation notes:
     This avoids relying on Mercurial timestamps.
   - Rows are excluded if the culprit revision is not inside the Mercurial DAG
     range `(good_revision, bad_revision]`.
+  - Rows for known-bad alert summaries are excluded before output. These are
+    alert summaries whose historical measurements are inconsistent with the
+    labeled regression boundary.
   - Eval and final-test split boundaries are computed from the shuffled
     `samples` arrays in the prediction JSON files by locating those commits in
     the parent-before-child `all_commits.jsonl` order.
@@ -116,6 +119,7 @@ DEFAULT_FINAL_TEST_OUTPUT_JSONL = os.path.join(
 )
 
 NULL_NODE = "0000000000000000000000000000000000000000"
+EXCLUDED_ALERT_SUMMARY_IDS = {46805}
 
 
 @dataclass(frozen=True)
@@ -704,6 +708,15 @@ def create_dataset(
                 stats["rows_skipped_invalid_summary_id"] += 1
                 continue
 
+            if summary_id in EXCLUDED_ALERT_SUMMARY_IDS:
+                stats["rows_skipped_excluded_alert_summary_id"] += 1
+                print(
+                    "[WARN] Excluding alert summary "
+                    f"{summary_id} from CSV row {row_num}: "
+                    "known inconsistent perf measurements."
+                )
+                continue
+
             if summary_id not in allowed_summary_ids:
                 stats["rows_skipped_not_in_filter"] += 1
                 continue
@@ -843,6 +856,10 @@ def create_dataset(
     print(
         "  rows_skipped_not_in_filter="
         f"{stats['rows_skipped_not_in_filter']}"
+    )
+    print(
+        "  rows_skipped_excluded_alert_summary_id="
+        f"{stats['rows_skipped_excluded_alert_summary_id']}"
     )
     print(
         "  rows_skipped_duplicate_summary_id="
