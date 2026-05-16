@@ -1,3 +1,32 @@
+"""
+Export recent Mozilla Phabricator Differential Revisions for one repository.
+
+This script connects to Mozilla Phabricator through the Conduit API and retrieves
+all Differential Revisions created within the last `YEARS_BACK` years for the
+repository selected by `TARGET_REPO_KEY`. The target repository must be present
+in `REPO_PHIDS`; the checked-in default targets `autoland`.
+
+At runtime the script:
+  - loads `CONDUIT_API_TOKEN` from `secrets/.env`;
+  - initializes a Phabricator client for
+    `https://phabricator.services.mozilla.com/api/`;
+  - converts `YEARS_BACK` into a `createdStart` epoch timestamp;
+  - repeatedly calls `differential.revision.search` with the selected repository
+    PHID, `order="oldest"`, and the API pagination cursor;
+  - accumulates every returned revision, then sorts the complete list by
+    `fields.dateCreated`.
+
+The final revision list is converted directly to a pandas DataFrame and written
+as CSV under `datasets/mozilla_perf/` using this filename pattern:
+
+    all_differential_revisions_{TARGET_REPO_KEY}_{YEARS_BACK}y.csv
+
+The CSV preserves the raw Conduit revision objects as DataFrame columns, so
+nested fields such as `fields` are serialized by pandas rather than flattened.
+Adjust `YEARS_BACK` and `TARGET_REPO_KEY` near the top of the file before
+running when a different time window or repository is needed.
+"""
+
 import requests
 import time
 import json

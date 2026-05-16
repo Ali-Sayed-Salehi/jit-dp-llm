@@ -1,4 +1,44 @@
 #!/usr/bin/env python3
+"""
+Extract Phabricator Differential Revision metadata for Mozilla commits.
+
+This script reads `datasets/mozilla_perf/all_commits.jsonl`, sorts the commits by
+their Mercurial timestamp (`date[0]`), and processes the newest
+`MAX_COMMITS_TO_PROCESS` commits. For each commit, it looks for a Mozilla
+Phabricator Differential Revision URL at the end of the commit description, for
+example `https://phabricator.services.mozilla.com/D206595`. Commits without a
+matching trailing DREV URL are skipped.
+
+For each matching DREV, the script uses Mozilla Phabricator's Conduit API to:
+  - fetch the revision by numeric DREV id;
+  - continue only for revisions whose status is published and closed;
+  - fetch all diffs for the revision;
+  - fetch revision transactions once, then derive comments and first closure
+    timestamp from those transactions;
+  - ignore diffs and comments that happened after the first close/publish event.
+
+Two review-derived metrics are computed when enough data is available:
+  - `has_change_inducing_review`: true when a non-final pre-close diff was
+    created after the earliest pre-close review comment, which is used as a
+    proxy that review feedback induced a change.
+  - `pr_lead_time_hours`: hours from revision creation to the latest pre-close
+    diff timestamp, treated here as the landed/final diff.
+
+Rows are written to `datasets/mozilla_perf/commits_with_drev.csv`. Despite the
+`.csv` extension, the file is written as newline-delimited JSON objects with
+`node`, `desc`, `date`, `drev_id`, `has_change_inducing_review`, and
+`pr_lead_time_hours`. Rows are emitted only for commits that contain a DREV URL;
+metric fields remain null when the revision cannot be fetched or does not meet
+the published/closed criteria.
+
+Configuration and credentials:
+  - `CONDUIT_API_TOKEN` is loaded from `secrets/.env`.
+  - `PHABRICATOR_API_URL` can also be set there, defaulting to Mozilla's API.
+  - Conduit calls are globally rate-limited and retried for HTTP 429 responses.
+  - As checked in, `DEBUG_MODE = True`, so the script stops after
+    `DEBUG_MAX_COMMITS` processed commits. Disable debug mode for a full run.
+"""
+
 import json
 import os
 import re
