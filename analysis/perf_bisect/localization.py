@@ -363,11 +363,6 @@ class Backfill(CulpritLocalizer):
             and all(decision is OracleDecision.CLEAN for decision in revision_decisions)
         ):
             return list(revisions_to_probe)
-        if (
-            revision_decisions
-            and all(decision is OracleDecision.BAD for decision in revision_decisions)
-        ):
-            return list(revisions_to_probe)
         return None
 
     @staticmethod

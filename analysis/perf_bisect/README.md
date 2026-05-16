@@ -125,11 +125,12 @@ The found culprit is the first `bad` revision in that monotonic sequence. If the
 observed clean/bad pattern contains a `bad` decision followed by a later `clean`
 decision, Backfill treats the shortest such interval as the adjacent bad-to-clean
 pair and retriggers those two commits. If the whole candidate sequence is all
-`clean` or all `bad`, Backfill retriggers the full candidate sequence. After a
-retrigger, `final_decisions` reconciles repeated results for each retriggered
-commit by majority vote over the drawn clean/bad decisions, breaking ties with
-the latest draw. It does not average measurement values. The raw attempts remain
-in `decisions`.
+`clean`, Backfill retriggers the full candidate sequence. An all-`bad` sequence
+is already monotonic, so Backfill treats the first candidate after
+`good_revision` as the found culprit. After a retrigger, `final_decisions`
+reconciles repeated results for each retriggered commit by majority vote over
+the drawn clean/bad decisions, breaking ties with the latest draw. It does not
+average measurement values. The raw attempts remain in `decisions`.
 
 This process repeats up to `--backfill-retrigger-count` times before the
 localization remains undefined. The default is `2`, which models a small number

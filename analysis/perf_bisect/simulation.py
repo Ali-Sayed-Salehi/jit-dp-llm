@@ -222,7 +222,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Number of suspicious Backfill decision sets to retrigger before "
             "leaving the localization undefined. Suspicious sets include "
-            "adjacent non-monotonic intervals and all-clean/all-bad sequences."
+            "adjacent non-monotonic intervals and all-clean sequences."
         ),
     )
     parser.add_argument(
