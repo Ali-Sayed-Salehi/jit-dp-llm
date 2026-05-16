@@ -9,10 +9,14 @@ reports aggregate localization metrics.
 
 - `simulation.py`: CLI entry point, dataset loading, run orchestration, and output
   writing.
+- `calculate_oracle_metrics.py`: computes per-regression summary and replicate
+  oracle accuracy from the historical measurement data.
 - `localization.py`: culprit localization algorithms. The initial algorithm is
   `Backfill`.
 - `test_oracle.py`: test-oracle implementations, revision/signature indexes, and
   the simulated test executor. The initial oracle is `SummaryComparison`.
+- `per_regression_oracle_metrics.jsonl`: per-regression oracle accuracy output
+  written by `calculate_oracle_metrics.py`.
 - `results/per_bisect_results_eval.json`: aggregate metrics for the eval split.
 - `results/per_bisect_results_eval_details.json`: per-regression eval details.
 - `results/per_bisect_results_final_test.json`: aggregate metrics for the
@@ -38,12 +42,17 @@ The default inputs are loaded from `datasets/mozilla_perf_bisect`:
 - `perf_bisect_regressions_final_test.jsonl`
 - `per_sig_perf_data_info.jsonl`
 - `per_revision_perf_data.jsonl`
+- `all_commits.jsonl`
 
 The regression rows provide the `good_revision`, `bad_revision`,
 `culprit_revision`, and failing signature values. The signature-info file
 provides the number of replicate tests to submit for each signature. The
 revision-performance file provides the revision graph and historical summary and
 replicate measurements.
+
+`calculate_oracle_metrics.py` uses `all_commits.jsonl` for Mercurial parent
+relationships and `per_revision_perf_data.jsonl` for the real summary and
+replicate measurement values.
 
 `simulation.py` also has a fallback for regression files under
 `datasets/mozilla_perf`, matching the originally described path, but the current
@@ -166,6 +175,50 @@ Each summary output reports:
 
 Undefined results do not affect TRTC metrics, but they do affect success rate and
 test-run metrics.
+
+## Oracle Accuracy Dataset
+
+`calculate_oracle_metrics.py` writes one JSONL row per regression to
+`analysis/perf_bisect/per_regression_oracle_metrics.jsonl` by default. Each row
+contains:
+
+- `regression_id`
+- `summary_oracle_accuracy`
+- `replicate_oracle_accuracy`
+
+For each regression, the script reconstructs the good-to-bad parent path from
+`all_commits.jsonl`, excludes the known-good endpoint, and includes the
+known-bad endpoint. It then scores every matching measurement for the failing
+signature from `per_revision_perf_data.jsonl`. Measurements before the culprit
+are correct when they are below the midpoint baseline; measurements at or after
+the culprit are correct when they are above the baseline.
+
+The baseline is:
+
+```text
+(Good_value + bad_value) / 2
+```
+
+The written accuracies use additive smoothing so exact `0.0` and `1.0` values
+are avoided when at least one measurement exists:
+
+```text
+(correct + alpha) / (total + 2 * alpha)
+```
+
+The default `alpha` is `0.5`.
+
+Generate the oracle accuracy dataset:
+
+```bash
+python analysis/perf_bisect/calculate_oracle_metrics.py
+```
+
+Change the smoothing strength:
+
+```bash
+python analysis/perf_bisect/calculate_oracle_metrics.py --smoothing-alpha 1.0
+```
 
 ## Running
 

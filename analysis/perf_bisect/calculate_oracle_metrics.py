@@ -31,7 +31,10 @@ DEFAULT_REGRESSION_INPUTS = (
     DEFAULT_DATA_DIR / "perf_bisect_regressions_eval.jsonl",
     DEFAULT_DATA_DIR / "perf_bisect_regressions_final_test.jsonl",
 )
-DEFAULT_OUTPUT = REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
+DEFAULT_OUTPUT = (
+    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
+)
+DEFAULT_SMOOTHING_ALPHA = 0.5
 NULL_NODE = "0000000000000000000000000000000000000000"
 
 
@@ -137,6 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             regression,
             candidate_path=paths_by_regression_id.get(regression.regression_id),
             measurements=measurements,
+            smoothing_alpha=args.smoothing_alpha,
         )
         for regression in regressions
     ]
@@ -205,7 +209,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "default it is included because bad_revision can be the culprit."
         ),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--smoothing-alpha",
+        type=float,
+        default=DEFAULT_SMOOTHING_ALPHA,
+        help=(
+            "Positive additive smoothing prior for oracle accuracies. The "
+            "default 0.5 uses Jeffreys smoothing: "
+            "(correct + alpha) / (total + 2 * alpha)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.smoothing_alpha <= 0:
+        parser.error("--smoothing-alpha must be positive")
+    return args
 
 
 def iter_jsonl(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
@@ -382,6 +399,7 @@ def calculate_regression_metrics(
     *,
     candidate_path: CandidatePath | None,
     measurements: Mapping[tuple[str, int], MeasurementValues],
+    smoothing_alpha: float,
 ) -> dict[str, int | float | None]:
     """Calculate summary and replicate oracle accuracies for one regression."""
 
@@ -413,8 +431,16 @@ def calculate_regression_metrics(
 
     return {
         "regression_id": regression.regression_id,
-        "summary_oracle_accuracy": accuracy(summary_correct, summary_total),
-        "replicate_oracle_accuracy": accuracy(replicate_correct, replicate_total),
+        "summary_oracle_accuracy": accuracy(
+            summary_correct,
+            summary_total,
+            smoothing_alpha=smoothing_alpha,
+        ),
+        "replicate_oracle_accuracy": accuracy(
+            replicate_correct,
+            replicate_total,
+            smoothing_alpha=smoothing_alpha,
+        ),
     }
 
 
@@ -435,12 +461,12 @@ def score_values(
     return correct, len(values)
 
 
-def accuracy(correct: int, total: int) -> float | None:
-    """Return correct / total, or None when no values were available."""
+def accuracy(correct: int, total: int, *, smoothing_alpha: float) -> float | None:
+    """Return smoothed correct / total, or None when no values were available."""
 
     if total == 0:
         return None
-    return correct / total
+    return (correct + smoothing_alpha) / (total + 2 * smoothing_alpha)
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
