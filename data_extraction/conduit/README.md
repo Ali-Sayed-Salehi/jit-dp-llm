@@ -47,12 +47,13 @@ This script:
 - looks for a trailing `https://phabricator.services.mozilla.com/D...` URL in
   the commit message;
 - fetches each matching DREV with `differential.revision.search`;
+- converts prediction rows into a `risk_score` probability for label `1`;
 - writes only published, closed DREVs to `per_commit_drevs.jsonl`.
 
 Output row shape:
 
 ```json
-{"commit_id": "...", "dataset_split": "eval", "drev": {...}}
+{"commit_id": "...", "dataset_split": "eval", "risk_score": 0.42, "drev": {...}}
 ```
 
 2. Fetch transactions for those DREVs:
@@ -73,7 +74,7 @@ This script:
 
 - loads `per_commit_drevs.jsonl`;
 - fetches all transaction pages for each DREV with `transaction.search`;
-- preserves `dataset_split`;
+- preserves `dataset_split` and `risk_score`;
 - writes one row per commit/DREV with all transactions nested in a list.
 
 Output row shape:
@@ -83,6 +84,7 @@ Output row shape:
   "commit_id": "...",
   "drev_id": 123456,
   "dataset_split": "final test",
+  "risk_score": 0.42,
   "transactions": [...]
 }
 ```

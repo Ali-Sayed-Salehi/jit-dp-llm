@@ -14,7 +14,8 @@ through Conduit and only published, closed revisions are written to:
     datasets/mozilla_code_review/per_commit_drevs.jsonl
 
 Each output row contains `commit_id` with the commit hash, `dataset_split`
-(`eval` or `final test`), and `drev` with the raw revision object returned by
+(`eval` or `final test`), `risk_score` with the model's probability that the
+commit is buggy, and `drev` with the raw revision object returned by
 `differential.revision.search`.
 
 The script uses risk_predictions_eval.json and risk_predictions_final_test.json
@@ -79,6 +80,8 @@ class SplitBoundary:
 class CommitWorkItem:
     commit: dict[str, Any]
     dataset_split: str
+    risk_score: float = 0.0
+    has_risk_score: bool = False
 
 
 class ConduitCaller:
@@ -311,15 +314,83 @@ def load_commits(path: Path) -> list[dict[str, Any]]:
     return commits
 
 
-def load_prediction_commit_ids(path: Path) -> list[str]:
+def parse_binary_label(value: Any, *, path: Path, row_index: int, field: str) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int) and value in (0, 1):
+        return value
+    if isinstance(value, float) and value.is_integer() and int(value) in (0, 1):
+        return int(value)
+    raise ValueError(f"{path}: row {row_index} has invalid {field}: {value!r}")
+
+
+def parse_probability(value: Any, *, path: Path, row_index: int, field: str) -> float:
+    try:
+        probability = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{path}: row {row_index} has invalid {field}: {value!r}"
+        ) from exc
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError(
+            f"{path}: row {row_index} has {field} outside [0, 1]: {probability}"
+        )
+    return probability
+
+
+def risk_score_from_predicted_class(
+    prediction: Any,
+    confidence: Any,
+    *,
+    path: Path,
+    row_index: int,
+) -> float:
+    pred = parse_binary_label(
+        prediction,
+        path=path,
+        row_index=row_index,
+        field="prediction",
+    )
+    conf = parse_probability(
+        confidence,
+        path=path,
+        row_index=row_index,
+        field="confidence",
+    )
+    return conf if pred == 1 else 1.0 - conf
+
+
+def risk_score_from_positive_confidence(
+    confidence: Any,
+    *,
+    path: Path,
+    row_index: int,
+) -> float:
+    return parse_probability(
+        confidence,
+        path=path,
+        row_index=row_index,
+        field="confidence",
+    )
+
+
+def load_prediction_rows(path: Path) -> tuple[list[dict[str, Any]], str]:
     with path.open("r", encoding="utf-8") as input_file:
         data = json.load(input_file)
 
     rows = data.get("samples")
-    if not isinstance(rows, list):
-        rows = data.get("results")
-    if not isinstance(rows, list):
-        raise ValueError(f"{path} must contain a list field named samples or results")
+    if isinstance(rows, list):
+        return rows, "predicted_class"
+
+    rows = data.get("results")
+    if isinstance(rows, list):
+        return rows, "positive_class"
+
+    raise ValueError(f"{path} must contain a list field named samples or results")
+
+
+def load_prediction_commit_ids(path: Path) -> list[str]:
+    rows, _ = load_prediction_rows(path)
 
     commit_ids: list[str] = []
     for row_index, row in enumerate(rows):
@@ -333,6 +404,58 @@ def load_prediction_commit_ids(path: Path) -> list[str]:
     if not commit_ids:
         raise ValueError(f"{path} contains no prediction commit ids")
     return commit_ids
+
+
+def load_risk_scores(path: Path) -> dict[str, float]:
+    rows, confidence_mode = load_prediction_rows(path)
+
+    risk_scores: dict[str, float] = {}
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}: row {row_index} is not an object")
+        commit_id = row.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id:
+            raise ValueError(f"{path}: row {row_index} has invalid commit_id")
+        if commit_id in risk_scores:
+            raise ValueError(f"{path}: duplicate commit_id {commit_id!r}")
+
+        confidence = row.get("confidence")
+        if confidence is None:
+            raise ValueError(f"{path}: row {row_index} is missing confidence")
+
+        if confidence_mode == "predicted_class":
+            risk_score = risk_score_from_predicted_class(
+                row.get("prediction"),
+                confidence,
+                path=path,
+                row_index=row_index,
+            )
+        else:
+            risk_score = risk_score_from_positive_confidence(
+                confidence,
+                path=path,
+                row_index=row_index,
+            )
+        risk_scores[commit_id] = risk_score
+
+    if not risk_scores:
+        raise ValueError(f"{path} contains no prediction rows")
+    return risk_scores
+
+
+def load_combined_risk_scores(paths: list[Path]) -> dict[str, float]:
+    combined: dict[str, float] = {}
+    for path in paths:
+        risk_scores = load_risk_scores(path)
+        for commit_id, risk_score in risk_scores.items():
+            existing = combined.get(commit_id)
+            if existing is not None and existing != risk_score:
+                raise ValueError(
+                    f"{commit_id} appears in multiple prediction files with "
+                    f"different risk scores: {existing} vs {risk_score}"
+                )
+            combined[commit_id] = risk_score
+    return combined
 
 
 def build_split_boundary(
@@ -426,6 +549,7 @@ def build_work_items(
     node_to_index: dict[str, int],
     eval_boundary: SplitBoundary,
     final_test_boundary: SplitBoundary,
+    risk_scores: dict[str, float] | None = None,
 ) -> list[CommitWorkItem]:
     start_index = eval_boundary.start_index
     end_index = final_test_boundary.end_index
@@ -436,6 +560,7 @@ def build_work_items(
         )
 
     work_items: list[CommitWorkItem] = []
+    risk_scores = risk_scores or {}
     for index in range(start_index, end_index + 1):
         commit = commits[index]
         commit_id = commit["node"]
@@ -445,8 +570,14 @@ def build_work_items(
             eval_boundary=eval_boundary,
             final_test_boundary=final_test_boundary,
         )
+        risk_score = risk_scores.get(commit_id)
         work_items.append(
-            CommitWorkItem(commit=commit, dataset_split=dataset_split)
+            CommitWorkItem(
+                commit=commit,
+                dataset_split=dataset_split,
+                risk_score=risk_score if risk_score is not None else 0.0,
+                has_risk_score=risk_score is not None,
+            )
         )
 
     return work_items
@@ -574,6 +705,7 @@ def process_commits(
         "unique_drevs_fetched": 0,
         "published_closed_drevs_written": 0,
         "skipped_unpublished_or_open": 0,
+        "missing_risk_scores": 0,
         "fetch_errors": 0,
     }
 
@@ -607,9 +739,18 @@ def process_commits(
                 stats["skipped_unpublished_or_open"] += 1
                 continue
 
+            if not work_item.has_risk_score:
+                stats["missing_risk_scores"] += 1
+                print(
+                    f"[WARN] Missing risk score for valid commit {commit_id}; "
+                    "using 0.0.",
+                    file=sys.stderr,
+                )
+
             output_row = {
                 "commit_id": commit_id,
                 "dataset_split": work_item.dataset_split,
+                "risk_score": work_item.risk_score,
                 "drev": revision,
             }
             output_file.write(json.dumps(output_row) + "\n")
@@ -653,6 +794,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     print(describe_boundary(eval_boundary), file=sys.stderr)
     print(describe_boundary(final_test_boundary), file=sys.stderr)
+    risk_scores = load_combined_risk_scores(
+        [eval_predictions_json, final_test_predictions_json]
+    )
 
     overlap_start = max(eval_boundary.start_index, final_test_boundary.start_index)
     overlap_end = min(eval_boundary.end_index, final_test_boundary.end_index)
@@ -669,6 +813,7 @@ def main(argv: list[str] | None = None) -> None:
         node_to_index=node_to_index,
         eval_boundary=eval_boundary,
         final_test_boundary=final_test_boundary,
+        risk_scores=risk_scores,
     )
     work_items = get_work_items_to_process(
         all_work_items=all_work_items,

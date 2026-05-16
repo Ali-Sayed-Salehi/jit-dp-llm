@@ -31,6 +31,7 @@ Phabricator code-review data linked at the per-commit level.
   - Top-level fields:
     - `commit_id`: Mercurial commit hash.
     - `dataset_split`: either `eval` or `final test`.
+    - `risk_score`: probability in `[0, 1]` that the commit has label `1`.
     - `drev`: raw Conduit DREV object returned by
       `differential.revision.search`.
 
@@ -42,6 +43,7 @@ Phabricator code-review data linked at the per-commit level.
     - `commit_id`: Mercurial commit hash.
     - `drev_id`: numeric Differential Revision id.
     - `dataset_split`: copied from `per_commit_drevs.jsonl`.
+    - `risk_score`: copied from `per_commit_drevs.jsonl`.
     - `transactions`: raw Conduit transaction objects returned by
       `transaction.search`.
 
@@ -68,6 +70,9 @@ final-test end boundary. For each scanned commit:
 This means a commit can receive a split label even if it is not itself present
 in a prediction JSON file, as long as it falls inside one of the split
 boundaries.
+
+For output rows whose commits are not present in either prediction file, the
+script emits a warning and writes `risk_score = 0.0`.
 
 ## Regenerating
 
