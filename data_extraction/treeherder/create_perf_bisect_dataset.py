@@ -13,12 +13,16 @@ Output:
   - `datasets/mozilla_perf_bisect/perf_bisect_regressions_final_test.jsonl`
 
 Each output JSONL row contains:
+  - `regression_id`
   - `alert_summary_id`
   - `good_revision`
   - `bad_revision`
   - `num_candidate_revisions`
   - `culprit_revision`
   - `failing_sig`
+
+`regression_id` is a sequential row identifier. IDs start at 1 in the eval
+output and continue in the final-test output.
 
 `failing_sig` contains exactly one failing signature:
   - `signature_id`
@@ -588,8 +592,8 @@ def build_failing_sig_records(
     return failing_sig_records
 
 
-def write_output_rows(
-    dst,
+def collect_output_rows(
+    records: list[dict[str, Any]],
     *,
     split_name: str,
     summary_id: int,
@@ -605,20 +609,36 @@ def write_output_rows(
         if limit > 0 and stats["rows_written"] >= limit:
             return True
 
-        output_record = {
-            "alert_summary_id": summary_id,
-            "good_revision": good_revision,
-            "bad_revision": bad_revision,
-            "num_candidate_revisions": num_candidate_revisions,
-            "culprit_revision": culprit_revision,
-            "failing_sig": failing_sig,
-        }
-        dst.write(json.dumps(output_record))
-        dst.write("\n")
+        records.append(
+            {
+                "alert_summary_id": summary_id,
+                "good_revision": good_revision,
+                "bad_revision": bad_revision,
+                "num_candidate_revisions": num_candidate_revisions,
+                "culprit_revision": culprit_revision,
+                "failing_sig": failing_sig,
+            }
+        )
         stats["rows_written"] += 1
         stats[f"rows_written_{split_name}"] += 1
 
     return False
+
+
+def write_output_records(
+    path: str,
+    records: list[dict[str, Any]],
+    *,
+    starting_regression_id: int,
+) -> None:
+    with open(path, "w", encoding="utf-8") as dst:
+        for offset, record in enumerate(records):
+            output_record = {
+                "regression_id": starting_regression_id + offset,
+                **record,
+            }
+            dst.write(json.dumps(output_record))
+            dst.write("\n")
 
 
 def create_dataset(
@@ -664,12 +684,12 @@ def create_dataset(
     signature_metadata = load_signature_metadata(sig_info_jsonl)
     stats: Counter[str] = Counter()
     seen_summary_ids: set[int] = set()
+    records_by_split: dict[str, list[dict[str, Any]]] = {
+        eval_boundary.name: [],
+        final_test_boundary.name: [],
+    }
 
-    with open(alert_summaries_csv, "r", newline="", encoding="utf-8") as src, open(
-        eval_output_jsonl, "w", encoding="utf-8"
-    ) as eval_dst, open(
-        final_test_output_jsonl, "w", encoding="utf-8"
-    ) as final_test_dst:
+    with open(alert_summaries_csv, "r", newline="", encoding="utf-8") as src:
         reader = csv.DictReader(src)
         for row_num, row in enumerate(reader, start=2):
             if limit > 0 and stats["rows_written"] >= limit:
@@ -724,11 +744,11 @@ def create_dataset(
             )
 
             if matches_eval:
-                matching_outputs = [(eval_boundary.name, eval_dst)]
+                matching_outputs = [eval_boundary.name]
                 if matches_final_test:
                     stats["rows_matching_multiple_split_boundaries"] += 1
             elif matches_final_test:
-                matching_outputs = [(final_test_boundary.name, final_test_dst)]
+                matching_outputs = [final_test_boundary.name]
             else:
                 stats["rows_skipped_outside_split_boundaries"] += 1
                 continue
@@ -773,9 +793,10 @@ def create_dataset(
                 stats["rows_skipped_no_valid_failing_sigs"] += 1
                 continue
 
-            for split_name, dst in matching_outputs:
-                limit_reached = write_output_rows(
-                    dst,
+            limit_reached = False
+            for split_name in matching_outputs:
+                limit_reached = collect_output_rows(
+                    records_by_split[split_name],
                     split_name=split_name,
                     summary_id=summary_id,
                     good_revision=good_revision,
@@ -790,6 +811,19 @@ def create_dataset(
                     break
             if limit_reached:
                 break
+
+    eval_records = records_by_split[eval_boundary.name]
+    final_test_records = records_by_split[final_test_boundary.name]
+    write_output_records(
+        eval_output_jsonl,
+        eval_records,
+        starting_regression_id=1,
+    )
+    write_output_records(
+        final_test_output_jsonl,
+        final_test_records,
+        starting_regression_id=len(eval_records) + 1,
+    )
 
     print(f"Wrote {stats['rows_written_eval']} rows to {eval_output_jsonl}.")
     print(

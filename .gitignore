@@ -34,6 +34,7 @@ LLMs/**/*
 **/autoland/
 **/batch_testing/results/
 **/git_bisect/results/
+**/perf_bisect/results/
 
 # cache
 .cache

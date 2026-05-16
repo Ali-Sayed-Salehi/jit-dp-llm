@@ -282,12 +282,16 @@ Final eval split consumed by `analysis/perf_bisect/simulation.py`.
 
 Each row represents one alert-summary/signature pair and contains:
 
+- `regression_id`
 - `alert_summary_id`
 - `good_revision`
 - `bad_revision`
 - `num_candidate_revisions`
 - `culprit_revision`
 - `failing_sig`
+
+`regression_id` is a sequential row identifier. IDs start at 1 in the eval
+file and continue in the final-test file.
 
 `failing_sig` contains:
 
