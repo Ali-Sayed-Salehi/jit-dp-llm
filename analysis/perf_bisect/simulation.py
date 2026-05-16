@@ -307,6 +307,12 @@ def run_dataset(
                     "metrics": compute_metrics(results),
                 }
             )
+            print_undefined_localizations(
+                dataset_name=dataset_name,
+                localizer_name=localizer_name,
+                oracle_name=oracle_name,
+                results=results,
+            )
             detail_runs.append(
                 {
                     "localizer": localizer_name,
@@ -429,6 +435,40 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }
+
+
+def print_undefined_localizations(
+    *,
+    dataset_name: str,
+    localizer_name: str,
+    oracle_name: str,
+    results: Sequence[Any],
+) -> None:
+    """Print undefined localization regression IDs grouped by undefined cause."""
+
+    undefined_by_cause: dict[str, list[int | None]] = {}
+    for result in results:
+        if result.success:
+            continue
+        cause = result.undefined_reason or "unknown"
+        undefined_by_cause.setdefault(cause, []).append(result.regression_id)
+
+    run_label = (
+        f"{dataset_name} / localizer={localizer_name} / test_oracle={oracle_name}"
+    )
+    if not undefined_by_cause:
+        print(f"{run_label}: no undefined localizations")
+        return
+
+    print(f"{run_label}: undefined localizations by cause")
+    for cause, regression_ids in sorted(undefined_by_cause.items()):
+        print(f"  {cause} ({len(regression_ids)})")
+        for regression_id in sorted(
+            regression_ids,
+            key=lambda item: (item is None, item if item is not None else 0),
+        ):
+            formatted_id = regression_id if regression_id is not None else "unknown"
+            print(f"    regression_id={formatted_id}")
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
