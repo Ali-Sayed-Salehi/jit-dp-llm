@@ -49,8 +49,9 @@ The default inputs are loaded from `datasets/mozilla_perf_bisect`:
 The regression rows provide the globally unique `regression_id`,
 `good_revision`, `bad_revision`, `culprit_revision`, and failing signature
 values. The signature-info file provides the number of replicate tests to submit
-for each signature. The revision-performance file provides the revision graph
-and historical summary and replicate measurements.
+for each signature. The revision-performance file provides the revision graph.
+`analysis/perf_bisect/per_regression_oracle_metrics.jsonl` provides the
+per-regression oracle accuracies used by the simulator.
 
 `calculate_oracle_metrics.py` uses `all_commits.jsonl` for Mercurial parent
 relationships and `per_revision_perf_data.jsonl` for the real summary and
@@ -91,51 +92,26 @@ after the earlier batch has completed.
 
 ## SummaryComparison Oracle
 
-`SummaryComparison` compares one drawn measurement value to a baseline.
+`SummaryComparison` models a simple noisy oracle. It does not draw historical
+summary or replicate measurement values, and it does not compare measurements to
+a baseline during simulation.
 
-The baseline is:
+For each regression, the simulator reads `summary_oracle_accuracy` from
+`analysis/perf_bisect/per_regression_oracle_metrics.jsonl`. Each probe first
+determines the revision's true side of the known culprit:
 
-```text
-(Good_value + bad_value) / 2
-```
+- revisions before the culprit are `clean`
+- the culprit and revisions after it are `bad`
 
-The oracle does not use an effect size. It classifies every drawn value with a
-single baseline comparison:
+With probability `summary_oracle_accuracy`, the oracle returns the true side.
+Otherwise it flips the verdict. Because decisions are sampled from this noisy
+oracle instead of from finite measurement lists, repeated probes never run out
+of available draws. Each probe still uses the signature's `replicate_counts` as
+the simulated test cost.
 
-- value above baseline: `bad`
-- value at or below baseline: `clean`
-
-For each probe attempt, the oracle draws a measurement value as follows:
-
-1. Randomly draw a `replicate: false` summary value from the tested commit and
-   signature.
-2. If the tested commit has no direct summary value, randomly draw one of its
-   `replicate: true` values.
-3. If the tested commit has neither, randomly draw a summary value from another
-   non-boundary commit on the same side of the known culprit.
-4. If no same-side summary exists, randomly draw a replicate value from
-   another non-boundary commit on the same side.
-5. If no non-boundary same-side replicate exists, randomly draw a replicate
-   value from the same-side boundary commit: `good_revision` before the culprit,
-   or `bad_revision` at/after the culprit.
-
-If none of those sources exists, the oracle records `missing_measurement` and an
-`unknown` decision. It does not fall back to the regression row's `Good_value` or
-`bad_value`.
-
-Both summary and replicate draws use the signature's `replicate_counts` as the
-simulated test cost for the probe.
-
-The same-side fallback assumes all commits before the culprit follow the clean
-distribution and all commits at or after the culprit follow the bad distribution.
-All measurement draws are with replacement, so multiple probes can draw the same
-source observation.
-
-Same-side fallback randomness is seeded by `--random-seed`, which defaults to
-`0`. Each regression gets a derived seed based on `regression_id - 1` when
-`regression_id` is present, so default runs are reproducible and stable across
-split order. Older rows without `regression_id` fall back to their split row
-order.
+Noisy verdict randomness is seeded by `--random-seed`, which defaults to `0`.
+Each regression gets a derived seed based on `regression_id - 1`, so default
+runs are reproducible and stable across split order.
 
 ## Backfill Localizer
 
@@ -150,9 +126,8 @@ observed clean/bad pattern contains a `bad` decision followed by a later `clean`
 decision, Backfill treats the shortest such interval as the adjacent bad-to-clean
 pair and retriggers those two commits. After a retrigger, `final_decisions`
 reconciles repeated results for each retriggered commit by majority vote over
-the actual drawn clean/bad decisions, breaking ties with the latest draw. It
-does not average measurement values; every `final_decisions.value` is an actual
-drawn summary or replicate value. The raw attempts remain in `decisions`.
+the drawn clean/bad decisions, breaking ties with the latest draw. It does not
+average measurement values. The raw attempts remain in `decisions`.
 
 This process repeats up to `--backfill-non-monotonic-retrigger-count` times
 before the localization remains undefined as `non_monotonic_oracle_decisions`.
@@ -260,7 +235,7 @@ Change the number of Backfill non-monotonic interval retriggers:
 python analysis/perf_bisect/simulation.py --backfill-non-monotonic-retrigger-count 3
 ```
 
-Change the same-side fallback random seed:
+Change the noisy-oracle random seed:
 
 ```bash
 python analysis/perf_bisect/simulation.py --random-seed 42

@@ -39,11 +39,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BISECT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
 PROMPT_REGRESSION_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
+DEFAULT_ORACLE_METRICS = (
+    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
+)
 
 DATASETS = {
     "eval": "perf_bisect_regressions_eval.jsonl",
     "final_test": "perf_bisect_regressions_final_test.jsonl",
 }
+
+
+@dataclass(frozen=True)
+class OracleMetrics:
+    """Per-regression noisy-oracle parameters."""
+
+    regression_id: int
+    summary_oracle_accuracy: float
 
 
 @dataclass(frozen=True)
@@ -56,7 +67,7 @@ class OracleSpec:
         self,
         *,
         signature_info: SignatureInfoIndex,
-        revision_perf: RevisionPerfIndex,
+        oracle_metrics: OracleMetrics,
         workers: int,
         test_duration_minutes: float,
         random_seed: int | None,
@@ -66,11 +77,11 @@ class OracleSpec:
         if self.name == SummaryComparison.name:
             return SummaryComparison(
                 signature_info=signature_info,
-                revision_perf=revision_perf,
                 executor=TestExecutor(
                     workers=workers,
                     test_duration_minutes=test_duration_minutes,
                 ),
+                oracle_accuracy=oracle_metrics.summary_oracle_accuracy,
                 random_seed=random_seed,
             )
         raise ValueError(f"unknown oracle: {self.name}")
@@ -89,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
+    oracle_metrics = load_oracle_metrics(args.oracle_metrics)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for dataset_name in dataset_names:
@@ -103,8 +115,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             regressions_path=regressions_path,
             signature_info_path=args.signature_info,
             revision_data_path=args.revision_data,
+            oracle_metrics_path=args.oracle_metrics,
             signature_info=signature_info,
             revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
             oracle_names=args.oracles,
             localizer_names=args.localizers,
             workers=args.workers,
@@ -154,7 +168,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--revision-data",
         type=Path,
         default=DEFAULT_BISECT_DATA_DIR / "per_revision_perf_data.jsonl",
-        help="Path to per_revision_perf_data.jsonl.",
+        help=(
+            "Path to per_revision_perf_data.jsonl; only revision graph fields "
+            "are loaded."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-metrics",
+        type=Path,
+        default=DEFAULT_ORACLE_METRICS,
+        help=(
+            "Path to per_regression_oracle_metrics.jsonl. SummaryComparison "
+            "uses summary_oracle_accuracy as its noisy-oracle accuracy."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -204,7 +230,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--random-seed",
         type=int,
         default=0,
-        help="Seed for random same-side fallback draws.",
+        help="Seed for noisy oracle verdict draws.",
     )
     args = parser.parse_args(argv)
     if args.backfill_non_monotonic_retrigger_count < 0:
@@ -235,8 +261,10 @@ def run_dataset(
     regressions_path: Path,
     signature_info_path: Path,
     revision_data_path: Path,
+    oracle_metrics_path: Path,
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
     oracle_names: Sequence[str],
     localizer_names: Sequence[str],
     workers: int,
@@ -265,6 +293,7 @@ def run_dataset(
                     oracle_spec=ORACLES[oracle_name],
                     signature_info=signature_info,
                     revision_perf=revision_perf,
+                    oracle_metrics=oracle_metrics,
                     workers=workers,
                     test_duration_minutes=test_duration_minutes,
                     random_seed=random_seed,
@@ -293,6 +322,7 @@ def run_dataset(
             "regressions": str(regressions_path),
             "signature_info": str(signature_info_path),
             "revision_data": str(revision_data_path),
+            "oracle_metrics": str(oracle_metrics_path),
         },
         "settings": {
             "workers": workers,
@@ -301,10 +331,7 @@ def run_dataset(
                 backfill_non_monotonic_retrigger_count
             ),
             "random_seed": random_seed,
-            "random_seed_derivation": (
-                "random_seed + regression_id - 1 when available; "
-                "otherwise random_seed + split row index"
-            ),
+            "random_seed_derivation": "random_seed + regression_id - 1",
         },
     }
     return (
@@ -338,24 +365,29 @@ def run_one_regression(
     oracle_spec: OracleSpec,
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
     workers: int,
     test_duration_minutes: float,
     random_seed: int | None,
 ):
     """Run one regression with a fresh oracle and test executor."""
 
-    regression_seed_offset = regression_seed_index(
+    regression_id = require_regression_id(
         regression,
-        fallback_index=regression_index,
+        context=f"split row index {regression_index}",
     )
     regression_seed = (
         None
         if random_seed is None
-        else random_seed + regression_seed_offset
+        else random_seed + regression_id - 1
     )
+    metrics = oracle_metrics.get(regression_id)
+    if metrics is None:
+        raise ValueError(f"missing oracle metrics for regression_id {regression_id}")
+
     oracle = oracle_spec.build(
         signature_info=signature_info,
-        revision_perf=revision_perf,
+        oracle_metrics=metrics,
         workers=workers,
         test_duration_minutes=test_duration_minutes,
         random_seed=regression_seed,
@@ -406,29 +438,59 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def regression_seed_index(
-    regression: Mapping[str, Any],
-    *,
-    fallback_index: int,
-) -> int:
-    """Return the stable per-regression seed offset."""
+def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:
+    """Load per-regression summary oracle accuracies."""
 
-    regression_id = parse_regression_id(regression, context="regression seed")
-    if regression_id is None:
-        return fallback_index
-    return regression_id - 1
+    metrics_by_regression_id: dict[int, OracleMetrics] = {}
+    for raw in load_jsonl(path):
+        regression_id = int(raw["regression_id"])
+        if regression_id < 1:
+            raise ValueError(
+                f"oracle metrics regression_id must be positive: {regression_id!r}"
+            )
+        if regression_id in metrics_by_regression_id:
+            raise ValueError(
+                f"duplicate oracle metrics for regression_id {regression_id}"
+            )
+
+        summary_accuracy = parse_oracle_accuracy(
+            raw.get("summary_oracle_accuracy"),
+            context=f"regression_id {regression_id} summary_oracle_accuracy",
+        )
+        metrics_by_regression_id[regression_id] = OracleMetrics(
+            regression_id=regression_id,
+            summary_oracle_accuracy=summary_accuracy,
+        )
+
+    return metrics_by_regression_id
 
 
-def parse_regression_id(
+def parse_oracle_accuracy(value: Any, *, context: str) -> float:
+    """Parse a required probability used by the noisy oracle."""
+
+    if value is None:
+        raise ValueError(f"missing oracle accuracy for {context}")
+    try:
+        accuracy = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid oracle accuracy for {context}: {value!r}") from exc
+    if not 0.0 <= accuracy <= 1.0:
+        raise ValueError(
+            f"oracle accuracy must be between 0 and 1 for {context}: {value!r}"
+        )
+    return accuracy
+
+
+def require_regression_id(
     regression: Mapping[str, Any],
     *,
     context: str,
-) -> int | None:
-    """Parse an optional positive regression_id from one regression row."""
+) -> int:
+    """Parse the required positive regression_id from one regression row."""
 
     raw_id = regression.get("regression_id")
     if raw_id is None:
-        return None
+        raise ValueError(f"missing regression_id at {context}")
     try:
         regression_id = int(raw_id)
     except (TypeError, ValueError) as exc:
@@ -454,27 +516,15 @@ def load_signature_info(path: Path) -> SignatureInfoIndex:
 
 
 def load_revision_perf(path: Path) -> RevisionPerfIndex:
-    """Load revision graph nodes plus summary and replicate measurements."""
+    """Load revision graph nodes needed for good-to-bad paths."""
 
     records = []
     for raw in load_jsonl(path):
-        summary_values: dict[int, list[float]] = {}
-        replicate_values: dict[int, list[float]] = {}
-        for measurement in raw.get("perf_measurement_data", []):
-            signature_id = int(measurement["signature_id"])
-            value = float(measurement["value"])
-            if measurement.get("replicate") is True:
-                replicate_values.setdefault(signature_id, []).append(value)
-            elif measurement.get("replicate") is False:
-                summary_values.setdefault(signature_id, []).append(value)
-
         records.append(
             RevisionRecord(
                 node=str(raw["node"]),
                 parents=[str(parent) for parent in raw.get("parents", [])],
                 date=raw.get("date"),
-                summary_values=summary_values,
-                replicate_values=replicate_values,
             )
         )
     return RevisionPerfIndex(records)

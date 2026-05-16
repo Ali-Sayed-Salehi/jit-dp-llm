@@ -119,8 +119,6 @@ class LocalizationResult:
                 if expected_decision is not None
                 else None
             ),
-            "value": decision.value,
-            "baseline": decision.baseline,
             "attempt": decision.attempt,
             "draw_index": decision.draw_index,
             "replicate_count": decision.replicate_count,
@@ -355,7 +353,7 @@ class Backfill(CulpritLocalizer):
         revisions: Sequence[str],
         decisions: list[OracleResult],
     ) -> list[OracleResult]:
-        """Select final decisions from actual drawn values for the final pass."""
+        """Select final decisions from oracle draws for the final pass."""
 
         decisions_by_revision: dict[str, list[OracleResult]] = {
             revision: [] for revision in revisions
@@ -374,7 +372,7 @@ class Backfill(CulpritLocalizer):
     def _select_revision_decision(
         decisions: list[OracleResult],
     ) -> OracleResult:
-        """Choose one actual draw, using majority decision after retriggers."""
+        """Choose one oracle draw, using majority decision after retriggers."""
 
         if len(decisions) == 1:
             return decisions[0]
@@ -411,13 +409,11 @@ class Backfill(CulpritLocalizer):
             ),
             key=lambda decision: decision.completed_at_minutes,
         )
-        numeric_draw_count = sum(
-            decision.value is not None for decision in decisions
-        )
+        draw_count = sum(decision.measurement_count for decision in decisions)
 
         return replace(
             selected_draw,
-            measurement_count=numeric_draw_count,
+            measurement_count=draw_count,
         )
 
     @staticmethod

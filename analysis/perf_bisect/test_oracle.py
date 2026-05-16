@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
@@ -18,18 +18,10 @@ class OracleDecision(str, Enum):
 
 @dataclass(frozen=True)
 class FailingSignature:
-    """Performance signature fields carried by one regression row."""
+    """Failing performance signature fields carried by one regression row."""
 
     signature_id: int
-    good_value: float
-    bad_value: float
     platform: str | None = None
-
-    @property
-    def baseline(self) -> float:
-        """Return the midpoint used to separate clean and bad measurements."""
-
-        return (self.good_value + self.bad_value) / 2.0
 
 
 @dataclass(frozen=True)
@@ -65,53 +57,22 @@ class SignatureInfoIndex:
 
 @dataclass
 class RevisionRecord:
-    """Revision graph node and its performance measurements."""
+    """Revision graph node."""
 
     node: str
     parents: list[str]
     date: Any = None
-    summary_values: dict[int, list[float]] = field(default_factory=dict)
-    replicate_values: dict[int, list[float]] = field(default_factory=dict)
 
 
 class RevisionPerfIndex:
-    """Revision graph plus performance measurements."""
+    """Revision graph indexed by node hash."""
 
     def __init__(self, records: Sequence[RevisionRecord]) -> None:
         """Index revision records by node hash."""
 
-        self.records: dict[str, RevisionRecord] = {record.node: record for record in records}
-
-    def get_summary_values(self, revision: str, signature_id: int) -> list[float]:
-        """Return all summary values recorded for a revision/signature pair."""
-
-        record = self.records.get(revision)
-        if record is None:
-            return []
-        return record.summary_values.get(signature_id, [])
-
-    def get_replicate_values(self, revision: str, signature_id: int) -> list[float]:
-        """Return all replicate values recorded for a revision/signature pair."""
-
-        record = self.records.get(revision)
-        if record is None:
-            return []
-        return record.replicate_values.get(signature_id, [])
-
-    def get_summary_value(
-        self,
-        revision: str,
-        signature_id: int,
-        draw_index: int = 0,
-    ) -> float | None:
-        """Return one summary draw by index, if the requested draw exists."""
-
-        values = self.get_summary_values(revision, signature_id)
-        if not values:
-            return None
-        if draw_index < len(values):
-            return values[draw_index]
-        return None
+        self.records: dict[str, RevisionRecord] = {
+            record.node: record for record in records
+        }
 
     def path_between(self, good_revision: str, bad_revision: str) -> list[str] | None:
         """Return a good-to-bad parent path, if one exists in the revision graph."""
@@ -221,8 +182,6 @@ class OracleResult:
 
     revision: str
     decision: OracleDecision
-    value: float | None
-    baseline: float
     attempt: int
     draw_index: int | None
     replicate_count: int
@@ -257,7 +216,7 @@ class TestOracle:
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> list[OracleResult]:
-        """Classify multiple revisions, using the single-revision fallback path."""
+        """Classify multiple revisions, using repeated single-revision calls."""
 
         return [
             self.classify(
@@ -270,7 +229,7 @@ class TestOracle:
 
 
 class SummaryComparison(TestOracle):
-    """Classify revisions by comparing measurement values against the midpoint."""
+    """Classify revisions with a per-regression noisy summary oracle."""
 
     name = "SummaryComparison"
 
@@ -278,15 +237,20 @@ class SummaryComparison(TestOracle):
         self,
         *,
         signature_info: SignatureInfoIndex,
-        revision_perf: RevisionPerfIndex,
         executor: TestExecutor,
+        oracle_accuracy: float,
         random_seed: int | None = 0,
     ) -> None:
-        """Create a baseline-comparison oracle backed by revision measurements."""
+        """Create a noisy oracle backed by one summary accuracy value."""
+
+        if not 0.0 <= oracle_accuracy <= 1.0:
+            raise ValueError(
+                f"oracle_accuracy must be between 0 and 1: {oracle_accuracy!r}"
+            )
 
         self.signature_info = signature_info
-        self.revision_perf = revision_perf
         self.executor = executor
+        self.oracle_accuracy = oracle_accuracy
         self.query_count = 0
         self._attempt_counts: dict[str, int] = {}
         self._rng = random.Random(random_seed)
@@ -298,7 +262,7 @@ class SummaryComparison(TestOracle):
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> OracleResult:
-        """Classify one revision by submitting exactly one replicate batch."""
+        """Classify one revision by submitting exactly one test batch."""
 
         return self.classify_many(
             [revision],
@@ -313,7 +277,7 @@ class SummaryComparison(TestOracle):
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> list[OracleResult]:
-        """Submit all requested revision tests at once, then classify each result."""
+        """Submit all requested revision tests at once, then draw noisy verdicts."""
 
         if not revisions:
             return []
@@ -333,261 +297,92 @@ class SummaryComparison(TestOracle):
 
         batches = self.executor.submit_batches_and_wait(batches_to_submit)
         self.query_count += len(revisions)
-        drawn_values = self._draw_measurement_values_for_requests(
-            requests=requests,
-            failing_sig=failing_sig,
-            regression=regression,
-            revision_path=revision_path,
-        )
 
         return [
             self._classify_with_completed_batch(
                 revision=revision,
                 attempt=attempt,
-                failing_sig=failing_sig,
                 replicate_count=replicate_count,
                 batch=batches[batch_key],
-                drawn_value=drawn_values[batch_key],
+                regression=regression,
+                revision_path=revision_path,
             )
             for revision, attempt, batch_key in requests
         ]
-
-    def _draw_measurement_values_for_requests(
-        self,
-        *,
-        requests: Sequence[tuple[str, int, str]],
-        failing_sig: FailingSignature,
-        regression: Mapping[str, Any],
-        revision_path: Sequence[str],
-    ) -> dict[str, tuple[float | None, str | None, str | None, int | None]]:
-        """Draw direct values first, then randomly draw same-side fallbacks."""
-
-        drawn_values: dict[
-            str,
-            tuple[float | None, str | None, str | None, int | None],
-        ] = {}
-        fallback_requests = []
-
-        for revision, attempt, batch_key in requests:
-            direct_value = self._direct_measurement_value(
-                revision=revision,
-                signature=failing_sig,
-                measurement_kind="summary",
-                value_source="direct_summary",
-            )
-            if direct_value is None:
-                direct_value = self._direct_measurement_value(
-                    revision=revision,
-                    signature=failing_sig,
-                    measurement_kind="replicate",
-                    value_source="direct_replicate",
-                )
-            if direct_value is None:
-                fallback_requests.append((revision, batch_key))
-                continue
-            drawn_values[batch_key] = direct_value
-
-        for revision, batch_key in fallback_requests:
-            fallback_value = self._same_side_measurement_value(
-                revision=revision,
-                signature=failing_sig,
-                regression=regression,
-                revision_path=revision_path,
-                measurement_kind="summary",
-                value_source="same_side_summary",
-            )
-            if fallback_value is None:
-                fallback_value = self._same_side_measurement_value(
-                    revision=revision,
-                    signature=failing_sig,
-                    regression=regression,
-                    revision_path=revision_path,
-                    measurement_kind="replicate",
-                    value_source="same_side_replicate",
-                )
-            if fallback_value is None:
-                fallback_value = self._boundary_replicate_value(
-                    revision=revision,
-                    signature=failing_sig,
-                    regression=regression,
-                    revision_path=revision_path,
-                )
-            if fallback_value is None:
-                fallback_value = (
-                    None,
-                    "missing_measurement",
-                    None,
-                    None,
-                )
-            drawn_values[batch_key] = fallback_value
-
-        return drawn_values
-
-    def _direct_measurement_value(
-        self,
-        *,
-        revision: str,
-        signature: FailingSignature,
-        measurement_kind: str,
-        value_source: str,
-    ) -> tuple[float, str | None, str | None, int | None] | None:
-        """Randomly draw one direct observation if available."""
-
-        direct_values = self._measurement_values(
-            revision=revision,
-            signature_id=signature.signature_id,
-            measurement_kind=measurement_kind,
-        )
-        if not direct_values:
-            return None
-
-        value_idx, value = self._rng.choice(list(enumerate(direct_values)))
-        return value, value_source, revision, value_idx
 
     def _classify_with_completed_batch(
         self,
         *,
         revision: str,
         attempt: int,
-        failing_sig: FailingSignature,
         replicate_count: int,
         batch: TestBatch,
-        drawn_value: tuple[float | None, str | None, str | None, int | None],
+        regression: Mapping[str, Any],
+        revision_path: Sequence[str],
     ) -> OracleResult:
-        """Turn a completed test batch and selected measurement into a decision."""
+        """Turn a completed test batch into a noisy clean/bad decision."""
 
-        value, source, source_revision, draw_index = drawn_value
-        decision = (
-            OracleDecision.UNKNOWN
-            if value is None
-            else self._compare(value, failing_sig.baseline)
+        expected_decision = self._expected_decision(
+            revision=revision,
+            regression=regression,
+            revision_path=revision_path,
         )
+        if expected_decision is None:
+            decision = OracleDecision.UNKNOWN
+            measurement_count = 0
+            source = "missing_culprit_boundary"
+        else:
+            decision = self._draw_noisy_decision(expected_decision)
+            measurement_count = 1
+            source = "noisy_summary_oracle"
+
         return OracleResult(
             revision=revision,
             decision=decision,
-            value=value,
-            baseline=failing_sig.baseline,
             attempt=attempt + 1,
-            draw_index=draw_index,
+            draw_index=None,
             replicate_count=replicate_count,
-            measurement_count=0 if value is None else 1,
+            measurement_count=measurement_count,
             test_runs=replicate_count,
             submitted_at_minutes=batch.submitted_at_minutes,
             completed_at_minutes=batch.completed_at_minutes,
             value_source=source,
-            value_source_revision=source_revision,
+            value_source_revision=None,
         )
 
-    def _same_side_measurement_value(
-        self,
-        *,
-        revision: str,
-        signature: FailingSignature,
-        regression: Mapping[str, Any],
-        revision_path: Sequence[str],
-        measurement_kind: str,
-        value_source: str,
-    ) -> tuple[float, str | None, str | None, int | None] | None:
-        """Randomly draw one fallback value from the same culprit side."""
+    def _draw_noisy_decision(self, expected_decision: OracleDecision) -> OracleDecision:
+        """Return the expected side with configured probability, otherwise flip it."""
 
-        if revision not in revision_path:
-            return None
-        if regression.get("culprit_revision") not in revision_path:
-            return None
-
-        revision_idx = revision_path.index(revision)
-        culprit_idx = revision_path.index(str(regression["culprit_revision"]))
-        is_bad_side = revision_idx >= culprit_idx
-        boundary_indices = {0, len(revision_path) - 1}
-
-        side_indices = [
-            idx
-            for idx in range(len(revision_path))
-            if (idx >= culprit_idx) == is_bad_side
-            and idx != revision_idx
-            and idx not in boundary_indices
-        ]
-        side_indices.sort(key=lambda idx: abs(idx - revision_idx))
-
-        same_side_values = []
-        for idx in side_indices:
-            source_revision = revision_path[idx]
-            for value_idx, value in enumerate(
-                self._measurement_values(
-                    revision=source_revision,
-                    signature_id=signature.signature_id,
-                    measurement_kind=measurement_kind,
-                )
-            ):
-                same_side_values.append((value, source_revision, value_idx))
-
-        if not same_side_values:
-            return None
-
-        value, source_revision, value_idx = self._rng.choice(same_side_values)
-        return value, value_source, source_revision, value_idx
-
-    def _boundary_replicate_value(
-        self,
-        *,
-        revision: str,
-        signature: FailingSignature,
-        regression: Mapping[str, Any],
-        revision_path: Sequence[str],
-    ) -> tuple[float, str | None, str | None, int | None] | None:
-        """Randomly draw one replicate value from the same-side boundary."""
-
-        if revision not in revision_path:
-            return None
-        if regression.get("culprit_revision") not in revision_path:
-            return None
-
-        revision_idx = revision_path.index(revision)
-        culprit_idx = revision_path.index(str(regression["culprit_revision"]))
-        is_bad_side = revision_idx >= culprit_idx
-        source_revision = revision_path[-1] if is_bad_side else revision_path[0]
-        value_source = (
-            "bad_boundary_replicate" if is_bad_side else "good_boundary_replicate"
-        )
-
-        boundary_values = []
-        for value_idx, value in enumerate(
-            self.revision_perf.get_replicate_values(
-                source_revision,
-                signature.signature_id,
-            )
-        ):
-            boundary_values.append((value, value_idx))
-
-        if not boundary_values:
-            return None
-
-        value, value_idx = self._rng.choice(boundary_values)
-        return value, value_source, source_revision, value_idx
-
-    def _measurement_values(
-        self,
-        *,
-        revision: str,
-        signature_id: int,
-        measurement_kind: str,
-    ) -> list[float]:
-        """Return summary or replicate values for one revision/signature pair."""
-
-        if measurement_kind == "summary":
-            return self.revision_perf.get_summary_values(revision, signature_id)
-        if measurement_kind == "replicate":
-            return self.revision_perf.get_replicate_values(revision, signature_id)
-        raise ValueError(f"unknown measurement kind: {measurement_kind}")
+        if self._rng.random() < self.oracle_accuracy:
+            return expected_decision
+        if expected_decision is OracleDecision.BAD:
+            return OracleDecision.CLEAN
+        return OracleDecision.BAD
 
     @staticmethod
-    def _compare(
-        value: float,
-        baseline: float,
-    ) -> OracleDecision:
-        """Classify one value using only the baseline."""
+    def _expected_decision(
+        *,
+        revision: str,
+        regression: Mapping[str, Any],
+        revision_path: Sequence[str],
+    ) -> OracleDecision | None:
+        """Return the true side of a revision relative to the known culprit."""
 
-        return OracleDecision.BAD if value > baseline else OracleDecision.CLEAN
+        culprit_revision = regression.get("culprit_revision")
+        if culprit_revision is None:
+            return None
+        culprit_revision = str(culprit_revision)
+        try:
+            revision_idx = revision_path.index(revision)
+            culprit_idx = revision_path.index(culprit_revision)
+        except ValueError:
+            return None
+
+        return (
+            OracleDecision.BAD
+            if revision_idx >= culprit_idx
+            else OracleDecision.CLEAN
+        )
 
 
 def parse_failing_signature(regression: Mapping[str, Any]) -> FailingSignature:
@@ -607,7 +402,5 @@ def parse_failing_signature(regression: Mapping[str, Any]) -> FailingSignature:
 
     return FailingSignature(
         signature_id=signature_id,
-        good_value=float(raw["Good_value"]),
-        bad_value=float(raw["bad_value"]),
         platform=raw.get("platform"),
     )
