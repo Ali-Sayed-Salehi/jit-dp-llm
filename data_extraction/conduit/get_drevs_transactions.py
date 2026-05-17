@@ -15,16 +15,15 @@ Each output row contains `commit_id`, `drev_id`, `dataset_split`, `risk_score`,
 and `transactions`, where `transactions` is the list of raw transaction objects
 returned by Conduit.
 
-Use `--debug` to process only the last 10 DREV rows from
-per_commit_drevs.jsonl. The debug subset is selected before initializing the
-Phabricator client. Transactions are fetched once per unique DREV PHID in the
-selected rows.
+Use `--debug` to process only 10 eval DREV rows and 10 final-test DREV rows
+from per_commit_drevs.jsonl. The debug subset is selected before initializing
+the Phabricator client. Transactions are fetched once per unique DREV PHID in
+the selected rows.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import deque
 import json
 import os
 import sys
@@ -44,6 +43,7 @@ DEFAULT_OUTPUT_JSONL = (
     / "per_commit_drev_transactions.jsonl"
 )
 DEFAULT_PHABRICATOR_API_URL = "https://phabricator.services.mozilla.com/api/"
+DEBUG_DATASET_SPLITS = ("eval", "final test")
 
 
 @dataclass(frozen=True)
@@ -162,13 +162,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Process only the last debug-count rows from per_commit_drevs.jsonl.",
+        help=(
+            "Process only debug-count eval rows and debug-count final-test rows "
+            "from per_commit_drevs.jsonl."
+        ),
     )
     parser.add_argument(
         "--debug-count",
         type=int,
         default=10,
-        help="Number of rows to process in debug mode.",
+        help="Number of rows per split to process in debug mode.",
     )
     parser.add_argument(
         "--api-url",
@@ -295,18 +298,42 @@ def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None
     )
 
 
-def load_drev_refs(path: Path, *, tail_count: int | None = None) -> list[DrevRef]:
-    if tail_count is not None and tail_count <= 0:
+def load_drev_refs(path: Path, *, per_split_count: int | None = None) -> list[DrevRef]:
+    if per_split_count is not None and per_split_count <= 0:
         return []
 
-    refs: list[DrevRef] | deque[DrevRef]
-    refs = deque(maxlen=tail_count) if tail_count is not None else []
+    refs: list[DrevRef] = []
+    selected_counts = (
+        {split: 0 for split in DEBUG_DATASET_SPLITS}
+        if per_split_count is not None
+        else None
+    )
 
     for line_num, record in iter_jsonl(path):
         ref = parse_drev_ref(record, line_label=f"{path}:{line_num}")
         if ref is not None:
+            if selected_counts is not None:
+                if ref.dataset_split not in selected_counts:
+                    continue
+                if selected_counts[ref.dataset_split] >= per_split_count:
+                    continue
+
+                selected_counts[ref.dataset_split] += 1
             refs.append(ref)
+            if selected_counts is not None and all(
+                split_count >= per_split_count
+                for split_count in selected_counts.values()
+            ):
+                break
     return list(refs)
+
+
+def describe_debug_split_counts(refs: list[DrevRef]) -> str:
+    counts = {
+        split: sum(ref.dataset_split == split for ref in refs)
+        for split in DEBUG_DATASET_SPLITS
+    }
+    return ", ".join(f"{counts[split]} {split}" for split in DEBUG_DATASET_SPLITS)
 
 
 def write_transactions(
@@ -369,10 +396,14 @@ def main(argv: list[str] | None = None) -> None:
 
     refs = load_drev_refs(
         input_jsonl,
-        tail_count=args.debug_count if args.debug else None,
+        per_split_count=args.debug_count if args.debug else None,
     )
     if args.debug:
-        print(f"DEBUG: selected {len(refs)} trailing DREV rows.", file=sys.stderr)
+        print(
+            f"DEBUG: selected {len(refs)} DREV rows "
+            f"({describe_debug_split_counts(refs)}).",
+            file=sys.stderr,
+        )
 
     caller = ConduitCaller(
         min_interval_seconds=args.rate_limit_min_interval,

@@ -21,14 +21,13 @@ repository at:
     data_extraction/mercurial/repos/autoland
 
 The autoland repository is cloned if missing and updated with `hg pull -u` if it
-already exists. Use `--debug` to process only the last 10 rows from
-per_commit_drev_transactions.jsonl.
+already exists. Use `--debug` to process only 10 eval rows and 10 final-test rows
+from per_commit_drev_transactions.jsonl.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -47,6 +46,7 @@ DEFAULT_AUTOLAND_REPO = (
     REPO_ROOT / "data_extraction" / "mercurial" / "repos" / "autoland"
 )
 DEFAULT_AUTOLAND_URL = "https://hg.mozilla.org/integration/autoland"
+DEBUG_DATASET_SPLITS = ("eval", "final test")
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--debug",
         action="store_true",
         help=(
-            "Process only the last debug-count rows from "
+            "Process only debug-count eval rows and debug-count final-test rows "
+            "from "
             "per_commit_drev_transactions.jsonl."
         ),
     )
@@ -98,7 +99,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--debug-count",
         type=int,
         default=10,
-        help="Number of trailing transaction rows to process in debug mode.",
+        help="Number of transaction rows per split to process in debug mode.",
     )
     parser.add_argument(
         "--include-app-comments",
@@ -129,18 +130,6 @@ def iter_jsonl(path: Path) -> Iterator[JsonlRecord]:
             if not isinstance(record, dict):
                 raise ValueError(f"Expected object at {path}:{line_num}")
             yield JsonlRecord(line_num=line_num, record=record)
-
-
-def load_jsonl_records(path: Path, *, tail_count: int | None = None) -> list[JsonlRecord]:
-    if tail_count is not None and tail_count <= 0:
-        return []
-
-    records: list[JsonlRecord] | deque[JsonlRecord]
-    records = deque(maxlen=tail_count) if tail_count is not None else []
-
-    for item in iter_jsonl(path):
-        records.append(item)
-    return list(records)
 
 
 def parse_risk_score(value: Any, *, line_label: str) -> float:
@@ -187,11 +176,41 @@ def parse_input_row(item: JsonlRecord, *, path: Path) -> InputRow:
     )
 
 
-def load_input_rows(path: Path, *, tail_count: int | None = None) -> list[InputRow]:
-    return [
-        parse_input_row(item, path=path)
-        for item in load_jsonl_records(path, tail_count=tail_count)
-    ]
+def load_input_rows(path: Path, *, per_split_count: int | None = None) -> list[InputRow]:
+    if per_split_count is not None and per_split_count <= 0:
+        return []
+
+    rows: list[InputRow] = []
+    selected_counts = (
+        {split: 0 for split in DEBUG_DATASET_SPLITS}
+        if per_split_count is not None
+        else None
+    )
+
+    for item in iter_jsonl(path):
+        row = parse_input_row(item, path=path)
+        if selected_counts is not None:
+            if row.dataset_split not in selected_counts:
+                continue
+            if selected_counts[row.dataset_split] >= per_split_count:
+                continue
+
+            selected_counts[row.dataset_split] += 1
+        rows.append(row)
+        if selected_counts is not None and all(
+            split_count >= per_split_count for split_count in selected_counts.values()
+        ):
+            break
+
+    return rows
+
+
+def describe_debug_split_counts(rows: list[InputRow]) -> str:
+    counts = {
+        split: sum(row.dataset_split == split for row in rows)
+        for split in DEBUG_DATASET_SPLITS
+    }
+    return ", ".join(f"{counts[split]} {split}" for split in DEBUG_DATASET_SPLITS)
 
 
 def ensure_autoland_repo(
@@ -441,10 +460,14 @@ def main(argv: list[str] | None = None) -> None:
 
     rows = load_input_rows(
         drev_transactions_jsonl,
-        tail_count=args.debug_count if args.debug else None,
+        per_split_count=args.debug_count if args.debug else None,
     )
     if args.debug:
-        print(f"DEBUG: selected {len(rows)} trailing DREV transaction rows.", file=sys.stderr)
+        print(
+            f"DEBUG: selected {len(rows)} DREV transaction rows "
+            f"({describe_debug_split_counts(rows)}).",
+            file=sys.stderr,
+        )
 
     ensure_autoland_repo(
         repo_path=autoland_repo,

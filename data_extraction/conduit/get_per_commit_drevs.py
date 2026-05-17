@@ -26,9 +26,9 @@ initial risk score at 0.0 while fetching DREVs, then backfills it from another
 row planned for output with the same `bugzilla.bug-id` and a non-zero risk
 score.
 
-Use `--debug` to process only the last 10 eligible commits by first-parent graph
-order. The debug subset is selected before extracting DREV URLs or initializing
-the Phabricator client, so skipped commits do not cause API calls.
+Use `--debug` to process only 10 eval commits and 10 final-test commits. The
+debug subset is selected before initializing the Phabricator client, so skipped
+commits do not cause API calls.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ DEFAULT_FINAL_TEST_PREDICTIONS_JSON = (
 DEFAULT_PHABRICATOR_API_URL = "https://phabricator.services.mozilla.com/api/"
 
 NULL_NODE = "0000000000000000000000000000000000000000"
+DEBUG_DATASET_SPLITS = ("eval", "final test")
 DREV_URL_RE = re.compile(
     r"https://phabricator\.services\.mozilla\.com/D(\d+)\s*\Z",
     re.IGNORECASE,
@@ -198,15 +199,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--debug",
         action="store_true",
         help=(
-            "Process only the last debug-count eligible commits by first-parent "
-            "graph order."
+            "Process only debug-count eval commits and debug-count final-test "
+            "commits."
         ),
     )
     parser.add_argument(
         "--debug-count",
         type=int,
         default=10,
-        help="Number of graph-tail commits to process in debug mode.",
+        help="Number of commits per split to process in debug mode.",
     )
     parser.add_argument(
         "--api-url",
@@ -666,80 +667,35 @@ def describe_boundary(boundary: SplitBoundary) -> str:
     )
 
 
-def select_last_commits_by_first_parent(
-    commits: list[dict[str, Any]],
-    count: int,
-) -> list[dict[str, Any]]:
-    if count <= 0 or not commits:
-        return []
-
-    node_to_commit: dict[str, dict[str, Any]] = {}
-    node_to_index: dict[str, int] = {}
-    children_by_node: dict[str, list[str]] = {}
-
-    for index, commit in enumerate(commits):
-        node = commit["node"]
-        node_to_commit[node] = commit
-        node_to_index[node] = index
-        children_by_node.setdefault(node, [])
-
-    for commit in commits:
-        node = commit["node"]
-        parents = commit.get("parents", [])
-        for parent in parents:
-            if parent in node_to_commit:
-                children_by_node.setdefault(parent, []).append(node)
-
-    heads = [
-        commit["node"]
-        for commit in commits
-        if not children_by_node.get(commit["node"])
-    ]
-    if not heads:
-        return commits[-count:]
-
-    head = max(heads, key=lambda node: node_to_index[node])
-    if len(heads) > 1:
-        print(
-            f"Found {len(heads)} graph heads; using latest head by file order: {head}",
-            file=sys.stderr,
-        )
-
-    selected_newest_first: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    current_node: str | None = head
-
-    while current_node and len(selected_newest_first) < count:
-        if current_node in seen:
-            raise ValueError(f"Cycle detected while walking parents at {current_node}")
-        seen.add(current_node)
-
-        commit = node_to_commit[current_node]
-        selected_newest_first.append(commit)
-
-        parent_nodes = [
-            parent
-            for parent in commit.get("parents", [])
-            if parent != NULL_NODE and parent in node_to_commit
-        ]
-        current_node = parent_nodes[0] if parent_nodes else None
-
-    return list(reversed(selected_newest_first))
-
-
-def select_last_work_items_by_first_parent(
+def select_debug_work_items_by_split(
     work_items: list[CommitWorkItem],
     count: int,
 ) -> list[CommitWorkItem]:
     if count <= 0 or not work_items:
         return []
 
-    selected_commits = select_last_commits_by_first_parent(
-        [item.commit for item in work_items],
-        count,
-    )
-    item_by_node = {item.commit["node"]: item for item in work_items}
-    return [item_by_node[commit["node"]] for commit in selected_commits]
+    selected: list[CommitWorkItem] = []
+    selected_counts = {split: 0 for split in DEBUG_DATASET_SPLITS}
+    for item in work_items:
+        if item.dataset_split not in selected_counts:
+            continue
+        if selected_counts[item.dataset_split] >= count:
+            continue
+
+        selected.append(item)
+        selected_counts[item.dataset_split] += 1
+        if all(split_count >= count for split_count in selected_counts.values()):
+            break
+
+    return selected
+
+
+def describe_debug_split_counts(work_items: list[CommitWorkItem]) -> str:
+    counts = {
+        split: sum(item.dataset_split == split for item in work_items)
+        for split in DEBUG_DATASET_SPLITS
+    }
+    return ", ".join(f"{counts[split]} {split}" for split in DEBUG_DATASET_SPLITS)
 
 
 def get_work_items_to_process(
@@ -752,15 +708,15 @@ def get_work_items_to_process(
         return all_work_items
     if debug_count <= 0:
         print(
-            "DEBUG: selected 0 eligible commits from first-parent graph tail.",
+            "DEBUG: selected 0 eligible commits.",
             file=sys.stderr,
         )
         return []
 
-    selected = select_last_work_items_by_first_parent(all_work_items, debug_count)
+    selected = select_debug_work_items_by_split(all_work_items, debug_count)
     print(
         f"DEBUG: selected {len(selected)} eligible commits from "
-        "first-parent graph tail.",
+        f"split-balanced debug subset ({describe_debug_split_counts(selected)}).",
         file=sys.stderr,
     )
     return selected
