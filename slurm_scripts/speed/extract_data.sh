@@ -78,6 +78,9 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset.py
 
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_risk_scores.py
+
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_per_commit_drevs.py \
 # --eval-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_eval.json \
 # --final-test-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_final_test.json \
@@ -94,7 +97,7 @@ echo "running the data extraction script . . ."
 # --retry-base-sleep 5.0
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/create_code_review_dataset.py \
-# --create_code_review_dataset.py
+# --debug
 
 
 echo "extraction finished"
