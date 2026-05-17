@@ -220,7 +220,7 @@ class Backfill(CulpritLocalizer):
 
         revisions_to_probe = path[1:]
         decisions = oracle.classify_many(
-            revisions_to_probe,
+            self._initial_probe_revisions(revisions_to_probe),
             regression=regression,
             revision_path=path,
         )
@@ -228,6 +228,9 @@ class Backfill(CulpritLocalizer):
         final_decisions = self._final_decisions_from_draws(
             revisions=revisions_to_probe,
             decisions=all_decisions,
+            oracle=oracle,
+            regression=regression,
+            revision_path=path,
         )
 
         found_revision, undefined_reason = self._evaluate_backfill(
@@ -255,6 +258,9 @@ class Backfill(CulpritLocalizer):
             final_decisions = self._final_decisions_from_draws(
                 revisions=revisions_to_probe,
                 decisions=all_decisions,
+                oracle=oracle,
+                regression=regression,
+                revision_path=path,
             )
             found_revision, undefined_reason = self._evaluate_backfill(
                 path=path,
@@ -288,13 +294,18 @@ class Backfill(CulpritLocalizer):
                 if executor is not None
                 else sum(d.test_runs for d in all_decisions)
             ),
-            oracle_queries=getattr(oracle, "query_count", len(decisions)),
+            oracle_queries=getattr(oracle, "query_count", len(all_decisions)),
             path_length=len(path),
             candidate_revisions_tested=len(revisions_to_probe),
             decisions=all_decisions,
             final_decisions=final_decisions,
             retrigger_intervals=retrigger_intervals,
         )
+
+    def _initial_probe_revisions(self, revisions_to_probe: Sequence[str]) -> list[str]:
+        """Return the revisions to include in Backfill's first submission batch."""
+
+        return list(revisions_to_probe)
 
     @staticmethod
     def _evaluate_backfill(
@@ -392,13 +403,16 @@ class Backfill(CulpritLocalizer):
             return list(revisions_to_probe)
         return None
 
-    @staticmethod
     def _final_decisions_from_draws(
+        self,
         *,
         revisions: Sequence[str],
         decisions: list[OracleResult],
+        oracle: TestOracle,
+        regression: Mapping[str, Any],
+        revision_path: Sequence[str],
     ) -> list[OracleResult]:
-        """Select final decisions from oracle draws for the final pass."""
+        """Select final decisions, probing once more for tied clean/bad votes."""
 
         decisions_by_revision: dict[str, list[OracleResult]] = {
             revision: [] for revision in revisions
@@ -407,17 +421,52 @@ class Backfill(CulpritLocalizer):
             if decision.revision in decisions_by_revision:
                 decisions_by_revision[decision.revision].append(decision)
 
+        tied_revisions = [
+            revision
+            for revision in revisions
+            if self._has_clean_bad_tie(decisions_by_revision[revision])
+        ]
+        if tied_revisions:
+            tie_break_decisions = oracle.classify_many(
+                tied_revisions,
+                regression=regression,
+                revision_path=revision_path,
+            )
+            decisions.extend(tie_break_decisions)
+            for decision in tie_break_decisions:
+                if decision.revision in decisions_by_revision:
+                    decisions_by_revision[decision.revision].append(decision)
+
         return [
-            Backfill._select_revision_decision(revision_decisions)
+            self._select_revision_decision(revision_decisions)
             for revision in revisions
             if (revision_decisions := decisions_by_revision[revision])
         ]
 
     @staticmethod
+    def _has_clean_bad_tie(decisions: list[OracleResult]) -> bool:
+        """Return whether known clean/bad votes are tied and need one more probe."""
+
+        clean_count, bad_count = Backfill._clean_bad_counts(decisions)
+        return clean_count > 0 and clean_count == bad_count
+
+    @staticmethod
+    def _clean_bad_counts(decisions: list[OracleResult]) -> tuple[int, int]:
+        """Count known clean and bad votes, ignoring unknown oracle results."""
+
+        clean_count = sum(
+            decision.decision is OracleDecision.CLEAN for decision in decisions
+        )
+        bad_count = sum(
+            decision.decision is OracleDecision.BAD for decision in decisions
+        )
+        return clean_count, bad_count
+
+    @staticmethod
     def _select_revision_decision(
         decisions: list[OracleResult],
     ) -> OracleResult:
-        """Choose one oracle draw, using majority decision after retriggers."""
+        """Choose one oracle draw, using majority decision after extra tie probes."""
 
         if len(decisions) == 1:
             return decisions[0]
@@ -428,23 +477,25 @@ class Backfill(CulpritLocalizer):
             if decision.decision is not OracleDecision.UNKNOWN
         ]
         vote_pool = known_decisions or decisions
-        latest_decision = max(
-            vote_pool,
-            key=lambda decision: decision.completed_at_minutes,
-        )
-        clean_count = sum(
-            decision.decision is OracleDecision.CLEAN for decision in known_decisions
-        )
-        bad_count = sum(
-            decision.decision is OracleDecision.BAD for decision in known_decisions
-        )
+        clean_count, bad_count = Backfill._clean_bad_counts(known_decisions)
+        draw_count = sum(decision.measurement_count for decision in decisions)
 
         if bad_count > clean_count:
             selected_decision = OracleDecision.BAD
         elif clean_count > bad_count:
             selected_decision = OracleDecision.CLEAN
         else:
-            selected_decision = latest_decision.decision
+            latest_draw = max(
+                decisions,
+                key=lambda decision: decision.completed_at_minutes,
+            )
+            return replace(
+                latest_draw,
+                decision=OracleDecision.UNKNOWN,
+                measurement_count=draw_count,
+                value_source="ambiguous_oracle_decision",
+                value_source_revision=None,
+            )
 
         selected_draw = max(
             (
@@ -454,12 +505,39 @@ class Backfill(CulpritLocalizer):
             ),
             key=lambda decision: decision.completed_at_minutes,
         )
-        draw_count = sum(decision.measurement_count for decision in decisions)
 
         return replace(
             selected_draw,
             measurement_count=draw_count,
         )
+
+
+class BackfillWithRepeat(Backfill):
+    """Backfill with repeated initial test attempts for every candidate revision."""
+
+    name = "BackfillWithRepeat"
+
+    def __init__(
+        self,
+        *,
+        backfill_retrigger_count: int = 2,
+        probe_repeat_count: int = 1,
+    ) -> None:
+        """Configure repeated first-batch probes and suspicious-set retriggers."""
+
+        super().__init__(backfill_retrigger_count=backfill_retrigger_count)
+        if probe_repeat_count < 1:
+            raise ValueError("probe_repeat_count must be at least 1")
+        self.probe_repeat_count = probe_repeat_count
+
+    def _initial_probe_revisions(self, revisions_to_probe: Sequence[str]) -> list[str]:
+        """Repeat every candidate revision in the first submitted probe batch."""
+
+        return [
+            revision
+            for _ in range(self.probe_repeat_count)
+            for revision in revisions_to_probe
+        ]
 
 
 class StandardMidpointBisection(CulpritLocalizer):
@@ -545,6 +623,15 @@ class StandardMidpointBisection(CulpritLocalizer):
                 )
                 midpoint_decisions.extend(retrigger_decisions)
                 all_decisions.extend(retrigger_decisions)
+
+            if Backfill._has_clean_bad_tie(midpoint_decisions):
+                tie_break_decisions = oracle.classify_many(
+                    [midpoint_revision],
+                    regression=regression,
+                    revision_path=path,
+                )
+                midpoint_decisions.extend(tie_break_decisions)
+                all_decisions.extend(tie_break_decisions)
 
             selected_decision, undefined_reason = self._select_midpoint_decision(
                 midpoint_decisions,
@@ -661,5 +748,6 @@ class StandardMidpointBisection(CulpritLocalizer):
 
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     Backfill.name: Backfill,
+    BackfillWithRepeat.name: BackfillWithRepeat,
     StandardMidpointBisection.name: StandardMidpointBisection,
 }

@@ -129,8 +129,9 @@ pair and retriggers those two commits. If the whole candidate sequence is all
 is already monotonic, so Backfill treats the first candidate after
 `good_revision` as the found culprit. After a retrigger, `final_decisions`
 reconciles repeated results for each retriggered commit by majority vote over
-the drawn clean/bad decisions, breaking ties with the latest draw. It does not
-average measurement values. The raw attempts remain in `decisions`.
+the drawn clean/bad decisions. If clean and bad votes are tied, the simulator
+submits one more test for that revision and votes again. It does not average
+measurement values. The raw attempts remain in `decisions`.
 
 This process repeats up to `--backfill-retrigger-count` times before the
 localization remains undefined. The default is `2`, which models a small number

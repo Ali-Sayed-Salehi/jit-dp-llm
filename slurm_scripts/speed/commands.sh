@@ -140,11 +140,13 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
---localizers Backfill StandardMidpointBisection \
+--localizers Backfill BackfillWithRepeat StandardMidpointBisection \
 --random-seed 42 \
 --optuna-trials 50 \
 --midpoint-retrigger-count-max 200 \
---backfill-retrigger-count-max 200
+--backfill-retrigger-count-max 200 \
+--probe-repeat-count-min 1 \
+--probe-repeat-count-max 200
 
 
 echo "Script finished"
