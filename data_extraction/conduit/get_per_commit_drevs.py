@@ -20,7 +20,11 @@ commit is buggy, and `drev` with the raw revision object returned by
 
 The script uses risk_predictions_eval.json and risk_predictions_final_test.json
 to derive Mercurial-order split boundaries. It only considers commits from the
-start of the eval boundary through the end of the final-test boundary.
+start of the eval boundary through the end of the final-test boundary. When a
+valid commit is missing from those prediction files, the script leaves its
+initial risk score at 0.0 while fetching DREVs, then backfills it from another
+row planned for output with the same `bugzilla.bug-id` and a non-zero risk
+score.
 
 Use `--debug` to process only the last 10 eligible commits by first-parent graph
 order. The debug subset is selected before extracting DREV URLs or initializing
@@ -82,6 +86,15 @@ class CommitWorkItem:
     dataset_split: str
     risk_score: float = 0.0
     has_risk_score: bool = False
+
+
+@dataclass
+class PlannedDrevRow:
+    commit_id: str
+    dataset_split: str
+    risk_score: float
+    has_risk_score: bool
+    drev: dict[str, Any]
 
 
 class ConduitCaller:
@@ -275,6 +288,68 @@ def is_published_and_closed(revision: dict[str, Any]) -> bool:
         or revision.get("closed", False)
     )
     return is_published and is_closed
+
+
+def extract_bugzilla_bug_id(revision: dict[str, Any]) -> str | None:
+    fields = revision.get("fields", {})
+    if not isinstance(fields, dict):
+        return None
+
+    bug_id = fields.get("bugzilla.bug-id")
+    if bug_id is None:
+        return None
+    if isinstance(bug_id, str):
+        bug_id = bug_id.strip()
+        return bug_id if bug_id else None
+    if isinstance(bug_id, int) and not isinstance(bug_id, bool):
+        return str(bug_id)
+    return None
+
+
+def build_nonzero_risk_score_by_bug_id(
+    rows: list[PlannedDrevRow],
+) -> dict[str, float]:
+    risk_score_by_bug_id: dict[str, float] = {}
+
+    for row in rows:
+        if row.risk_score == 0.0:
+            continue
+
+        bug_id = extract_bugzilla_bug_id(row.drev)
+        if bug_id is None:
+            continue
+
+        existing = risk_score_by_bug_id.get(bug_id)
+        if existing is not None and existing != row.risk_score:
+            raise ValueError(
+                "Multiple non-zero risk scores found for bugzilla.bug-id "
+                f"{bug_id}: {existing} and {row.risk_score}"
+            )
+        risk_score_by_bug_id[bug_id] = row.risk_score
+
+    return risk_score_by_bug_id
+
+
+def backfill_missing_risk_scores_from_bug_id(rows: list[PlannedDrevRow]) -> int:
+    risk_score_by_bug_id = build_nonzero_risk_score_by_bug_id(rows)
+    inherited_count = 0
+
+    for row in rows:
+        if row.has_risk_score or row.risk_score != 0.0:
+            continue
+
+        bug_id = extract_bugzilla_bug_id(row.drev)
+        if bug_id is None:
+            continue
+
+        inherited_risk_score = risk_score_by_bug_id.get(bug_id)
+        if inherited_risk_score is None:
+            continue
+
+        row.risk_score = inherited_risk_score
+        inherited_count += 1
+
+    return inherited_count
 
 
 def load_commits(path: Path) -> list[dict[str, Any]]:
@@ -697,7 +772,6 @@ def process_commits(
     output_jsonl: Path,
     client: PhabricatorClient,
 ) -> dict[str, int]:
-    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     revision_cache: dict[int, dict[str, Any] | None] = {}
     stats = {
         "commits_seen": 0,
@@ -706,52 +780,75 @@ def process_commits(
         "published_closed_drevs_written": 0,
         "skipped_unpublished_or_open": 0,
         "missing_risk_scores": 0,
+        "risk_scores_inherited_from_bug_id": 0,
         "fetch_errors": 0,
     }
 
+    planned_rows: list[PlannedDrevRow] = []
+
+    for work_item in work_items:
+        commit = work_item.commit
+        stats["commits_seen"] += 1
+        commit_id = commit.get("node")
+        if not isinstance(commit_id, str) or not commit_id:
+            print(
+                f"[WARN] Skipping commit without valid node: {commit!r}",
+                file=sys.stderr,
+            )
+            continue
+
+        drev_id = extract_drev_id(commit.get("desc"))
+        if drev_id is None:
+            continue
+        stats["commits_with_trailing_drev_url"] += 1
+
+        if drev_id not in revision_cache:
+            try:
+                revision_cache[drev_id] = client.get_revision_by_id(drev_id)
+                stats["unique_drevs_fetched"] += 1
+            except Exception as exc:
+                revision_cache[drev_id] = None
+                stats["fetch_errors"] += 1
+                print(f"[WARN] Failed to fetch D{drev_id}: {exc}", file=sys.stderr)
+
+        revision = revision_cache[drev_id]
+        if revision is None:
+            continue
+        if not is_published_and_closed(revision):
+            stats["skipped_unpublished_or_open"] += 1
+            continue
+
+        planned_rows.append(
+            PlannedDrevRow(
+                commit_id=commit_id,
+                dataset_split=work_item.dataset_split,
+                risk_score=work_item.risk_score,
+                has_risk_score=work_item.has_risk_score,
+                drev=revision,
+            )
+        )
+
+    stats["risk_scores_inherited_from_bug_id"] = (
+        backfill_missing_risk_scores_from_bug_id(planned_rows)
+    )
+
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with output_jsonl.open("w", encoding="utf-8") as output_file:
-        for work_item in work_items:
-            commit = work_item.commit
-            stats["commits_seen"] += 1
-            commit_id = commit.get("node")
-            if not isinstance(commit_id, str) or not commit_id:
-                print(f"[WARN] Skipping commit without valid node: {commit!r}", file=sys.stderr)
-                continue
-
-            drev_id = extract_drev_id(commit.get("desc"))
-            if drev_id is None:
-                continue
-            stats["commits_with_trailing_drev_url"] += 1
-
-            if drev_id not in revision_cache:
-                try:
-                    revision_cache[drev_id] = client.get_revision_by_id(drev_id)
-                    stats["unique_drevs_fetched"] += 1
-                except Exception as exc:
-                    revision_cache[drev_id] = None
-                    stats["fetch_errors"] += 1
-                    print(f"[WARN] Failed to fetch D{drev_id}: {exc}", file=sys.stderr)
-
-            revision = revision_cache[drev_id]
-            if revision is None:
-                continue
-            if not is_published_and_closed(revision):
-                stats["skipped_unpublished_or_open"] += 1
-                continue
-
-            if not work_item.has_risk_score:
+        for row in planned_rows:
+            if not row.has_risk_score and row.risk_score == 0.0:
                 stats["missing_risk_scores"] += 1
                 print(
-                    f"[WARN] Missing risk score for valid commit {commit_id}; "
+                    f"[WARN] Missing risk score for valid commit {row.commit_id}; "
+                    "no non-zero risk score found for the same bugzilla.bug-id; "
                     "using 0.0.",
                     file=sys.stderr,
                 )
 
             output_row = {
-                "commit_id": commit_id,
-                "dataset_split": work_item.dataset_split,
-                "risk_score": work_item.risk_score,
-                "drev": revision,
+                "commit_id": row.commit_id,
+                "dataset_split": row.dataset_split,
+                "risk_score": row.risk_score,
+                "drev": row.drev,
             }
             output_file.write(json.dumps(output_row) + "\n")
             stats["published_closed_drevs_written"] += 1
