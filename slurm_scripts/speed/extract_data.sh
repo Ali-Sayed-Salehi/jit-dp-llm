@@ -97,7 +97,7 @@ echo "running the data extraction script . . ."
 # --retry-base-sleep 5.0
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/create_code_review_dataset.py \
-# ----skip-repo-update \
+# --skip-repo-update \
 # --debug
 
 
