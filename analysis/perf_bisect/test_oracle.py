@@ -29,7 +29,7 @@ class SignatureInfo:
     """Static metadata for one performance signature."""
 
     signature_id: int
-    replicate_count: int
+    job_duration_minutes: float
     platform: str | None = None
 
 
@@ -108,8 +108,8 @@ class RevisionPerfIndex:
 
 
 @dataclass
-class TestBatch:
-    """Timing result for one submitted batch of replicate tests."""
+class TestJob:
+    """Timing result for one submitted test job."""
 
     submitted_at_minutes: float
     completed_at_minutes: float
@@ -119,60 +119,53 @@ class TestBatch:
 class TestExecutor:
     """A small queueing simulator for performance test workers."""
 
-    def __init__(self, workers: int = 1, test_duration_minutes: float = 1.0) -> None:
+    def __init__(self, workers: int = 1) -> None:
         """Create an empty worker pool for one independent regression simulation."""
 
         if workers < 1:
             raise ValueError("workers must be at least 1")
-        if test_duration_minutes <= 0:
-            raise ValueError("test_duration_minutes must be positive")
 
         self.workers = workers
-        self.test_duration_minutes = test_duration_minutes
         self._worker_available_at = [0.0 for _ in range(workers)]
         self.now_minutes = 0.0
         self.test_runs = 0
 
-    def submit_batch_and_wait(self, test_runs: int) -> TestBatch:
-        """Submit a same-time batch and advance time until all tests complete."""
+    def submit_job_and_wait(self, duration_minutes: float) -> TestJob:
+        """Submit one job and advance time until it completes."""
 
-        if test_runs < 1:
-            raise ValueError("test_runs must be at least 1")
+        return self.submit_jobs_and_wait([("default", duration_minutes)])["default"]
 
-        return self.submit_batches_and_wait([("default", test_runs)])["default"]
-
-    def submit_batches_and_wait(
+    def submit_jobs_and_wait(
         self,
-        batches: Sequence[tuple[str, int]],
-    ) -> dict[str, TestBatch]:
-        """Submit multiple same-time batches and wait for the full queued workload."""
+        jobs: Sequence[tuple[str, float]],
+    ) -> dict[str, TestJob]:
+        """Submit multiple same-time jobs and wait for the full queued workload."""
 
-        if not batches:
+        if not jobs:
             return {}
 
         submitted_at = self.now_minutes
         completed_at = submitted_at
-        completed_by_key = {key: submitted_at for key, _ in batches}
+        completed_by_key = {key: submitted_at for key, _ in jobs}
 
-        for key, test_runs in batches:
-            if test_runs < 1:
-                raise ValueError("test_runs must be at least 1")
-            for _ in range(test_runs):
-                worker_idx = min(
-                    range(self.workers),
-                    key=lambda idx: self._worker_available_at[idx],
-                )
-                start_at = max(submitted_at, self._worker_available_at[worker_idx])
-                end_at = start_at + self.test_duration_minutes
-                self._worker_available_at[worker_idx] = end_at
-                completed_by_key[key] = max(completed_by_key[key], end_at)
-                completed_at = max(completed_at, end_at)
+        for key, duration_minutes in jobs:
+            if duration_minutes <= 0:
+                raise ValueError("duration_minutes must be positive")
+            worker_idx = min(
+                range(self.workers),
+                key=lambda idx: self._worker_available_at[idx],
+            )
+            start_at = max(submitted_at, self._worker_available_at[worker_idx])
+            end_at = start_at + duration_minutes
+            self._worker_available_at[worker_idx] = end_at
+            completed_by_key[key] = end_at
+            completed_at = max(completed_at, end_at)
 
-        self.test_runs += sum(test_runs for _, test_runs in batches)
+        self.test_runs += len(jobs)
         self.now_minutes = completed_at
         return {
-            key: TestBatch(submitted_at, completed_by_key[key], test_runs)
-            for key, test_runs in batches
+            key: TestJob(submitted_at, completed_by_key[key], 1)
+            for key, _ in jobs
         }
 
 
@@ -184,7 +177,6 @@ class OracleResult:
     decision: OracleDecision
     attempt: int
     draw_index: int | None
-    replicate_count: int
     measurement_count: int
     test_runs: int
     submitted_at_minutes: float
@@ -262,7 +254,7 @@ class SummaryComparison(TestOracle):
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> OracleResult:
-        """Classify one revision by submitting exactly one test batch."""
+        """Classify one revision by submitting exactly one test job."""
 
         return self.classify_many(
             [revision],
@@ -277,50 +269,53 @@ class SummaryComparison(TestOracle):
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> list[OracleResult]:
-        """Submit all requested revision tests at once, then draw noisy verdicts."""
+        """Submit all requested revision jobs at once, then draw noisy verdicts."""
 
         if not revisions:
             return []
 
         failing_sig = parse_failing_signature(regression)
         info = self.signature_info.get(failing_sig.signature_id, failing_sig.platform)
-        replicate_count = info.replicate_count if info is not None else 1
+        if info is None:
+            raise ValueError(
+                "missing job_duration for "
+                f"signature_id={failing_sig.signature_id} "
+                f"platform={failing_sig.platform!r}"
+            )
 
         requests = []
-        batches_to_submit = []
+        jobs_to_submit = []
         for idx, revision in enumerate(revisions):
             attempt = self._attempt_counts.get(revision, 0)
             self._attempt_counts[revision] = attempt + 1
-            batch_key = f"{idx}:{revision}:{attempt}"
-            requests.append((revision, attempt, batch_key))
-            batches_to_submit.append((batch_key, replicate_count))
+            job_key = f"{idx}:{revision}:{attempt}"
+            requests.append((revision, attempt, job_key))
+            jobs_to_submit.append((job_key, info.job_duration_minutes))
 
-        batches = self.executor.submit_batches_and_wait(batches_to_submit)
+        jobs = self.executor.submit_jobs_and_wait(jobs_to_submit)
         self.query_count += len(revisions)
 
         return [
-            self._classify_with_completed_batch(
+            self._classify_with_completed_job(
                 revision=revision,
                 attempt=attempt,
-                replicate_count=replicate_count,
-                batch=batches[batch_key],
+                job=jobs[job_key],
                 regression=regression,
                 revision_path=revision_path,
             )
-            for revision, attempt, batch_key in requests
+            for revision, attempt, job_key in requests
         ]
 
-    def _classify_with_completed_batch(
+    def _classify_with_completed_job(
         self,
         *,
         revision: str,
         attempt: int,
-        replicate_count: int,
-        batch: TestBatch,
+        job: TestJob,
         regression: Mapping[str, Any],
         revision_path: Sequence[str],
     ) -> OracleResult:
-        """Turn a completed test batch into a noisy clean/bad decision."""
+        """Turn a completed test job into a noisy clean/bad decision."""
 
         expected_decision = self._expected_decision(
             revision=revision,
@@ -341,11 +336,10 @@ class SummaryComparison(TestOracle):
             decision=decision,
             attempt=attempt + 1,
             draw_index=None,
-            replicate_count=replicate_count,
             measurement_count=measurement_count,
-            test_runs=replicate_count,
-            submitted_at_minutes=batch.submitted_at_minutes,
-            completed_at_minutes=batch.completed_at_minutes,
+            test_runs=1,
+            submitted_at_minutes=job.submitted_at_minutes,
+            completed_at_minutes=job.completed_at_minutes,
             value_source=source,
             value_source_revision=None,
         )

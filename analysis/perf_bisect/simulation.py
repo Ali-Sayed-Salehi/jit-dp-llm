@@ -87,7 +87,6 @@ class OracleSpec:
         signature_info: SignatureInfoIndex,
         oracle_metrics: OracleMetrics,
         workers: int,
-        test_duration_minutes: float,
         random_seed: int | None,
     ) -> TestOracle:
         """Construct the concrete oracle for one independent regression run."""
@@ -95,10 +94,7 @@ class OracleSpec:
         if self.name == SummaryComparison.name:
             return SummaryComparison(
                 signature_info=signature_info,
-                executor=TestExecutor(
-                    workers=workers,
-                    test_duration_minutes=test_duration_minutes,
-                ),
+                executor=TestExecutor(workers=workers),
                 oracle_accuracy=oracle_metrics.summary_oracle_accuracy,
                 random_seed=random_seed,
             )
@@ -150,13 +146,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "backfill_retrigger_count_min": args.backfill_retrigger_count_min,
             "backfill_retrigger_count_max": args.backfill_retrigger_count_max,
             "objectives": [
-                {"metric": "mean_trtc_minutes", "direction": "minimize"},
+                {"metric": "mean_trtc_hours", "direction": "minimize"},
                 {"metric": "mean_test_runs", "direction": "minimize"},
                 {"metric": "success_rate_percent", "direction": "maximize"},
             ],
             "selection": (
                 "highest success_rate_percent on the Pareto frontier; ties "
-                "minimize mean_test_runs, then mean_trtc_minutes"
+                "minimize mean_test_runs, then mean_trtc_hours"
             ),
         }
         combo_parameters, combo_optuna = optimize_parameters_on_eval(
@@ -167,7 +163,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             oracle_names=args.oracles,
             localizer_names=args.localizers,
             workers=args.workers,
-            test_duration_minutes=args.test_duration_minutes,
             default_parameters=default_parameters,
             backfill_retrigger_count_min=args.backfill_retrigger_count_min,
             backfill_retrigger_count_max=args.backfill_retrigger_count_max,
@@ -190,7 +185,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             oracle_names=args.oracles,
             localizer_names=args.localizers,
             workers=args.workers,
-            test_duration_minutes=args.test_duration_minutes,
             default_parameters=default_parameters,
             combo_parameters=combo_parameters,
             combo_optuna=combo_optuna,
@@ -265,12 +259,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of simulated test executor workers.",
-    )
-    parser.add_argument(
-        "--test-duration-minutes",
-        type=float,
-        default=1.0,
-        help="Simulated duration of one performance test run.",
     )
     parser.add_argument(
         "--oracles",
@@ -386,7 +374,6 @@ def run_dataset(
     oracle_names: Sequence[str],
     localizer_names: Sequence[str],
     workers: int,
-    test_duration_minutes: float,
     default_parameters: SimulationParameters,
     combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
     combo_optuna: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
@@ -414,7 +401,6 @@ def run_dataset(
                 revision_perf=revision_perf,
                 oracle_metrics=oracle_metrics,
                 workers=workers,
-                test_duration_minutes=test_duration_minutes,
                 parameters=parameters,
                 random_seed=random_seed,
             )
@@ -454,7 +440,7 @@ def run_dataset(
         },
         "settings": {
             "workers": workers,
-            "test_duration_minutes": test_duration_minutes,
+            "job_duration_source": "per-signature job_duration minutes",
             "default_parameters": default_parameters.to_json(),
             "backfill_retrigger_count": default_parameters.backfill_retrigger_count,
             "random_seed": random_seed,
@@ -478,7 +464,6 @@ def run_combo(
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
     workers: int,
-    test_duration_minutes: float,
     parameters: SimulationParameters,
     random_seed: int | None,
 ) -> tuple[list[Any], dict[str, Any]]:
@@ -498,7 +483,6 @@ def run_combo(
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
             workers=workers,
-            test_duration_minutes=test_duration_minutes,
             random_seed=random_seed,
         )
         for regression_index, regression in enumerate(regressions)
@@ -530,7 +514,6 @@ def optimize_parameters_on_eval(
     oracle_names: Sequence[str],
     localizer_names: Sequence[str],
     workers: int,
-    test_duration_minutes: float,
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
     backfill_retrigger_count_max: int,
@@ -554,7 +537,6 @@ def optimize_parameters_on_eval(
                 revision_perf=revision_perf,
                 oracle_metrics=oracle_metrics,
                 workers=workers,
-                test_duration_minutes=test_duration_minutes,
                 default_parameters=default_parameters,
                 backfill_retrigger_count_min=backfill_retrigger_count_min,
                 backfill_retrigger_count_max=backfill_retrigger_count_max,
@@ -581,7 +563,6 @@ def optimize_combo_on_eval(
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
     workers: int,
-    test_duration_minutes: float,
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
     backfill_retrigger_count_max: int,
@@ -634,7 +615,6 @@ def optimize_combo_on_eval(
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
             workers=workers,
-            test_duration_minutes=test_duration_minutes,
             parameters=parameters,
             random_seed=random_seed,
         )
@@ -657,13 +637,13 @@ def optimize_combo_on_eval(
         "sampler": sampler.__class__.__name__,
         "directions": ["minimize", "minimize", "maximize"],
         "objectives": [
-            "mean_trtc_minutes",
+            "mean_trtc_hours",
             "mean_test_runs",
             "success_rate_percent",
         ],
         "selection": (
             "highest success_rate_percent on the Pareto frontier; ties minimize "
-            "mean_test_runs, then mean_trtc_minutes"
+            "mean_test_runs, then mean_trtc_hours"
         ),
         "pareto_front_trial_count": len(study.best_trials),
         "selected_trial_number": int(selected_trial.number),
@@ -714,7 +694,7 @@ def objective_values(metrics: Mapping[str, Any]) -> tuple[float, float, float]:
     """Return Optuna objective values from aggregate simulation metrics."""
 
     return (
-        finite_objective_value(metrics.get("mean_trtc_minutes")),
+        finite_objective_value(metrics.get("mean_trtc_hours")),
         finite_objective_value(metrics.get("mean_test_runs")),
         float(metrics.get("success_rate_percent") or 0.0),
     )
@@ -760,7 +740,7 @@ def objective_values_to_json(values: Sequence[float] | None) -> dict[str, float]
     if values is None:
         return None
     return {
-        "mean_trtc_minutes": float(values[0]),
+        "mean_trtc_hours": float(values[0]),
         "mean_test_runs": float(values[1]),
         "success_rate_percent": float(values[2]),
     }
@@ -788,7 +768,6 @@ def run_one_regression(
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
     workers: int,
-    test_duration_minutes: float,
     random_seed: int | None,
 ):
     """Run one regression with a fresh oracle and test executor."""
@@ -810,7 +789,6 @@ def run_one_regression(
         signature_info=signature_info,
         oracle_metrics=metrics,
         workers=workers,
-        test_duration_minutes=test_duration_minutes,
         random_seed=regression_seed,
     )
     return localizer.localize(
@@ -826,9 +804,9 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
     total = len(results)
     successes = [result for result in results if result.success]
     trtc_values = [
-        result.trtc_minutes
+        result.trtc_hours
         for result in successes
-        if result.trtc_minutes is not None
+        if result.trtc_hours is not None
     ]
     test_runs = [result.test_runs for result in results]
     undefined_causes = Counter(
@@ -845,8 +823,8 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         "success_rate_percent": (
             round(len(successes) / total * 100.0, 1) if total else 0.0
         ),
-        "mean_trtc_minutes": round(mean(trtc_values), 1) if trtc_values else None,
-        "max_trtc_minutes": round(max(trtc_values), 1) if trtc_values else None,
+        "mean_trtc_hours": round(mean(trtc_values), 2) if trtc_values else None,
+        "max_trtc_hours": round(max(trtc_values), 2) if trtc_values else None,
         "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }
@@ -956,14 +934,26 @@ def require_regression_id(
 
 
 def load_signature_info(path: Path) -> SignatureInfoIndex:
-    """Load per-signature replicate counts."""
+    """Load per-signature job durations."""
 
     infos = []
     for raw in load_jsonl(path):
+        raw_job_duration = raw.get("job_duration")
+        if raw_job_duration is None:
+            raise ValueError(
+                "missing job_duration for "
+                f"signature_id={raw.get('signature_id')!r}"
+            )
+        job_duration_minutes = float(raw_job_duration)
+        if job_duration_minutes <= 0.0:
+            raise ValueError(
+                "job_duration must be positive for "
+                f"signature_id={raw.get('signature_id')!r}: {raw_job_duration!r}"
+            )
         infos.append(
             SignatureInfo(
                 signature_id=int(raw["signature_id"]),
-                replicate_count=int(raw["replicate_counts"]),
+                job_duration_minutes=job_duration_minutes,
                 platform=raw.get("platform"),
             )
         )

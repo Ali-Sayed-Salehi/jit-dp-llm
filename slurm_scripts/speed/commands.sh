@@ -139,7 +139,6 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
---test-duration-minutes 1.0 \
 --oracles SummaryComparison \
 --localizers Backfill \
 --random-seed 42 \

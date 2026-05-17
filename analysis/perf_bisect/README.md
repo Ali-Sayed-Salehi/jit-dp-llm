@@ -80,15 +80,16 @@ For one regression:
 
 ## Test Executor
 
-The executor models worker queueing. The default is one worker and one minute per
-test run. If a signature has `replicate_counts = 25`, one oracle probe submits 25
-test runs.
+The executor models worker queueing. The default is one worker. Each oracle
+probe submits one test job for the revision being tested, and that job's runtime
+comes from the failing signature's `job_duration` value in
+`datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl`.
 
-Backfill submits the first probe batch for all candidate revisions at the same
-simulation timestamp. With one worker, those tests still complete sequentially
+Backfill submits the first probe jobs for all candidate revisions at the same
+simulation timestamp. With one worker, those jobs still complete sequentially
 because the worker queue is shared. Increasing `--workers` reduces queueing time.
-If Backfill retriggers a non-monotonic interval, that retrigger is submitted
-after the earlier batch has completed.
+If Backfill retriggers a non-monotonic interval, those jobs are submitted after
+the earlier jobs have completed.
 
 ## SummaryComparison Oracle
 
@@ -106,8 +107,7 @@ determines the revision's true side of the known culprit:
 With probability `summary_oracle_accuracy`, the oracle returns the true side.
 Otherwise it flips the verdict. Because decisions are sampled from this noisy
 oracle instead of from finite measurement lists, repeated probes never run out
-of available draws. Each probe still uses the signature's `replicate_counts` as
-the simulated test cost.
+of available draws. Replicate counts are not used by the simulation.
 
 Noisy verdict randomness is seeded by `--random-seed`, which defaults to `0`.
 Each regression gets a derived seed based on `regression_id - 1`, so default
@@ -140,13 +140,13 @@ of human retriggers without turning noisy results into an unbounded retry loop.
 
 Each summary output reports:
 
-- `mean_trtc_minutes`: mean time from regression to culprit for successful
+- `mean_trtc_hours`: mean time from regression to culprit for successful
   localizations only.
-- `max_trtc_minutes`: max time from regression to culprit for successful
+- `max_trtc_hours`: max time from regression to culprit for successful
   localizations only.
-- `mean_test_runs`: mean number of test runs across all regressions, including
-  undefined localizations.
-- `max_test_runs`: max number of test runs across all regressions.
+- `mean_test_runs`: mean number of submitted test jobs across all regressions,
+  including undefined localizations.
+- `max_test_runs`: max number of submitted test jobs across all regressions.
 - `success_rate_percent`: percentage of regressions where the exact culprit was
   found.
 - `successful_localizations`: count of exact culprit matches.
@@ -225,10 +225,10 @@ python analysis/perf_bisect/simulation.py --dataset eval
 python analysis/perf_bisect/simulation.py --dataset final_test
 ```
 
-Change executor capacity or test duration:
+Change executor capacity:
 
 ```bash
-python analysis/perf_bisect/simulation.py --workers 4 --test-duration-minutes 2
+python analysis/perf_bisect/simulation.py --workers 4
 ```
 
 Change the number of Backfill retriggers:

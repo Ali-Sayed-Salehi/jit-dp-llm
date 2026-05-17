@@ -14,7 +14,6 @@ cd "${REPO_ROOT}"
   --revision-data datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
   --output-dir analysis/perf_bisect/results \
   --workers 1 \
-  --test-duration-minutes 1.0 \
   --oracles SummaryComparison \
   --localizers Backfill \
   --backfill-retrigger-count 2 \

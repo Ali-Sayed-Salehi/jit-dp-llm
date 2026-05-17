@@ -26,7 +26,7 @@ class LocalizationResult:
     found_revision: str | None
     success: bool
     undefined_reason: str | None
-    trtc_minutes: float | None
+    trtc_hours: float | None
     test_runs: int
     oracle_queries: int
     path_length: int
@@ -54,7 +54,11 @@ class LocalizationResult:
             "found_revision": self.found_revision,
             "success": self.success,
             "undefined_reason": self.undefined_reason,
-            "trtc_minutes": self.trtc_minutes,
+            "trtc_hours": (
+                round(self.trtc_hours, 4)
+                if self.trtc_hours is not None
+                else None
+            ),
             "test_runs": self.test_runs,
             "oracle_queries": self.oracle_queries,
             "path_length": self.path_length,
@@ -117,7 +121,6 @@ class LocalizationResult:
             ),
             "attempt": decision.attempt,
             "draw_index": decision.draw_index,
-            "replicate_count": decision.replicate_count,
             "measurement_count": decision.measurement_count,
             "test_runs": decision.test_runs,
             "submitted_at_minutes": decision.submitted_at_minutes,
@@ -186,7 +189,7 @@ class Backfill(CulpritLocalizer):
                 found_revision=None,
                 success=False,
                 undefined_reason="no_revision_path",
-                trtc_minutes=None,
+                trtc_hours=None,
                 test_runs=getattr(oracle, "executor", None).test_runs
                 if hasattr(getattr(oracle, "executor", None), "test_runs")
                 else 0,
@@ -241,7 +244,11 @@ class Backfill(CulpritLocalizer):
 
         success = found_revision is not None and found_revision == culprit_revision
         executor = getattr(oracle, "executor", None)
-        trtc_minutes = executor.now_minutes if success and executor is not None else None
+        trtc_hours = (
+            executor.now_minutes / 60.0
+            if success and executor is not None
+            else None
+        )
 
         return LocalizationResult(
             localizer=self.name,
@@ -255,7 +262,7 @@ class Backfill(CulpritLocalizer):
             found_revision=found_revision,
             success=success,
             undefined_reason=None if success else undefined_reason,
-            trtc_minutes=trtc_minutes,
+            trtc_hours=trtc_hours,
             test_runs=(
                 executor.test_runs
                 if executor is not None
