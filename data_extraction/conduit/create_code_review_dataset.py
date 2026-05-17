@@ -20,9 +20,10 @@ repository at:
 
     data_extraction/mercurial/repos/autoland
 
-The autoland repository is cloned if missing and updated with `hg pull -u` if it
-already exists. Use `--debug` to process only 10 eval rows and 10 final-test rows
-from per_commit_drev_transactions.jsonl.
+The autoland repository is cloned if missing and updated with `hg pull -u URL`
+if it already exists. Pulls are retried to tolerate intermittent Mercurial HTTP
+failures. Use `--debug` to process only 10 eval rows and 10 final-test rows from
+per_commit_drev_transactions.jsonl.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +47,9 @@ DEFAULT_OUTPUT_JSONL = DATASET_DIR / "drev_review_data.jsonl"
 DEFAULT_AUTOLAND_REPO = (
     REPO_ROOT / "data_extraction" / "mercurial" / "repos" / "autoland"
 )
-DEFAULT_AUTOLAND_URL = "https://hg.mozilla.org/integration/autoland"
+DEFAULT_AUTOLAND_URL = "https://hg-edge.mozilla.org/integration/autoland"
+DEFAULT_HG_PULL_MAX_ATTEMPTS = 5
+DEFAULT_HG_PULL_RETRY_BASE_SLEEP_SECONDS = 5.0
 DEBUG_DATASET_SPLITS = ("eval", "final test")
 
 
@@ -84,7 +88,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--autoland-url",
         default=DEFAULT_AUTOLAND_URL,
-        help="Mercurial URL used when cloning autoland.",
+        help="Mercurial URL used when cloning or pulling autoland.",
     )
     parser.add_argument(
         "--debug",
@@ -114,7 +118,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "exist. This is intended for local smoke tests."
         ),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--hg-pull-max-attempts",
+        type=int,
+        default=DEFAULT_HG_PULL_MAX_ATTEMPTS,
+        help="Maximum attempts for `hg pull -u` before failing.",
+    )
+    parser.add_argument(
+        "--hg-pull-retry-base-sleep",
+        type=float,
+        default=DEFAULT_HG_PULL_RETRY_BASE_SLEEP_SECONDS,
+        help="Base sleep seconds for retrying failed `hg pull -u` commands.",
+    )
+    args = parser.parse_args(argv)
+    if args.hg_pull_max_attempts < 1:
+        parser.error("--hg-pull-max-attempts must be at least 1")
+    if args.hg_pull_retry_base_sleep < 0:
+        parser.error("--hg-pull-retry-base-sleep must be non-negative")
+    return args
 
 
 def iter_jsonl(path: Path) -> Iterator[JsonlRecord]:
@@ -213,11 +234,52 @@ def describe_debug_split_counts(rows: list[InputRow]) -> str:
     return ", ".join(f"{counts[split]} {split}" for split in DEBUG_DATASET_SPLITS)
 
 
+def run_hg_pull_with_retries(
+    *,
+    repo_path: Path,
+    repo_url: str,
+    max_attempts: int,
+    retry_base_sleep_seconds: float,
+) -> None:
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    if retry_base_sleep_seconds < 0:
+        raise ValueError("retry_base_sleep_seconds must be non-negative")
+
+    command = ["hg", "pull", "-u", repo_url]
+    last_error: subprocess.CalledProcessError | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            subprocess.run(command, cwd=repo_path, check=True)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            if attempt == max_attempts:
+                break
+
+            wait_seconds = retry_base_sleep_seconds * attempt
+            print(
+                f"`{' '.join(command)}` failed with exit code {exc.returncode} "
+                f"(attempt {attempt}/{max_attempts}); retrying in "
+                f"{wait_seconds:g}s.",
+                file=sys.stderr,
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+
+    raise RuntimeError(
+        f"`{' '.join(command)}` failed in {repo_path} after {max_attempts} attempts."
+    ) from last_error
+
+
 def ensure_autoland_repo(
     *,
     repo_path: Path,
     repo_url: str,
     skip_update: bool,
+    hg_pull_max_attempts: int,
+    hg_pull_retry_base_sleep_seconds: float,
 ) -> None:
     if shutil.which("hg") is None:
         raise RuntimeError("Mercurial CLI `hg` was not found on PATH")
@@ -232,7 +294,12 @@ def ensure_autoland_repo(
 
     if hg_dir.is_dir():
         print(f"Updating autoland repository at {repo_path}", file=sys.stderr)
-        subprocess.run(["hg", "pull", "-u"], cwd=repo_path, check=True)
+        run_hg_pull_with_retries(
+            repo_path=repo_path,
+            repo_url=repo_url,
+            max_attempts=hg_pull_max_attempts,
+            retry_base_sleep_seconds=hg_pull_retry_base_sleep_seconds,
+        )
         return
 
     if repo_path.exists():
@@ -473,6 +540,8 @@ def main(argv: list[str] | None = None) -> None:
         repo_path=autoland_repo,
         repo_url=args.autoland_url,
         skip_update=args.skip_repo_update,
+        hg_pull_max_attempts=args.hg_pull_max_attempts,
+        hg_pull_retry_base_sleep_seconds=args.hg_pull_retry_base_sleep,
     )
 
     stats = write_dataset(
