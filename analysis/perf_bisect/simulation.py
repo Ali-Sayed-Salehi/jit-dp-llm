@@ -53,6 +53,42 @@ DEFAULT_BACKFILL_RETRIGGER_COUNT_MAX = 5
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MIN = 0
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MAX = 5
 OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
+TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
+    "Backfill": ("backfill_retrigger_count",),
+    "StandardMidpointBisection": ("midpoint_retrigger_count",),
+}
+BEST_COMBO_METRIC_SPECS = (
+    {
+        "field": "best_combo_by_success_rate",
+        "metric": "success_rate_percent",
+        "direction": "maximize",
+        "vote_weight": 4,
+    },
+    {
+        "field": "best_combo_by_mean_trtc",
+        "metric": "mean_trtc_hours",
+        "direction": "minimize",
+        "vote_weight": 1,
+    },
+    {
+        "field": "best_combo_by_mean_test_runs",
+        "metric": "mean_test_runs",
+        "direction": "minimize",
+        "vote_weight": 1,
+    },
+    {
+        "field": "best_combo_by_max_trtc",
+        "metric": "max_trtc_hours",
+        "direction": "minimize",
+        "vote_weight": 1,
+    },
+    {
+        "field": "best_combo_by_max_test_runs",
+        "metric": "max_test_runs",
+        "direction": "minimize",
+        "vote_weight": 1,
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -140,7 +176,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         regressions_by_dataset[dataset_name] = load_jsonl(regressions_path)
 
     combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
-    combo_optuna: dict[tuple[str, str], dict[str, Any]] | None = None
     optimization_settings = None
     if args.optuna_trials > 0:
         optimization_settings = {
@@ -162,7 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "minimize mean_test_runs, then mean_trtc_hours"
             ),
         }
-        combo_parameters, combo_optuna = optimize_parameters_on_eval(
+        combo_parameters = optimize_parameters_on_eval(
             regressions=regressions_by_dataset["eval"],
             signature_info=signature_info,
             revision_perf=revision_perf,
@@ -196,7 +231,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             workers=args.workers,
             default_parameters=default_parameters,
             combo_parameters=combo_parameters,
-            combo_optuna=combo_optuna,
             optimization_settings=optimization_settings,
             random_seed=args.random_seed,
         )
@@ -417,7 +451,6 @@ def run_dataset(
     workers: int,
     default_parameters: SimulationParameters,
     combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
-    combo_optuna: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
     optimization_settings: Mapping[str, Any] | None = None,
     random_seed: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -451,8 +484,13 @@ def run_dataset(
                 "parameters": parameters.to_json(),
                 "metrics": metrics,
             }
-            if combo_optuna is not None and combo_key in combo_optuna:
-                summary_run["optuna"] = dict(combo_optuna[combo_key])
+            if combo_parameters is not None and combo_key in combo_parameters:
+                summary_run["optuna_optimized_parameters"] = (
+                    optimized_parameter_values(
+                        localizer_name=localizer_name,
+                        parameters=parameters,
+                    )
+                )
             summary_runs.append(summary_run)
             print_undefined_localizations(
                 dataset_name=dataset_name,
@@ -466,8 +504,13 @@ def run_dataset(
                 "parameters": parameters.to_json(),
                 "results": [result.to_json() for result in results],
             }
-            if combo_optuna is not None and combo_key in combo_optuna:
-                detail_run["optuna"] = dict(combo_optuna[combo_key])
+            if combo_parameters is not None and combo_key in combo_parameters:
+                detail_run["optuna_optimized_parameters"] = (
+                    optimized_parameter_values(
+                        localizer_name=localizer_name,
+                        parameters=parameters,
+                    )
+                )
             detail_runs.append(detail_run)
 
     base_output = {
@@ -491,10 +534,192 @@ def run_dataset(
     }
     if optimization_settings is not None:
         base_output["settings"]["optimization"] = dict(optimization_settings)
+    best_combo_fields = compute_best_combo_fields(summary_runs)
     return (
-        {**base_output, "runs": summary_runs},
-        {**base_output, "runs": detail_runs},
+        {**base_output, **best_combo_fields, "runs": summary_runs},
+        {**base_output, **best_combo_fields, "runs": detail_runs},
     )
+
+
+def optimized_parameter_values(
+    *,
+    localizer_name: str,
+    parameters: SimulationParameters,
+) -> dict[str, Any]:
+    """Return only the Optuna-tunable parameter values for one localizer."""
+
+    serialized_parameters = parameters.to_json()
+    return {
+        parameter_name: serialized_parameters[parameter_name]
+        for parameter_name in TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER.get(
+            localizer_name,
+            (),
+        )
+    }
+
+
+def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Compute top-level best-combo selections from aggregate run metrics."""
+
+    if not runs:
+        return {}
+
+    best_fields: dict[str, Any] = {
+        "best_combo_vote_weights": {
+            str(spec["metric"]): int(spec["vote_weight"])
+            for spec in BEST_COMBO_METRIC_SPECS
+        },
+    }
+    votes_by_combo: Counter[tuple[str, str]] = Counter()
+    metric_votes_by_combo: dict[tuple[str, str], dict[str, int]] = {}
+
+    for spec in BEST_COMBO_METRIC_SPECS:
+        metric = str(spec["metric"])
+        best_run = best_run_for_metric(
+            runs,
+            metric=metric,
+            direction=str(spec["direction"]),
+        )
+        vote_weight = int(spec["vote_weight"])
+        combo_key = run_combo_key(best_run)
+        votes_by_combo[combo_key] += vote_weight
+        metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
+        best_fields[str(spec["field"])] = combo_selection_to_json(
+            best_run,
+            metric=metric,
+            vote_weight=vote_weight,
+        )
+
+    best_overall = min(
+        runs,
+        key=lambda run: (
+            -votes_by_combo[run_combo_key(run)],
+            *run_preference_sort_key(run),
+        ),
+    )
+    best_overall_key = run_combo_key(best_overall)
+    best_fields["best_combo_overall"] = combo_selection_to_json(
+        best_overall,
+        vote_score=int(votes_by_combo[best_overall_key]),
+        metric_votes=metric_votes_by_combo.get(best_overall_key, {}),
+    )
+    return best_fields
+
+
+def best_run_for_metric(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    metric: str,
+    direction: str,
+) -> Mapping[str, Any]:
+    """Return the best run for one metric with deterministic tie-breaking."""
+
+    return min(
+        runs,
+        key=lambda run: (
+            primary_metric_sort_value(run, metric=metric, direction=direction),
+            *run_preference_sort_key(run),
+        ),
+    )
+
+
+def primary_metric_sort_value(
+    run: Mapping[str, Any],
+    *,
+    metric: str,
+    direction: str,
+) -> float:
+    """Return a sortable value where lower means better for the target metric."""
+
+    value = numeric_metric_value(run, metric)
+    if value is None:
+        return math.inf
+    if direction == "maximize":
+        return -value
+    if direction == "minimize":
+        return value
+    raise ValueError(f"unknown metric direction: {direction!r}")
+
+
+def run_preference_sort_key(run: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Tie-break combo selection by success, cost metrics, then stable names."""
+
+    return (
+        primary_metric_sort_value(
+            run,
+            metric="success_rate_percent",
+            direction="maximize",
+        ),
+        primary_metric_sort_value(
+            run,
+            metric="mean_trtc_hours",
+            direction="minimize",
+        ),
+        primary_metric_sort_value(
+            run,
+            metric="mean_test_runs",
+            direction="minimize",
+        ),
+        primary_metric_sort_value(
+            run,
+            metric="max_trtc_hours",
+            direction="minimize",
+        ),
+        primary_metric_sort_value(
+            run,
+            metric="max_test_runs",
+            direction="minimize",
+        ),
+        str(run.get("localizer", "")),
+        str(run.get("test_oracle", "")),
+        json.dumps(run.get("parameters", {}), sort_keys=True),
+    )
+
+
+def numeric_metric_value(run: Mapping[str, Any], metric: str) -> float | None:
+    """Read a finite numeric metric value from a serialized run block."""
+
+    raw_value = run.get("metrics", {}).get(metric)
+    if raw_value is None:
+        return None
+    value = float(raw_value)
+    return value if math.isfinite(value) else None
+
+
+def run_combo_key(run: Mapping[str, Any]) -> tuple[str, str]:
+    """Return the stable identity for one localizer/oracle combo block."""
+
+    return (str(run.get("localizer", "")), str(run.get("test_oracle", "")))
+
+
+def combo_selection_to_json(
+    run: Mapping[str, Any],
+    *,
+    metric: str | None = None,
+    vote_weight: int | None = None,
+    vote_score: int | None = None,
+    metric_votes: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    """Serialize one selected combo without copying large per-regression details."""
+
+    output = {
+        "localizer": run.get("localizer"),
+        "test_oracle": run.get("test_oracle"),
+        "parameters": run.get("parameters"),
+        "metrics": run.get("metrics"),
+    }
+    if "optuna_optimized_parameters" in run:
+        output["optuna_optimized_parameters"] = run["optuna_optimized_parameters"]
+    if metric is not None:
+        output["metric"] = metric
+        output["value"] = run.get("metrics", {}).get(metric)
+    if vote_weight is not None:
+        output["vote_weight"] = int(vote_weight)
+    if vote_score is not None:
+        output["vote_score"] = int(vote_score)
+    if metric_votes is not None:
+        output["metric_votes"] = dict(sorted(metric_votes.items()))
+    return output
 
 
 def run_combo(
@@ -568,16 +793,15 @@ def optimize_parameters_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
-) -> tuple[dict[tuple[str, str], SimulationParameters], dict[tuple[str, str], dict[str, Any]]]:
+) -> dict[tuple[str, str], SimulationParameters]:
     """Tune algorithm parameters on the eval split for every selected combo."""
 
     combo_parameters: dict[tuple[str, str], SimulationParameters] = {}
-    combo_optuna: dict[tuple[str, str], dict[str, Any]] = {}
 
     for localizer_name in localizer_names:
         for oracle_name in oracle_names:
             combo_key = (localizer_name, oracle_name)
-            parameters, optuna_meta = optimize_combo_on_eval(
+            parameters = optimize_combo_on_eval(
                 regressions=regressions,
                 localizer_name=localizer_name,
                 oracle_name=oracle_name,
@@ -595,13 +819,12 @@ def optimize_parameters_on_eval(
                 random_seed=random_seed,
             )
             combo_parameters[combo_key] = parameters
-            combo_optuna[combo_key] = optuna_meta
             print(
                 "optuna selected "
                 f"{localizer_name}/{oracle_name}: {parameters.to_json()}"
             )
 
-    return combo_parameters, combo_optuna
+    return combo_parameters
 
 
 def optimize_combo_on_eval(
@@ -621,24 +844,21 @@ def optimize_combo_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
-) -> tuple[SimulationParameters, dict[str, Any]]:
+) -> SimulationParameters:
     """Run one multi-objective Optuna study on eval for one localizer/oracle pair."""
 
-    if not has_tunable_parameters(localizer_name=localizer_name, oracle_name=oracle_name):
-        return (
-            default_parameters,
-            {
-                "skipped": True,
-                "reason": "no_tunable_parameters",
-                "n_trials": 0,
-                "seed": optuna_seed,
-            },
-        )
+    if not has_tunable_parameters(
+        localizer_name=localizer_name,
+        oracle_name=oracle_name,
+    ):
+        return default_parameters
 
     try:
         import optuna
     except ImportError as exc:
-        raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
+        raise RuntimeError(
+            "Optuna is required. Install with `pip install optuna`."
+        ) from exc
 
     try:
         sampler = optuna.samplers.NSGAIISampler(seed=int(optuna_seed))
@@ -684,40 +904,14 @@ def optimize_combo_on_eval(
 
     selected_trial = select_pareto_trial(study.best_trials)
     selected_parameters = parameters_from_trial(selected_trial)
-    optuna_meta = {
-        "skipped": False,
-        "n_trials": int(optuna_trials),
-        "seed": int(optuna_seed),
-        "sampler": sampler.__class__.__name__,
-        "directions": ["minimize", "minimize", "maximize"],
-        "objectives": [
-            "mean_trtc_hours",
-            "mean_test_runs",
-            "success_rate_percent",
-        ],
-        "selection": (
-            "highest success_rate_percent on the Pareto frontier; ties minimize "
-            "mean_test_runs, then mean_trtc_hours"
-        ),
-        "pareto_front_trial_count": len(study.best_trials),
-        "selected_trial_number": int(selected_trial.number),
-        "selected_values": objective_values_to_json(selected_trial.values),
-        "selected_metrics": selected_trial.user_attrs["metrics"],
-        "selected_parameters": selected_parameters.to_json(),
-        "best_trial_params_raw": dict(selected_trial.params),
-        "pareto_front": [
-            trial_to_pareto_json(trial)
-            for trial in sorted(study.best_trials, key=lambda item: item.number)
-        ],
-    }
-    return selected_parameters, optuna_meta
+    return selected_parameters
 
 
 def has_tunable_parameters(*, localizer_name: str, oracle_name: str) -> bool:
     """Return whether the selected combo currently exposes Optuna parameters."""
 
     del oracle_name
-    return localizer_name in {"Backfill", "StandardMidpointBisection"}
+    return localizer_name in TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER
 
 
 def suggest_parameters(
@@ -797,30 +991,6 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
         backfill_retrigger_count=int(raw_parameters["backfill_retrigger_count"]),
         midpoint_retrigger_count=int(raw_parameters["midpoint_retrigger_count"]),
     )
-
-
-def objective_values_to_json(values: Sequence[float] | None) -> dict[str, float] | None:
-    """Serialize Optuna objective values with metric names."""
-
-    if values is None:
-        return None
-    return {
-        "mean_trtc_hours": float(values[0]),
-        "mean_test_runs": float(values[1]),
-        "success_rate_percent": float(values[2]),
-    }
-
-
-def trial_to_pareto_json(trial: Any) -> dict[str, Any]:
-    """Serialize one Pareto-front Optuna trial."""
-
-    return {
-        "trial_number": int(trial.number),
-        "values": objective_values_to_json(trial.values),
-        "params": dict(trial.params),
-        "parameters": trial.user_attrs.get("parameters"),
-        "metrics": trial.user_attrs.get("metrics"),
-    }
 
 
 def run_one_regression(
