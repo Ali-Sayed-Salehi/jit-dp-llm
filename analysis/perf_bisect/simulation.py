@@ -522,7 +522,6 @@ def run_dataset(
             summary_run = {
                 "localizer": localizer_name,
                 "test_oracle": oracle_name,
-                "parameters": parameters.to_json(),
                 "metrics": metrics,
             }
             if combo_parameters is not None and combo_key in combo_parameters:
@@ -542,7 +541,6 @@ def run_dataset(
             detail_run = {
                 "localizer": localizer_name,
                 "test_oracle": oracle_name,
-                "parameters": parameters.to_json(),
                 "results": [result.to_json() for result in results],
             }
             if combo_parameters is not None and combo_key in combo_parameters:
@@ -626,11 +624,7 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
         combo_key = run_combo_key(best_run)
         votes_by_combo[combo_key] += vote_weight
         metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
-        best_fields[str(spec["field"])] = combo_selection_to_json(
-            best_run,
-            metric=metric,
-            vote_weight=vote_weight,
-        )
+        best_fields[str(spec["field"])] = combo_selection_to_json(best_run)
 
     best_overall = min(
         runs,
@@ -642,7 +636,6 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
     best_overall_key = run_combo_key(best_overall)
     best_fields["best_combo_overall"] = combo_selection_to_json(
         best_overall,
-        vote_score=int(votes_by_combo[best_overall_key]),
         metric_votes=metric_votes_by_combo.get(best_overall_key, {}),
     )
     return best_fields
@@ -737,28 +730,14 @@ def run_combo_key(run: Mapping[str, Any]) -> tuple[str, str]:
 def combo_selection_to_json(
     run: Mapping[str, Any],
     *,
-    metric: str | None = None,
-    vote_weight: int | None = None,
-    vote_score: int | None = None,
     metric_votes: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Serialize one selected combo without copying large per-regression details."""
+    """Serialize one selected combo as a compact localizer/oracle identifier."""
 
     output = {
         "localizer": run.get("localizer"),
         "test_oracle": run.get("test_oracle"),
-        "parameters": run.get("parameters"),
-        "metrics": run.get("metrics"),
     }
-    if "optuna_optimized_parameters" in run:
-        output["optuna_optimized_parameters"] = run["optuna_optimized_parameters"]
-    if metric is not None:
-        output["metric"] = metric
-        output["value"] = run.get("metrics", {}).get(metric)
-    if vote_weight is not None:
-        output["vote_weight"] = int(vote_weight)
-    if vote_score is not None:
-        output["vote_score"] = int(vote_score)
     if metric_votes is not None:
         output["metric_votes"] = dict(sorted(metric_votes.items()))
     return output
