@@ -50,6 +50,8 @@ DATASETS = {
 }
 DEFAULT_BACKFILL_RETRIGGER_COUNT_MIN = 0
 DEFAULT_BACKFILL_RETRIGGER_COUNT_MAX = 5
+DEFAULT_MIDPOINT_RETRIGGER_COUNT_MIN = 0
+DEFAULT_MIDPOINT_RETRIGGER_COUNT_MAX = 5
 OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
 
 
@@ -58,12 +60,14 @@ class SimulationParameters:
     """Tunable algorithm parameters used by one simulation run."""
 
     backfill_retrigger_count: int
+    midpoint_retrigger_count: int
 
     def to_json(self) -> dict[str, Any]:
         """Serialize parameter values into JSON-compatible primitives."""
 
         return {
             "backfill_retrigger_count": self.backfill_retrigger_count,
+            "midpoint_retrigger_count": self.midpoint_retrigger_count,
         }
 
 
@@ -113,6 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
     default_parameters = SimulationParameters(
         backfill_retrigger_count=args.backfill_retrigger_count,
+        midpoint_retrigger_count=args.midpoint_retrigger_count,
     )
 
     signature_info = load_signature_info(args.signature_info)
@@ -145,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "optuna_seed": args.optuna_seed,
             "backfill_retrigger_count_min": args.backfill_retrigger_count_min,
             "backfill_retrigger_count_max": args.backfill_retrigger_count_max,
+            "midpoint_retrigger_count_min": args.midpoint_retrigger_count_min,
+            "midpoint_retrigger_count_max": args.midpoint_retrigger_count_max,
             "objectives": [
                 {"metric": "mean_trtc_hours", "direction": "minimize"},
                 {"metric": "mean_test_runs", "direction": "minimize"},
@@ -166,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             default_parameters=default_parameters,
             backfill_retrigger_count_min=args.backfill_retrigger_count_min,
             backfill_retrigger_count_max=args.backfill_retrigger_count_max,
+            midpoint_retrigger_count_min=args.midpoint_retrigger_count_min,
+            midpoint_retrigger_count_max=args.midpoint_retrigger_count_max,
             optuna_trials=args.optuna_trials,
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
@@ -287,6 +296,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--midpoint-retrigger-count",
+        type=int,
+        default=0,
+        help=(
+            "Number of additional midpoint decisions to retrigger for "
+            "StandardMidpointBisection before choosing the bisection branch. "
+            "Used directly when Optuna is disabled, and as a fallback default "
+            "for combos without tuned parameters."
+        ),
+    )
+    parser.add_argument(
         "--optuna-trials",
         "--mopt-trials",
         dest="optuna_trials",
@@ -320,6 +340,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum Backfill retrigger count sampled by Optuna.",
     )
     parser.add_argument(
+        "--midpoint-retrigger-count-min",
+        type=int,
+        default=DEFAULT_MIDPOINT_RETRIGGER_COUNT_MIN,
+        help="Minimum StandardMidpointBisection retrigger count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--midpoint-retrigger-count-max",
+        type=int,
+        default=DEFAULT_MIDPOINT_RETRIGGER_COUNT_MAX,
+        help="Maximum StandardMidpointBisection retrigger count sampled by Optuna.",
+    )
+    parser.add_argument(
         "--random-seed",
         type=int,
         default=0,
@@ -328,6 +360,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.backfill_retrigger_count < 0:
         parser.error("--backfill-retrigger-count must be non-negative")
+    if args.midpoint_retrigger_count < 0:
+        parser.error("--midpoint-retrigger-count must be non-negative")
     if args.optuna_trials < 0:
         parser.error("--optuna-trials must be non-negative")
     if args.backfill_retrigger_count_min < 0:
@@ -336,6 +370,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--backfill-retrigger-count-max must be greater than or equal to "
             "--backfill-retrigger-count-min"
+        )
+    if args.midpoint_retrigger_count_min < 0:
+        parser.error("--midpoint-retrigger-count-min must be non-negative")
+    if args.midpoint_retrigger_count_max < args.midpoint_retrigger_count_min:
+        parser.error(
+            "--midpoint-retrigger-count-max must be greater than or equal to "
+            "--midpoint-retrigger-count-min"
         )
     if args.optuna_seed is None:
         args.optuna_seed = args.random_seed
@@ -443,6 +484,7 @@ def run_dataset(
             "job_duration_source": "per-signature job_duration minutes",
             "default_parameters": default_parameters.to_json(),
             "backfill_retrigger_count": default_parameters.backfill_retrigger_count,
+            "midpoint_retrigger_count": default_parameters.midpoint_retrigger_count,
             "random_seed": random_seed,
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
@@ -502,6 +544,10 @@ def build_localizer(
         return localizer_cls(
             backfill_retrigger_count=parameters.backfill_retrigger_count,
         )
+    if localizer_name == "StandardMidpointBisection":
+        return localizer_cls(
+            midpoint_retrigger_count=parameters.midpoint_retrigger_count,
+        )
     return localizer_cls()
 
 
@@ -517,6 +563,8 @@ def optimize_parameters_on_eval(
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
     backfill_retrigger_count_max: int,
+    midpoint_retrigger_count_min: int,
+    midpoint_retrigger_count_max: int,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -540,6 +588,8 @@ def optimize_parameters_on_eval(
                 default_parameters=default_parameters,
                 backfill_retrigger_count_min=backfill_retrigger_count_min,
                 backfill_retrigger_count_max=backfill_retrigger_count_max,
+                midpoint_retrigger_count_min=midpoint_retrigger_count_min,
+                midpoint_retrigger_count_max=midpoint_retrigger_count_max,
                 optuna_trials=optuna_trials,
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
@@ -566,6 +616,8 @@ def optimize_combo_on_eval(
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
     backfill_retrigger_count_max: int,
+    midpoint_retrigger_count_min: int,
+    midpoint_retrigger_count_max: int,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -606,6 +658,8 @@ def optimize_combo_on_eval(
             default_parameters=default_parameters,
             backfill_retrigger_count_min=backfill_retrigger_count_min,
             backfill_retrigger_count_max=backfill_retrigger_count_max,
+            midpoint_retrigger_count_min=midpoint_retrigger_count_min,
+            midpoint_retrigger_count_max=midpoint_retrigger_count_max,
         )
         _, metrics = run_combo(
             regressions=regressions,
@@ -663,7 +717,7 @@ def has_tunable_parameters(*, localizer_name: str, oracle_name: str) -> bool:
     """Return whether the selected combo currently exposes Optuna parameters."""
 
     del oracle_name
-    return localizer_name == "Backfill"
+    return localizer_name in {"Backfill", "StandardMidpointBisection"}
 
 
 def suggest_parameters(
@@ -674,19 +728,29 @@ def suggest_parameters(
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
     backfill_retrigger_count_max: int,
+    midpoint_retrigger_count_min: int,
+    midpoint_retrigger_count_max: int,
 ) -> SimulationParameters:
     """Ask Optuna for one parameter set for the selected algorithm combo."""
 
     del oracle_name
     backfill_retrigger_count = default_parameters.backfill_retrigger_count
+    midpoint_retrigger_count = default_parameters.midpoint_retrigger_count
     if localizer_name == "Backfill":
         backfill_retrigger_count = trial.suggest_int(
             "Backfill_backfill_retrigger_count",
             int(backfill_retrigger_count_min),
             int(backfill_retrigger_count_max),
         )
+    elif localizer_name == "StandardMidpointBisection":
+        midpoint_retrigger_count = trial.suggest_int(
+            "StandardMidpointBisection_midpoint_retrigger_count",
+            int(midpoint_retrigger_count_min),
+            int(midpoint_retrigger_count_max),
+        )
     return SimulationParameters(
         backfill_retrigger_count=int(backfill_retrigger_count),
+        midpoint_retrigger_count=int(midpoint_retrigger_count),
     )
 
 
@@ -731,6 +795,7 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
     raw_parameters = trial.user_attrs["parameters"]
     return SimulationParameters(
         backfill_retrigger_count=int(raw_parameters["backfill_retrigger_count"]),
+        midpoint_retrigger_count=int(raw_parameters["midpoint_retrigger_count"]),
     )
 
 

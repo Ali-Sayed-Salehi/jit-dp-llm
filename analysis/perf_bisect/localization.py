@@ -146,6 +146,26 @@ class CulpritLocalizer:
 
         raise NotImplementedError
 
+    @staticmethod
+    def _signature_id(regression: Mapping[str, Any]) -> int | None:
+        """Extract a signature id from either supported regression schema."""
+
+        if "failing_sig" in regression:
+            return int(regression["failing_sig"]["signature_id"])
+        if "failing_sigs" in regression and regression["failing_sigs"]:
+            signature_id, raw = next(iter(regression["failing_sigs"].items()))
+            return int(raw.get("signature_id", signature_id))
+        return None
+
+    @staticmethod
+    def _regression_id(regression: Mapping[str, Any]) -> int | None:
+        """Extract the stable regression row id when available."""
+
+        raw_id = regression.get("regression_id")
+        if raw_id is None:
+            return None
+        return int(raw_id)
+
 
 class Backfill(CulpritLocalizer):
     """Probe every revision after the known-good revision and find the first bad one."""
@@ -441,27 +461,205 @@ class Backfill(CulpritLocalizer):
             measurement_count=draw_count,
         )
 
-    @staticmethod
-    def _signature_id(regression: Mapping[str, Any]) -> int | None:
-        """Extract a signature id from either supported regression schema."""
 
-        if "failing_sig" in regression:
-            return int(regression["failing_sig"]["signature_id"])
-        if "failing_sigs" in regression and regression["failing_sigs"]:
-            signature_id, raw = next(iter(regression["failing_sigs"].items()))
-            return int(raw.get("signature_id", signature_id))
+class StandardMidpointBisection(CulpritLocalizer):
+    """Find the first bad revision using standard midpoint bisection."""
+
+    name = "StandardMidpointBisection"
+
+    def __init__(self, *, midpoint_retrigger_count: int = 0) -> None:
+        """Configure how often each midpoint decision should be retriggered."""
+
+        if midpoint_retrigger_count < 0:
+            raise ValueError("midpoint_retrigger_count must be non-negative")
+        self.midpoint_retrigger_count = midpoint_retrigger_count
+
+    def localize(
+        self,
+        regression: Mapping[str, Any],
+        *,
+        revision_perf: RevisionPerfIndex,
+        oracle: TestOracle,
+    ) -> LocalizationResult:
+        """Probe midpoint revisions until the candidate interval is adjacent."""
+
+        good_revision = str(regression["good_revision"])
+        bad_revision = str(regression["bad_revision"])
+        culprit_revision = regression.get("culprit_revision")
+        culprit_revision = str(culprit_revision) if culprit_revision is not None else None
+        regression_id = self._regression_id(regression)
+        signature_id = self._signature_id(regression)
+
+        path = revision_perf.path_between(good_revision, bad_revision)
+        if path is None or len(path) < 2:
+            return LocalizationResult(
+                localizer=self.name,
+                oracle=oracle.name,
+                regression_id=regression_id,
+                alert_summary_id=regression.get("alert_summary_id"),
+                signature_id=signature_id,
+                good_revision=good_revision,
+                bad_revision=bad_revision,
+                culprit_revision=culprit_revision,
+                found_revision=None,
+                success=False,
+                undefined_reason="no_revision_path",
+                trtc_hours=None,
+                test_runs=getattr(oracle, "executor", None).test_runs
+                if hasattr(getattr(oracle, "executor", None), "test_runs")
+                else 0,
+                oracle_queries=getattr(oracle, "query_count", 0),
+                path_length=0,
+                candidate_revisions_tested=0,
+            )
+
+        low_idx = 0
+        high_idx = len(path) - 1
+        all_decisions: list[OracleResult] = []
+        final_decision_by_revision: dict[str, OracleResult] = {}
+        retrigger_intervals: list[list[str]] = []
+        found_revision = None
+        undefined_reason = None
+
+        while high_idx - low_idx > 1:
+            midpoint_idx = (low_idx + high_idx) // 2
+            midpoint_revision = path[midpoint_idx]
+            midpoint_decisions = oracle.classify_many(
+                [midpoint_revision],
+                regression=regression,
+                revision_path=path,
+            )
+            all_decisions.extend(midpoint_decisions)
+
+            if self.midpoint_retrigger_count:
+                retrigger_revisions = [
+                    midpoint_revision,
+                ] * self.midpoint_retrigger_count
+                retrigger_intervals.extend(
+                    [revision] for revision in retrigger_revisions
+                )
+                retrigger_decisions = oracle.classify_many(
+                    retrigger_revisions,
+                    regression=regression,
+                    revision_path=path,
+                )
+                midpoint_decisions.extend(retrigger_decisions)
+                all_decisions.extend(retrigger_decisions)
+
+            selected_decision, undefined_reason = self._select_midpoint_decision(
+                midpoint_decisions,
+            )
+            if selected_decision is None:
+                break
+
+            final_decision_by_revision[midpoint_revision] = selected_decision
+            if selected_decision.decision is OracleDecision.CLEAN:
+                low_idx = midpoint_idx
+            else:
+                high_idx = midpoint_idx
+        else:
+            found_revision = path[high_idx]
+            undefined_reason = self._undefined_reason_for_found_revision(
+                found_revision=found_revision,
+                path=path,
+                culprit_revision=culprit_revision,
+            )
+
+        success = found_revision is not None and undefined_reason is None
+        executor = getattr(oracle, "executor", None)
+        trtc_hours = (
+            executor.now_minutes / 60.0
+            if success and executor is not None
+            else None
+        )
+        final_decisions = [
+            final_decision_by_revision[revision]
+            for revision in path[1:]
+            if revision in final_decision_by_revision
+        ]
+
+        return LocalizationResult(
+            localizer=self.name,
+            oracle=oracle.name,
+            regression_id=regression_id,
+            alert_summary_id=regression.get("alert_summary_id"),
+            signature_id=signature_id,
+            good_revision=good_revision,
+            bad_revision=bad_revision,
+            culprit_revision=culprit_revision,
+            found_revision=found_revision,
+            success=success,
+            undefined_reason=None if success else undefined_reason,
+            trtc_hours=trtc_hours,
+            test_runs=(
+                executor.test_runs
+                if executor is not None
+                else sum(d.test_runs for d in all_decisions)
+            ),
+            oracle_queries=getattr(oracle, "query_count", len(all_decisions)),
+            path_length=len(path),
+            candidate_revisions_tested=len(final_decisions),
+            decisions=all_decisions,
+            final_decisions=final_decisions,
+            retrigger_intervals=retrigger_intervals,
+        )
+
+    @staticmethod
+    def _select_midpoint_decision(
+        decisions: list[OracleResult],
+    ) -> tuple[OracleResult | None, str | None]:
+        """Choose a midpoint decision by majority vote over known verdicts."""
+
+        known_decisions = [
+            decision
+            for decision in decisions
+            if decision.decision is not OracleDecision.UNKNOWN
+        ]
+        if not known_decisions:
+            return None, "missing_oracle_measurement"
+
+        clean_count = sum(
+            decision.decision is OracleDecision.CLEAN for decision in known_decisions
+        )
+        bad_count = sum(
+            decision.decision is OracleDecision.BAD for decision in known_decisions
+        )
+        if clean_count == bad_count:
+            return None, "ambiguous_midpoint_decision"
+
+        selected_verdict = (
+            OracleDecision.BAD if bad_count > clean_count else OracleDecision.CLEAN
+        )
+        selected_draw = max(
+            (
+                decision
+                for decision in known_decisions
+                if decision.decision is selected_verdict
+            ),
+            key=lambda decision: decision.completed_at_minutes,
+        )
+        draw_count = sum(decision.measurement_count for decision in decisions)
+        return replace(selected_draw, measurement_count=draw_count), None
+
+    @staticmethod
+    def _undefined_reason_for_found_revision(
+        *,
+        found_revision: str,
+        path: list[str],
+        culprit_revision: str | None,
+    ) -> str | None:
+        """Return why a completed bisection result is not a successful localization."""
+
+        if culprit_revision is None:
+            return "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return "culprit_not_in_search_range"
+        if found_revision != culprit_revision:
+            return "bisect_found_is_not_culprit"
         return None
-
-    @staticmethod
-    def _regression_id(regression: Mapping[str, Any]) -> int | None:
-        """Extract the stable regression row id when available."""
-
-        raw_id = regression.get("regression_id")
-        if raw_id is None:
-            return None
-        return int(raw_id)
 
 
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     Backfill.name: Backfill,
+    StandardMidpointBisection.name: StandardMidpointBisection,
 }
