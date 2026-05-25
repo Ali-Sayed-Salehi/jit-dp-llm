@@ -112,7 +112,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-jsonl",
+        "--output-dataset-jsonl",
         default=str(DEFAULT_OUTPUT_JSONL),
+        dest="output_jsonl",
         help="Path to write drev_review_data.jsonl.",
     )
     parser.add_argument(

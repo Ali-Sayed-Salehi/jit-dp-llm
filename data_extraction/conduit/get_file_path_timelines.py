@@ -11,7 +11,9 @@ create_code_review_dataset.py from:
 
 It scans the local autoland Mercurial repository from the eval split's starting
 boundary through the final-test split's ending boundary, records true rename
-chains from Mercurial copy metadata, and writes them to:
+chains from Mercurial copy metadata, falls back to conservative content
+similarity for same-commit delete/add pairs without metadata, and writes the
+timelines to:
 
     datasets/mozilla_code_review/file_path_timeline.jsonl
 
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import shutil
@@ -44,6 +47,10 @@ DEFAULT_AUTOLAND_REPO = (
 DEFAULT_AUTOLAND_URL = "https://hg-edge.mozilla.org/integration/autoland"
 DEFAULT_HG_PULL_MAX_ATTEMPTS = 5
 DEFAULT_HG_PULL_RETRY_BASE_SLEEP_SECONDS = 5.0
+DEFAULT_SIMILARITY_THRESHOLD = 0.90
+DEFAULT_SIMILARITY_MARGIN = 0.05
+DEFAULT_SIMILARITY_MAX_FILE_BYTES = 1_000_000
+DEFAULT_SIMILARITY_MAX_PAIRS = 2_500
 NULL_NODE = "0000000000000000000000000000000000000000"
 
 
@@ -70,6 +77,15 @@ class RenameEvent:
     commit_id: str
     source_path: str
     destination_path: str
+    detection_method: str
+    similarity: float | None = None
+
+
+@dataclass(frozen=True)
+class SimilarityRename:
+    source_path: str
+    destination_path: str
+    similarity: float
 
 
 @dataclass
@@ -107,7 +123,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-jsonl",
+        "--output-file-path-timeline-jsonl",
         default=str(DEFAULT_OUTPUT_JSONL),
+        dest="output_jsonl",
         help="Path to write file_path_timeline.jsonl.",
     )
     parser.add_argument(
@@ -151,6 +169,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_HG_PULL_RETRY_BASE_SLEEP_SECONDS,
         help="Base sleep seconds for retrying failed `hg pull -u` commands.",
     )
+    parser.add_argument(
+        "--disable-similarity-inference",
+        action="store_true",
+        help="Only use Mercurial copy metadata; do not infer manual delete/add renames.",
+    )
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=DEFAULT_SIMILARITY_THRESHOLD,
+        help="Minimum line similarity for inferring a manual rename.",
+    )
+    parser.add_argument(
+        "--similarity-margin",
+        type=float,
+        default=DEFAULT_SIMILARITY_MARGIN,
+        help="Required score gap between the best and second-best match.",
+    )
+    parser.add_argument(
+        "--similarity-max-file-bytes",
+        type=int,
+        default=DEFAULT_SIMILARITY_MAX_FILE_BYTES,
+        help="Skip content-similarity checks for files larger than this many bytes.",
+    )
+    parser.add_argument(
+        "--similarity-max-pairs",
+        type=int,
+        default=DEFAULT_SIMILARITY_MAX_PAIRS,
+        help=(
+            "Skip content-similarity inference for a changeset if it has more "
+            "extension-compatible added/deleted file pairs than this."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.debug_count < 0:
         parser.error("--debug-count must be non-negative")
@@ -158,6 +208,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--hg-pull-max-attempts must be at least 1")
     if args.hg_pull_retry_base_sleep < 0:
         parser.error("--hg-pull-retry-base-sleep must be non-negative")
+    if not 0.0 <= args.similarity_threshold <= 1.0:
+        parser.error("--similarity-threshold must be between 0 and 1")
+    if args.similarity_margin < 0:
+        parser.error("--similarity-margin must be non-negative")
+    if args.similarity_max_file_bytes < 0:
+        parser.error("--similarity-max-file-bytes must be non-negative")
+    if args.similarity_max_pairs < 0:
+        parser.error("--similarity-max-pairs must be non-negative")
     return args
 
 
@@ -404,7 +462,9 @@ def iter_hg_log_records(
     start_rev: int,
     end_rev: int,
 ) -> Iterator[dict[str, Any]]:
-    template = "{dict(rev, node, file_adds, file_dels, file_copies)|json}\n"
+    template = (
+        "{dict(rev, node, file_adds, file_dels, file_copies, p1rev=p1.rev)|json}\n"
+    )
     command = [
         "hg",
         "log",
@@ -488,6 +548,203 @@ def parse_file_copies(record: dict[str, Any]) -> dict[str, str]:
     return copies
 
 
+def path_suffix(path: str) -> str:
+    return Path(path).suffix.lower()
+
+
+def has_compatible_suffix(source_path: str, destination_path: str) -> bool:
+    source_suffix = path_suffix(source_path)
+    destination_suffix = path_suffix(destination_path)
+    return (
+        not source_suffix
+        or not destination_suffix
+        or source_suffix == destination_suffix
+    )
+
+
+def get_hg_file_size(repo_path: Path, *, rev: int, path: str) -> int | None:
+    result = subprocess.run(
+        ["hg", "files", "-r", str(rev), "-T", "{size}\n", "--", path],
+        cwd=repo_path,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+
+    value = result.stdout.strip()
+    if not value:
+        return None
+    try:
+        return int(value.splitlines()[0])
+    except ValueError:
+        return None
+
+
+def get_hg_file_bytes(
+    repo_path: Path,
+    *,
+    rev: int,
+    path: str,
+    max_file_bytes: int,
+) -> bytes | None:
+    file_size = get_hg_file_size(repo_path, rev=rev, path=path)
+    if file_size is None or file_size > max_file_bytes:
+        return None
+
+    result = subprocess.run(
+        ["hg", "cat", "-r", str(rev), "--", path],
+        cwd=repo_path,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+    if len(result.stdout) > max_file_bytes:
+        return None
+    return result.stdout
+
+
+def line_similarity(old_content: bytes, new_content: bytes) -> float | None:
+    if b"\0" in old_content or b"\0" in new_content:
+        return None
+
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+    if not old_lines or not new_lines:
+        return None
+
+    return SequenceMatcher(None, old_lines, new_lines, autojunk=False).ratio()
+
+
+def count_compatible_pairs(
+    *,
+    source_paths: set[str],
+    destination_paths: set[str],
+) -> int:
+    return sum(
+        1
+        for source_path in source_paths
+        for destination_path in destination_paths
+        if has_compatible_suffix(source_path, destination_path)
+    )
+
+
+def is_clear_best_match(
+    scores: list[tuple[float, str]],
+    *,
+    similarity_margin: float,
+) -> bool:
+    if len(scores) == 1:
+        return True
+    return scores[0][0] - scores[1][0] >= similarity_margin
+
+
+def infer_similarity_renames(
+    *,
+    repo_path: Path,
+    parent_rev: int,
+    rev: int,
+    source_paths: set[str],
+    destination_paths: set[str],
+    similarity_threshold: float,
+    similarity_margin: float,
+    similarity_max_file_bytes: int,
+    similarity_max_pairs: int,
+    stats: dict[str, int],
+) -> dict[str, SimilarityRename]:
+    if parent_rev < 0 or not source_paths or not destination_paths:
+        return {}
+
+    compatible_pair_count = count_compatible_pairs(
+        source_paths=source_paths,
+        destination_paths=destination_paths,
+    )
+    if compatible_pair_count == 0:
+        return {}
+    if compatible_pair_count > similarity_max_pairs:
+        stats["similarity_skipped_large_changesets"] += 1
+        return {}
+
+    stats["similarity_candidate_changesets"] += 1
+    old_content_by_path: dict[str, bytes | None] = {}
+    new_content_by_path: dict[str, bytes | None] = {}
+    selected_by_destination: dict[str, list[SimilarityRename]] = {}
+
+    for source_path in sorted(source_paths):
+        old_content = old_content_by_path.get(source_path)
+        if source_path not in old_content_by_path:
+            old_content = get_hg_file_bytes(
+                repo_path,
+                rev=parent_rev,
+                path=source_path,
+                max_file_bytes=similarity_max_file_bytes,
+            )
+            old_content_by_path[source_path] = old_content
+        if old_content is None:
+            stats["similarity_source_files_skipped"] += 1
+            continue
+
+        destination_scores: list[tuple[float, str]] = []
+        for destination_path in sorted(destination_paths):
+            if not has_compatible_suffix(source_path, destination_path):
+                continue
+
+            new_content = new_content_by_path.get(destination_path)
+            if destination_path not in new_content_by_path:
+                new_content = get_hg_file_bytes(
+                    repo_path,
+                    rev=rev,
+                    path=destination_path,
+                    max_file_bytes=similarity_max_file_bytes,
+                )
+                new_content_by_path[destination_path] = new_content
+            if new_content is None:
+                continue
+
+            score = line_similarity(old_content, new_content)
+            if score is None:
+                continue
+            stats["similarity_pairs_compared"] += 1
+            destination_scores.append((score, destination_path))
+
+        if not destination_scores:
+            continue
+
+        destination_scores.sort(key=lambda item: (-item[0], item[1]))
+        if destination_scores[0][0] < similarity_threshold:
+            continue
+        if not is_clear_best_match(
+            destination_scores,
+            similarity_margin=similarity_margin,
+        ):
+            stats["similarity_ambiguous_sources"] += 1
+            continue
+
+        score, destination_path = destination_scores[0]
+        selected_by_destination.setdefault(destination_path, []).append(
+            SimilarityRename(
+                source_path=source_path,
+                destination_path=destination_path,
+                similarity=score,
+            )
+        )
+
+    inferred_renames: dict[str, SimilarityRename] = {}
+    for destination_path, matches in selected_by_destination.items():
+        if len(matches) > 1:
+            stats["similarity_destination_conflicts"] += 1
+            continue
+
+        match = matches[0]
+        inferred_renames[destination_path] = match
+
+    return inferred_renames
+
+
 def build_file_path_timelines(
     *,
     repo_path: Path,
@@ -495,6 +752,11 @@ def build_file_path_timelines(
     boundary_start_rev: int,
     boundary_start_index: int,
     boundary_end_rev: int,
+    infer_similarity: bool,
+    similarity_threshold: float,
+    similarity_margin: float,
+    similarity_max_file_bytes: int,
+    similarity_max_pairs: int,
 ) -> tuple[list[FilePathTimeline], dict[str, int]]:
     active_path_start_rev: dict[str, int] = {}
     active_path_start_index: dict[str, int] = {}
@@ -503,6 +765,14 @@ def build_file_path_timelines(
     stats = {
         "changesets_scanned": 0,
         "copy_events_seen": 0,
+        "metadata_rename_events_written": 0,
+        "similarity_candidate_changesets": 0,
+        "similarity_pairs_compared": 0,
+        "similarity_source_files_skipped": 0,
+        "similarity_skipped_large_changesets": 0,
+        "similarity_ambiguous_sources": 0,
+        "similarity_destination_conflicts": 0,
+        "similarity_rename_events_written": 0,
         "rename_events_written": 0,
         "timelines_written": 0,
     }
@@ -514,6 +784,7 @@ def build_file_path_timelines(
     ):
         stats["changesets_scanned"] += 1
         rev = parse_int_field(record, "rev")
+        parent_rev = parse_int_field(record, "p1rev")
         commit_id = parse_string_field(record, "node")
         try:
             commit_index = node_to_index[commit_id]
@@ -528,11 +799,33 @@ def build_file_path_timelines(
         file_copies = parse_file_copies(record)
         stats["copy_events_seen"] += len(file_copies)
 
-        rename_dest_to_source = {
+        metadata_rename_dest_to_source = {
             destination: source
             for destination, source in file_copies.items()
             if destination in file_adds and source in file_dels
         }
+        metadata_rename_sources = set(metadata_rename_dest_to_source.values())
+        metadata_rename_destinations = set(metadata_rename_dest_to_source)
+
+        similarity_renames: dict[str, SimilarityRename] = {}
+        if infer_similarity:
+            similarity_renames = infer_similarity_renames(
+                repo_path=repo_path,
+                parent_rev=parent_rev,
+                rev=rev,
+                source_paths=file_dels - metadata_rename_sources,
+                destination_paths=file_adds - metadata_rename_destinations,
+                similarity_threshold=similarity_threshold,
+                similarity_margin=similarity_margin,
+                similarity_max_file_bytes=similarity_max_file_bytes,
+                similarity_max_pairs=similarity_max_pairs,
+                stats=stats,
+            )
+
+        rename_dest_to_source = dict(metadata_rename_dest_to_source)
+        for destination, match in similarity_renames.items():
+            rename_dest_to_source[destination] = match.source_path
+
         rename_sources = set(rename_dest_to_source.values())
         rename_destinations = set(rename_dest_to_source)
 
@@ -552,6 +845,11 @@ def build_file_path_timelines(
 
             active_path_start_rev.pop(source, None)
             active_path_start_index.pop(source, None)
+            similarity = None
+            detection_method = "hg_metadata"
+            if destination in similarity_renames:
+                detection_method = "content_similarity"
+                similarity = similarity_renames[destination].similarity
             timeline.events.append(
                 RenameEvent(
                     rev=rev,
@@ -559,6 +857,8 @@ def build_file_path_timelines(
                     commit_id=commit_id,
                     source_path=source,
                     destination_path=destination,
+                    detection_method=detection_method,
+                    similarity=similarity,
                 )
             )
             timeline.deleted_rev = None
@@ -567,6 +867,10 @@ def build_file_path_timelines(
             active_path_to_timeline[destination] = timeline
             active_path_start_rev[destination] = rev
             active_path_start_index[destination] = commit_index
+            if detection_method == "content_similarity":
+                stats["similarity_rename_events_written"] += 1
+            else:
+                stats["metadata_rename_events_written"] += 1
             stats["rename_events_written"] += 1
 
         for path in file_dels:
@@ -616,6 +920,8 @@ def timeline_to_record(timeline: FilePathTimeline) -> dict[str, Any]:
                 "commit_id": event.commit_id,
                 "source_path": event.source_path,
                 "destination_path": event.destination_path,
+                "detection_method": event.detection_method,
+                "similarity": event.similarity,
             }
             for event in timeline.events
         ],
@@ -722,6 +1028,14 @@ def main(argv: list[str] | None = None) -> None:
         stats = {
             "changesets_scanned": 0,
             "copy_events_seen": 0,
+            "metadata_rename_events_written": 0,
+            "similarity_candidate_changesets": 0,
+            "similarity_pairs_compared": 0,
+            "similarity_source_files_skipped": 0,
+            "similarity_skipped_large_changesets": 0,
+            "similarity_ambiguous_sources": 0,
+            "similarity_destination_conflicts": 0,
+            "similarity_rename_events_written": 0,
             "rename_events_written": 0,
             "timelines_written": 0,
         }
@@ -732,6 +1046,11 @@ def main(argv: list[str] | None = None) -> None:
             boundary_start_rev=boundary_start_rev,
             boundary_start_index=eval_boundary.start_index,
             boundary_end_rev=scan_end_rev,
+            infer_similarity=not args.disable_similarity_inference,
+            similarity_threshold=args.similarity_threshold,
+            similarity_margin=args.similarity_margin,
+            similarity_max_file_bytes=args.similarity_max_file_bytes,
+            similarity_max_pairs=args.similarity_max_pairs,
         )
 
     metadata = {
@@ -747,6 +1066,11 @@ def main(argv: list[str] | None = None) -> None:
         "scan_end_index": scan_end_index,
         "scan_end_rev": scan_end_rev,
         "debug": bool(args.debug),
+        "similarity_inference_enabled": not args.disable_similarity_inference,
+        "similarity_threshold": args.similarity_threshold,
+        "similarity_margin": args.similarity_margin,
+        "similarity_max_file_bytes": args.similarity_max_file_bytes,
+        "similarity_max_pairs": args.similarity_max_pairs,
     }
     write_file_path_timeline(
         output_jsonl=output_jsonl,

@@ -98,11 +98,18 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_file_path_timelines.py \
 # --skip-repo-update \
+# --output-file-path-timeline-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/file_path_timeline.jsonl \
+# --disable-similarity-inference \
+# --similarity-threshold 0.90 \
+# --similarity-margin 0.05 \
+# --similarity-max-file-bytes 1000000 \
+# --similarity-max-pairs 2500 \
 # --debug
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/create_code_review_dataset.py \
 # --skip-repo-update \
 # --file-path-timeline-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/file_path_timeline.jsonl \
+# --output-dataset-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/drev_review_data.jsonl \
 # --debug
 
 
