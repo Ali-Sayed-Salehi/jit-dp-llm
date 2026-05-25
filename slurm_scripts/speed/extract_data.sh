@@ -96,8 +96,13 @@ echo "running the data extraction script . . ."
 # --max-retries 5 \
 # --retry-base-sleep 5.0
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_file_path_timelines.py \
+# --skip-repo-update \
+# --debug
+
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/create_code_review_dataset.py \
 # --skip-repo-update \
+# --file-path-timeline-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/file_path_timeline.jsonl \
 # --debug
 
 
