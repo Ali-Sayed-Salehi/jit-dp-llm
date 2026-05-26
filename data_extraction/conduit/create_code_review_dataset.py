@@ -12,8 +12,8 @@ It writes one JSON object per per-commit DREV row to:
 
 Each output row contains:
 
-    commit_id, dataset_split, risk_score, drev_submission_date, drev_author,
-    files_changed, reviews
+    commit_id, dataset_split, risk_score, drev_submission_date,
+    drev_closed_merged_date, drev_author, files_changed, reviews
 
 `files_changed` is extracted from a local Mercurial clone of Mozilla's autoland
 repository at:
@@ -655,6 +655,25 @@ def find_create_transaction(transactions: list[dict[str, Any]]) -> dict[str, Any
     return None
 
 
+def find_latest_close_transaction(
+    transactions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    close_transactions = [
+        transaction
+        for transaction in transactions
+        if transaction.get("type") == "close"
+    ]
+    if not close_transactions:
+        return None
+
+    dated_close_transactions = [
+        transaction
+        for transaction in close_transactions
+        if unix_timestamp_to_iso(transaction.get("dateCreated")) is not None
+    ]
+    return max(dated_close_transactions or close_transactions, key=transaction_sort_key)
+
+
 def is_app_author(author: str | None) -> bool:
     return isinstance(author, str) and author.startswith("PHID-APPS-")
 
@@ -747,12 +766,19 @@ def build_output_row(
         author = create_transaction.get("authorPHID")
         drev_author = author if isinstance(author, str) and author else None
         drev_submission_date = unix_timestamp_to_iso(create_transaction.get("dateCreated"))
+    close_transaction = find_latest_close_transaction(input_row.transactions)
+    drev_closed_merged_date = None
+    if close_transaction is not None:
+        drev_closed_merged_date = unix_timestamp_to_iso(
+            close_transaction.get("dateCreated")
+        )
 
     return {
         "commit_id": commit_id,
         "dataset_split": input_row.dataset_split,
         "risk_score": input_row.risk_score,
         "drev_submission_date": drev_submission_date,
+        "drev_closed_merged_date": drev_closed_merged_date,
         "drev_author": drev_author,
         "files_changed": changed_files.files,
         "reviews": extract_reviews(
