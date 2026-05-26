@@ -11,8 +11,8 @@ For each DREV row, it fetches all transactions with Conduit's
 
     datasets/mozilla_code_review/per_commit_drev_transactions.jsonl
 
-Each output row contains `commit_id`, `drev_id`, `dataset_split`, `risk_score`,
-and `transactions`, where `transactions` is the list of raw transaction objects
+Each output row contains `commit_id`, `drev_id`, `dataset_split`, and
+`transactions`, where `transactions` is the list of raw transaction objects
 returned by Conduit.
 
 If the output file already exists, rows with commit IDs already present in the
@@ -56,7 +56,6 @@ class DrevRef:
     commit_id: str
     drev_id: int
     dataset_split: str
-    risk_score: float
     phid: str
 
 
@@ -240,24 +239,9 @@ def load_existing_output_commit_ids(path: Path) -> set[str]:
     return existing_commit_ids
 
 
-def parse_risk_score(value: Any, *, line_label: str) -> float:
-    try:
-        risk_score = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{line_label}: invalid risk_score {value!r}."
-        ) from exc
-    if not 0.0 <= risk_score <= 1.0:
-        raise ValueError(
-            f"{line_label}: risk_score outside [0, 1]: {risk_score}."
-        )
-    return risk_score
-
-
 def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None:
     commit_id = record.get("commit_id")
     dataset_split = record.get("dataset_split")
-    risk_score_value = record.get("risk_score")
     drev = record.get("drev")
     if not isinstance(drev, dict):
         # Support flat DREV records as long as the required top-level metadata
@@ -287,18 +271,10 @@ def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None
         print(f"[WARN] Skipping {line_label}: invalid DREV id {drev_id!r}.", file=sys.stderr)
         return None
 
-    if "risk_score" not in record:
-        raise ValueError(
-            f"{line_label}: missing risk_score. Regenerate per_commit_drevs.jsonl "
-            "with get_per_commit_drevs.py before fetching transactions."
-        )
-    risk_score = parse_risk_score(risk_score_value, line_label=line_label)
-
     return DrevRef(
         commit_id=commit_id,
         drev_id=drev_id_int,
         dataset_split=dataset_split,
-        risk_score=risk_score,
         phid=phid,
     )
 
@@ -386,7 +362,6 @@ def write_transactions(
                     "commit_id": ref.commit_id,
                     "drev_id": ref.drev_id,
                     "dataset_split": ref.dataset_split,
-                    "risk_score": ref.risk_score,
                     "transactions": transactions,
                 }
                 output_file.write(json.dumps(output_row) + "\n")

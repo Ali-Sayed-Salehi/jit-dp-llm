@@ -43,15 +43,16 @@ This script:
   prediction files;
 - normalizes eval and final-test prediction confidence formats into
   `risk_score = P(label 1)`;
+- copies each prediction row's `true_label` into `bug_inducing`;
 - walks backward from each directly scored commit across contiguous commits with
   the same leading `Bug <id>` marker;
-- writes one risk-score row for every directly scored or inherited commit in
-  the valid interval.
+- writes one risk-score and label row for every directly scored or inherited
+  commit in the valid interval.
 
 Output row shape:
 
 ```json
-{"commit_id": "...", "risk_score": 0.42, "desc": "Bug ..."}
+{"commit_id": "...", "risk_score": 0.42, "bug_inducing": 1, "desc": "Bug ..."}
 ```
 
 2. Fetch published, closed DREVs for scored commits:
@@ -69,9 +70,9 @@ python data_extraction/conduit/get_per_commit_drevs.py \
 
 This script:
 
-- loads risk scores from `per_commit_risk_scores.jsonl`;
+- loads scored commit ids from `per_commit_risk_scores.jsonl`;
 - scans only the eval-through-final-test Mercurial interval;
-- keeps only commits with a leading bug id and a risk score;
+- keeps only commits with a leading bug id and per-commit risk row;
 - looks for a trailing `https://phabricator.services.mozilla.com/D...` URL in
   the commit message;
 - fetches each matching DREV with `differential.revision.search`;
@@ -80,7 +81,7 @@ This script:
 Output row shape:
 
 ```json
-{"commit_id": "...", "dataset_split": "eval", "risk_score": 0.42, "drev": {...}}
+{"commit_id": "...", "dataset_split": "eval", "drev": {...}}
 ```
 
 3. Fetch transactions for those DREVs:
@@ -98,10 +99,10 @@ This script:
 
 - loads `per_commit_drevs.jsonl`;
 - skips commit rows already present in the output JSONL;
-- validates `dataset_split`, DREV id/PHID, and `risk_score`;
+- validates `dataset_split` and DREV id/PHID;
 - fetches all transaction pages for each unique DREV PHID with
   `transaction.search`, skipping failed API calls without retrying;
-- preserves `dataset_split` and `risk_score`;
+- preserves `dataset_split`;
 - appends one row per commit/DREV with all transactions nested in a list.
 
 Output row shape:
@@ -111,7 +112,6 @@ Output row shape:
   "commit_id": "...",
   "drev_id": 123456,
   "dataset_split": "final test",
-  "risk_score": 0.42,
   "transactions": [...]
 }
 ```
@@ -121,6 +121,7 @@ Output row shape:
 ```bash
 python data_extraction/conduit/create_code_review_dataset.py \
   --drev-transactions-jsonl datasets/mozilla_code_review/per_commit_drev_transactions.jsonl \
+  --risk-scores-jsonl datasets/mozilla_code_review/per_commit_risk_scores.jsonl \
   --output-jsonl datasets/mozilla_code_review/drev_review_data.jsonl \
   --autoland-repo data_extraction/mercurial/repos/autoland \
   --autoland-url https://hg-edge.mozilla.org/integration/autoland \
@@ -133,6 +134,7 @@ This script:
 - clones autoland if missing, or runs `hg pull -u URL` if it already exists;
 - retries failed pulls to tolerate intermittent Mercurial HTTP failures;
 - supports `--skip-repo-update` when the local clone is already sufficient;
+- joins `risk_score` and `bug_inducing` from `per_commit_risk_scores.jsonl`;
 - reads changed files with `hg status --change <commit_id>`;
 - extracts non-empty Phabricator transaction comments into chronological
   `reviews`;
@@ -146,6 +148,7 @@ Output row shape:
   "commit_id": "...",
   "dataset_split": "eval",
   "risk_score": 0.42,
+  "bug_inducing": 1,
   "drev_submission_date": "2024-09-24T14:59:23Z",
   "drev_closed_date": "2024-09-30T15:08:41Z",
   "drev_author": "PHID-USER-...",
@@ -164,7 +167,8 @@ Cluster-specific commented commands are also available in
 
 - `get_commit_risk_scores.py`
   - Converts prediction JSON confidence formats into per-commit `risk_score`
-    rows and expands scores across contiguous same-bug commit blocks.
+    rows, copies `true_label` into `bug_inducing`, and expands both fields
+    across contiguous same-bug commit blocks.
 
 - `get_per_commit_drevs.py`
   - Fetches published, closed Differential Revisions linked by trailing DREV

@@ -8,12 +8,13 @@ This script reads:
     datasets/mozilla_code_review/risk_predictions_eval.json
     datasets/mozilla_code_review/risk_predictions_final_test.json
 
-The prediction files contain scores for the commits that represent rows in the
-JIT risk-scoring dataset. That dataset collapses each contiguous block of
-``Bug <id>`` commits into one net diff and uses the newest commit in the block
-as the dataset row's commit id. To recover per-commit scores, this script walks
-backward from every scored commit while previous commits have the same bug id,
-mirroring the block selection in data_extraction/mercurial/link_bug_diffs.py.
+The prediction files contain scores and labels for the commits that represent
+rows in the JIT risk-scoring dataset. That dataset collapses each contiguous
+block of ``Bug <id>`` commits into one net diff and uses the newest commit in
+the block as the dataset row's commit id. To recover per-commit scores and
+labels, this script walks backward from every scored commit while previous
+commits have the same bug id, mirroring the block selection in
+data_extraction/mercurial/link_bug_diffs.py.
 
 It writes:
 
@@ -21,12 +22,12 @@ It writes:
 
 Each output row contains:
 
-    commit_id, risk_score, desc
+    commit_id, risk_score, bug_inducing, desc
 
 Only commits in the valid interval from the eval split's first Mercurial commit
 through the final-test split's last Mercurial commit are considered. Commits in
-that interval with neither a direct prediction score nor an inherited contiguous
-same-bug score are skipped.
+that interval with neither a direct prediction nor an inherited contiguous
+same-bug prediction are skipped.
 """
 
 from __future__ import annotations
@@ -60,6 +61,12 @@ class SplitBoundary:
     start_commit_id: str
     end_commit_id: str
     sample_commit_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class CommitRiskAnnotation:
+    risk_score: float
+    bug_inducing: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -231,22 +238,28 @@ def load_prediction_commit_ids(path: Path) -> list[str]:
     return commit_ids
 
 
-def load_risk_scores(path: Path) -> dict[str, float]:
+def load_commit_risk_annotations(path: Path) -> dict[str, CommitRiskAnnotation]:
     rows, confidence_mode = load_prediction_rows(path)
 
-    risk_scores: dict[str, float] = {}
+    annotations: dict[str, CommitRiskAnnotation] = {}
     for row_index, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(f"{path}: row {row_index} is not an object")
         commit_id = row.get("commit_id")
         if not isinstance(commit_id, str) or not commit_id:
             raise ValueError(f"{path}: row {row_index} has invalid commit_id")
-        if commit_id in risk_scores:
+        if commit_id in annotations:
             raise ValueError(f"{path}: duplicate commit_id {commit_id!r}")
 
         confidence = row.get("confidence")
         if confidence is None:
             raise ValueError(f"{path}: row {row_index} is missing confidence")
+        bug_inducing = parse_binary_label(
+            row.get("true_label"),
+            path=path,
+            row_index=row_index,
+            field="true_label",
+        )
 
         if confidence_mode == "predicted_class":
             risk_score = risk_score_from_predicted_class(
@@ -261,25 +274,28 @@ def load_risk_scores(path: Path) -> dict[str, float]:
                 path=path,
                 row_index=row_index,
             )
-        risk_scores[commit_id] = risk_score
+        annotations[commit_id] = CommitRiskAnnotation(
+            risk_score=risk_score,
+            bug_inducing=bug_inducing,
+        )
 
-    if not risk_scores:
+    if not annotations:
         raise ValueError(f"{path} contains no prediction rows")
-    return risk_scores
+    return annotations
 
 
-def load_combined_risk_scores(paths: list[Path]) -> dict[str, float]:
-    combined: dict[str, float] = {}
+def load_combined_risk_annotations(paths: list[Path]) -> dict[str, CommitRiskAnnotation]:
+    combined: dict[str, CommitRiskAnnotation] = {}
     for path in paths:
-        risk_scores = load_risk_scores(path)
-        for commit_id, risk_score in risk_scores.items():
+        annotations = load_commit_risk_annotations(path)
+        for commit_id, annotation in annotations.items():
             existing = combined.get(commit_id)
-            if existing is not None and existing != risk_score:
+            if existing is not None and existing != annotation:
                 raise ValueError(
                     f"{commit_id} appears in multiple prediction files with "
-                    f"different risk scores: {existing} vs {risk_score}"
+                    f"different annotations: {existing} vs {annotation}"
                 )
-            combined[commit_id] = risk_score
+            combined[commit_id] = annotation
     return combined
 
 
@@ -324,16 +340,16 @@ def bug_id_from_desc(desc: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def expand_scores_to_contiguous_bug_blocks(
+def expand_annotations_to_contiguous_bug_blocks(
     *,
     commits: list[dict[str, Any]],
     node_to_index: dict[str, int],
-    direct_risk_scores: dict[str, float],
-) -> tuple[dict[str, float], dict[str, str]]:
-    expanded: dict[str, float] = dict(direct_risk_scores)
+    direct_annotations: dict[str, CommitRiskAnnotation],
+) -> tuple[dict[str, CommitRiskAnnotation], dict[str, str]]:
+    expanded: dict[str, CommitRiskAnnotation] = dict(direct_annotations)
     inherited_from: dict[str, str] = {}
 
-    for scored_commit_id, risk_score in direct_risk_scores.items():
+    for scored_commit_id, annotation in direct_annotations.items():
         index = node_to_index.get(scored_commit_id)
         if index is None:
             continue
@@ -346,13 +362,13 @@ def expand_scores_to_contiguous_bug_blocks(
         while cursor >= 0 and bug_id_from_desc(commits[cursor].get("desc")) == bug_id:
             commit_id = commits[cursor]["node"]
             existing = expanded.get(commit_id)
-            if existing is not None and existing != risk_score:
+            if existing is not None and existing != annotation:
                 raise ValueError(
-                    f"Conflicting inherited risk scores for {commit_id}: "
-                    f"{existing} vs {risk_score} from {scored_commit_id}"
+                    f"Conflicting inherited annotations for {commit_id}: "
+                    f"{existing} vs {annotation} from {scored_commit_id}"
                 )
 
-            expanded[commit_id] = risk_score
+            expanded[commit_id] = annotation
             if commit_id != scored_commit_id:
                 inherited_from[commit_id] = scored_commit_id
             cursor -= 1
@@ -410,13 +426,13 @@ def main(argv: list[str] | None = None) -> None:
             f"{eval_boundary.start_commit_id} > {final_test_boundary.end_commit_id}"
         )
 
-    direct_risk_scores = load_combined_risk_scores(
+    direct_annotations = load_combined_risk_annotations(
         [eval_predictions_json, final_test_predictions_json]
     )
-    expanded_risk_scores, inherited_from = expand_scores_to_contiguous_bug_blocks(
+    expanded_annotations, inherited_from = expand_annotations_to_contiguous_bug_blocks(
         commits=commits,
         node_to_index=node_to_index,
-        direct_risk_scores=direct_risk_scores,
+        direct_annotations=direct_annotations,
     )
 
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -432,12 +448,12 @@ def main(argv: list[str] | None = None) -> None:
         for index in range(start_index, end_index + 1):
             stats["commits_in_valid_interval"] += 1
             commit_id = commits[index]["node"]
-            risk_score = expanded_risk_scores.get(commit_id)
-            if risk_score is None:
+            annotation = expanded_annotations.get(commit_id)
+            if annotation is None:
                 stats["commits_skipped_without_score"] += 1
                 continue
 
-            if commit_id in direct_risk_scores:
+            if commit_id in direct_annotations:
                 stats["direct_scores_written"] += 1
             elif commit_id in inherited_from:
                 stats["inherited_scores_written"] += 1
@@ -446,7 +462,8 @@ def main(argv: list[str] | None = None) -> None:
                 json.dumps(
                     {
                         "commit_id": commit_id,
-                        "risk_score": risk_score,
+                        "risk_score": annotation.risk_score,
+                        "bug_inducing": annotation.bug_inducing,
                         "desc": commits[index].get("desc", ""),
                     }
                 )

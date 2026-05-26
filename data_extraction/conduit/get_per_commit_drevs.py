@@ -14,14 +14,13 @@ through Conduit and only published, closed revisions are appended to:
     datasets/mozilla_code_review/per_commit_drevs.jsonl
 
 Each output row contains `commit_id` with the commit hash, `dataset_split`
-(`eval` or `final test`), `risk_score` with the model's probability that the
-commit is buggy, and `drev` with the raw revision object returned by
+(`eval` or `final test`), and `drev` with the raw revision object returned by
 `differential.revision.search`.
 
 The script uses risk_predictions_eval.json and risk_predictions_final_test.json
 to derive Mercurial-order split boundaries. It only considers commits from the
 start of the eval boundary through the end of the final-test boundary. Per-
-commit risk scores are loaded from per_commit_risk_scores.jsonl, which should be
+commit ids are loaded from per_commit_risk_scores.jsonl, which should be
 generated first with get_commit_risk_scores.py.
 
 If the output file already exists, rows with commit IDs already present in the
@@ -92,7 +91,6 @@ class SplitBoundary:
 class CommitWorkItem:
     commit: dict[str, Any]
     dataset_split: str
-    risk_score: float
 
 
 class ConduitCaller:
@@ -341,20 +339,6 @@ def load_commits(path: Path) -> list[dict[str, Any]]:
     return commits
 
 
-def parse_probability(value: Any, *, path: Path, row_index: int, field: str) -> float:
-    try:
-        probability = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{path}: row {row_index} has invalid {field}: {value!r}"
-        ) from exc
-    if not 0.0 <= probability <= 1.0:
-        raise ValueError(
-            f"{path}: row {row_index} has {field} outside [0, 1]: {probability}"
-        )
-    return probability
-
-
 def load_prediction_rows(path: Path) -> tuple[list[dict[str, Any]], str]:
     with path.open("r", encoding="utf-8") as input_file:
         data = json.load(input_file)
@@ -387,28 +371,20 @@ def load_prediction_commit_ids(path: Path) -> list[str]:
     return commit_ids
 
 
-def load_commit_risk_scores(path: Path) -> dict[str, float]:
-    risk_scores: dict[str, float] = {}
+def load_scored_commit_ids(path: Path) -> set[str]:
+    commit_ids: set[str] = set()
 
     for line_num, record in iter_jsonl(path):
         commit_id = record.get("commit_id")
         if not isinstance(commit_id, str) or not commit_id:
             raise ValueError(f"{path}:{line_num}: missing commit_id")
-        if commit_id in risk_scores:
+        if commit_id in commit_ids:
             raise ValueError(f"{path}:{line_num}: duplicate commit_id {commit_id!r}")
+        commit_ids.add(commit_id)
 
-        if "risk_score" not in record:
-            raise ValueError(f"{path}:{line_num}: missing risk_score")
-        risk_scores[commit_id] = parse_probability(
-            record.get("risk_score"),
-            path=path,
-            row_index=line_num,
-            field="risk_score",
-        )
-
-    if not risk_scores:
+    if not commit_ids:
         raise ValueError(f"{path} contains no risk-score rows")
-    return risk_scores
+    return commit_ids
 
 
 def build_split_boundary(
@@ -502,7 +478,7 @@ def build_work_items(
     node_to_index: dict[str, int],
     eval_boundary: SplitBoundary,
     final_test_boundary: SplitBoundary,
-    risk_scores: dict[str, float],
+    scored_commit_ids: set[str],
 ) -> list[CommitWorkItem]:
     start_index = eval_boundary.start_index
     end_index = final_test_boundary.end_index
@@ -519,8 +495,7 @@ def build_work_items(
         if bug_id_from_desc(commit.get("desc")) is None:
             continue
 
-        risk_score = risk_scores.get(commit_id)
-        if risk_score is None:
+        if commit_id not in scored_commit_ids:
             continue
 
         dataset_split = classify_dataset_split(
@@ -533,7 +508,6 @@ def build_work_items(
             CommitWorkItem(
                 commit=commit,
                 dataset_split=dataset_split,
-                risk_score=risk_score,
             )
         )
 
@@ -662,7 +636,6 @@ def process_commits(
             output_row = {
                 "commit_id": commit_id,
                 "dataset_split": work_item.dataset_split,
-                "risk_score": work_item.risk_score,
                 "drev": revision,
             }
             output_file.write(json.dumps(output_row) + "\n")
@@ -714,7 +687,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     print(describe_boundary(eval_boundary), file=sys.stderr)
     print(describe_boundary(final_test_boundary), file=sys.stderr)
-    risk_scores = load_commit_risk_scores(risk_scores_jsonl)
+    scored_commit_ids = load_scored_commit_ids(risk_scores_jsonl)
 
     overlap_start = max(eval_boundary.start_index, final_test_boundary.start_index)
     overlap_end = min(eval_boundary.end_index, final_test_boundary.end_index)
@@ -731,7 +704,7 @@ def main(argv: list[str] | None = None) -> None:
         node_to_index=node_to_index,
         eval_boundary=eval_boundary,
         final_test_boundary=final_test_boundary,
-        risk_scores=risk_scores,
+        scored_commit_ids=scored_commit_ids,
     )
     work_items = get_work_items_to_process(
         all_work_items=all_work_items,
