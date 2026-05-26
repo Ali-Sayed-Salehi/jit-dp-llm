@@ -13,7 +13,7 @@ It writes one JSON object per per-commit DREV row to:
 Each output row contains:
 
     commit_id, dataset_split, risk_score, drev_submission_date,
-    drev_closed_merged_date, drev_author, files_changed, reviews
+    drev_closed_date, drev_author, files_changed, reviews
 
 `files_changed` is extracted from a local Mercurial clone of Mozilla's autoland
 repository at:
@@ -767,18 +767,16 @@ def build_output_row(
         drev_author = author if isinstance(author, str) and author else None
         drev_submission_date = unix_timestamp_to_iso(create_transaction.get("dateCreated"))
     close_transaction = find_latest_close_transaction(input_row.transactions)
-    drev_closed_merged_date = None
+    drev_closed_date = None
     if close_transaction is not None:
-        drev_closed_merged_date = unix_timestamp_to_iso(
-            close_transaction.get("dateCreated")
-        )
+        drev_closed_date = unix_timestamp_to_iso(close_transaction.get("dateCreated"))
 
     return {
         "commit_id": commit_id,
         "dataset_split": input_row.dataset_split,
         "risk_score": input_row.risk_score,
         "drev_submission_date": drev_submission_date,
-        "drev_closed_merged_date": drev_closed_merged_date,
+        "drev_closed_date": drev_closed_date,
         "drev_author": drev_author,
         "files_changed": changed_files.files,
         "reviews": extract_reviews(

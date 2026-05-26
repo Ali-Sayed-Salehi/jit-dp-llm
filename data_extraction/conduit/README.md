@@ -150,7 +150,7 @@ Output row shape:
   "dataset_split": "eval",
   "risk_score": 0.42,
   "drev_submission_date": "2024-09-24T14:59:23Z",
-  "drev_closed_merged_date": "2024-09-30T15:08:41Z",
+  "drev_closed_date": "2024-09-30T15:08:41Z",
   "drev_author": "PHID-USER-...",
   "files_changed": ["path/to/file.cpp"],
   "reviews": [{"author": "PHID-USER-...", "submission_date": "...", "comment": "..."}]
