@@ -34,6 +34,8 @@ class LocalizationResult:
     decisions: list[OracleResult] = field(default_factory=list)
     final_decisions: list[OracleResult] = field(default_factory=list)
     retrigger_intervals: list[list[str]] = field(default_factory=list)
+    revision_path: list[str] | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         """Serialize the localization result into JSON-compatible primitives."""
@@ -41,8 +43,9 @@ class LocalizationResult:
         expected_by_revision = self._expected_decisions(
             self.final_decisions or self.decisions,
             self.culprit_revision,
+            self.revision_path,
         )
-        return {
+        output = {
             "localizer": self.localizer,
             "oracle": self.oracle,
             "regression_id": self.regression_id,
@@ -80,16 +83,30 @@ class LocalizationResult:
                 for decision in self.final_decisions
             ],
         }
+        output.update(self.extra)
+        return output
 
     @staticmethod
     def _expected_decisions(
         decisions: list[OracleResult],
         culprit_revision: str | None,
+        revision_path: list[str] | None = None,
     ) -> dict[str, OracleDecision]:
         """Return expected clean/bad decisions when the culprit is in the candidates."""
 
         if culprit_revision is None:
             return {}
+
+        if revision_path is not None and culprit_revision in revision_path:
+            culprit_idx = revision_path.index(culprit_revision)
+            return {
+                revision: (
+                    OracleDecision.BAD
+                    if idx >= culprit_idx
+                    else OracleDecision.CLEAN
+                )
+                for idx, revision in enumerate(revision_path)
+            }
 
         revisions = [decision.revision for decision in decisions]
         if culprit_revision not in revisions:
@@ -746,8 +763,344 @@ class StandardMidpointBisection(CulpritLocalizer):
         return None
 
 
+class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
+    """Probabilistic bisection using posterior-median probes and a uniform prior."""
+
+    name = "ProbabilisticBisection_PosteriorMedian_UniformPrior"
+    pba_batch_size = 1
+    _POSTERIOR_TIE_EPSILON = 1e-12
+
+    def __init__(
+        self,
+        *,
+        pba_confidence_threshold: float = 0.9,
+        pba_repeat_count: int = 1,
+        pba_max_test_runs: int = 100,
+    ) -> None:
+        """Configure posterior confidence, repeated probes, and test-run budget."""
+
+        if not 0.0 < pba_confidence_threshold <= 1.0:
+            raise ValueError("pba_confidence_threshold must be in (0, 1]")
+        if pba_repeat_count < 1:
+            raise ValueError("pba_repeat_count must be at least 1")
+        if pba_max_test_runs < 1:
+            raise ValueError("pba_max_test_runs must be at least 1")
+        self.pba_confidence_threshold = pba_confidence_threshold
+        self.pba_repeat_count = pba_repeat_count
+        self.pba_max_test_runs = pba_max_test_runs
+
+    def localize(
+        self,
+        regression: Mapping[str, Any],
+        *,
+        revision_perf: RevisionPerfIndex,
+        oracle: TestOracle,
+    ) -> LocalizationResult:
+        """Update a culprit posterior until one candidate is confidently selected."""
+
+        good_revision = str(regression["good_revision"])
+        bad_revision = str(regression["bad_revision"])
+        culprit_revision = regression.get("culprit_revision")
+        culprit_revision = str(culprit_revision) if culprit_revision is not None else None
+        regression_id = self._regression_id(regression)
+        signature_id = self._signature_id(regression)
+
+        path = revision_perf.path_between(good_revision, bad_revision)
+        if path is None or len(path) < 2:
+            return LocalizationResult(
+                localizer=self.name,
+                oracle=oracle.name,
+                regression_id=regression_id,
+                alert_summary_id=regression.get("alert_summary_id"),
+                signature_id=signature_id,
+                good_revision=good_revision,
+                bad_revision=bad_revision,
+                culprit_revision=culprit_revision,
+                found_revision=None,
+                success=False,
+                undefined_reason="no_revision_path",
+                trtc_hours=None,
+                test_runs=getattr(oracle, "executor", None).test_runs
+                if hasattr(getattr(oracle, "executor", None), "test_runs")
+                else 0,
+                oracle_queries=getattr(oracle, "query_count", 0),
+                path_length=0,
+                candidate_revisions_tested=0,
+                extra=self._settings_to_json(),
+            )
+
+        candidate_revisions = path[1:]
+        posterior = [1.0 / len(candidate_revisions) for _ in candidate_revisions]
+        all_decisions: list[OracleResult] = []
+        posterior_trace: list[dict[str, Any]] = []
+        found_revision = None
+        undefined_reason = None
+
+        while len(all_decisions) < self.pba_max_test_runs:
+            best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+            if (
+                best_probability >= self.pba_confidence_threshold
+                and len(tied_indices) == 1
+            ):
+                found_revision = candidate_revisions[best_idx]
+                undefined_reason = self._undefined_reason_for_found_revision(
+                    found_revision=found_revision,
+                    path=path,
+                    culprit_revision=culprit_revision,
+                )
+                break
+
+            probe_idx = self._posterior_median_index(posterior)
+            probe_revision = candidate_revisions[probe_idx]
+            remaining_budget = self.pba_max_test_runs - len(all_decisions)
+            repeat_count = min(self.pba_repeat_count, remaining_budget)
+            decisions = oracle.classify_many(
+                [probe_revision] * repeat_count,
+                regression=regression,
+                revision_path=path,
+            )
+            all_decisions.extend(decisions)
+
+            probe_accuracy = oracle.accuracy_for(
+                probe_revision,
+                regression=regression,
+                revision_path=path,
+            )
+            self._validate_accuracy(probe_accuracy)
+            known_decisions = [
+                decision
+                for decision in decisions
+                if decision.decision is not OracleDecision.UNKNOWN
+            ]
+            for decision in known_decisions:
+                posterior = self._updated_posterior(
+                    posterior=posterior,
+                    probe_idx=probe_idx,
+                    decision=decision.decision,
+                    oracle_accuracy=probe_accuracy,
+                )
+                if posterior is None:
+                    undefined_reason = "posterior_degenerate"
+                    break
+            if undefined_reason is not None:
+                break
+
+            best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+            posterior_trace.append(
+                {
+                    "round": len(posterior_trace) + 1,
+                    "probed_revision": probe_revision,
+                    "probed_candidate_index": probe_idx,
+                    "observations": [decision.decision.value for decision in decisions],
+                    "known_observation_count": len(known_decisions),
+                    "map_revision": candidate_revisions[best_idx],
+                    "map_probability": round(best_probability, 12),
+                    "map_tie_count": len(tied_indices),
+                }
+            )
+
+        if found_revision is None and undefined_reason is None:
+            best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+            found_revision = candidate_revisions[best_idx]
+            if len(tied_indices) > 1:
+                undefined_reason = "ambiguous_posterior_tie"
+            elif best_probability < self.pba_confidence_threshold:
+                undefined_reason = "posterior_confidence_below_threshold"
+            else:
+                undefined_reason = self._undefined_reason_for_found_revision(
+                    found_revision=found_revision,
+                    path=path,
+                    culprit_revision=culprit_revision,
+                )
+
+        best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+        if undefined_reason is None:
+            undefined_reason = self._undefined_reason_for_found_revision(
+                found_revision=found_revision,
+                path=path,
+                culprit_revision=culprit_revision,
+            )
+        success = found_revision is not None and undefined_reason is None
+        executor = getattr(oracle, "executor", None)
+        trtc_hours = (
+            executor.now_minutes / 60.0
+            if success and executor is not None
+            else None
+        )
+        final_decisions = self._latest_decisions_by_path_order(
+            candidate_revisions,
+            all_decisions,
+        )
+        tested_revision_count = len({decision.revision for decision in all_decisions})
+
+        return LocalizationResult(
+            localizer=self.name,
+            oracle=oracle.name,
+            regression_id=regression_id,
+            alert_summary_id=regression.get("alert_summary_id"),
+            signature_id=signature_id,
+            good_revision=good_revision,
+            bad_revision=bad_revision,
+            culprit_revision=culprit_revision,
+            found_revision=found_revision,
+            success=success,
+            undefined_reason=None if success else undefined_reason,
+            trtc_hours=trtc_hours,
+            test_runs=(
+                executor.test_runs
+                if executor is not None
+                else sum(decision.test_runs for decision in all_decisions)
+            ),
+            oracle_queries=getattr(oracle, "query_count", len(all_decisions)),
+            path_length=len(path),
+            candidate_revisions_tested=tested_revision_count,
+            decisions=all_decisions,
+            final_decisions=final_decisions,
+            revision_path=path,
+            extra={
+                **self._settings_to_json(),
+                "pba_prior": "uniform",
+                "pba_query_strategy": "posterior_median",
+                "pba_found_revision_probability": round(best_probability, 12),
+                "pba_map_tie_count": len(tied_indices),
+                "pba_map_tied_revisions": [
+                    candidate_revisions[index] for index in tied_indices
+                ],
+                "pba_final_posterior": self._posterior_to_json(
+                    candidate_revisions,
+                    posterior,
+                ),
+                "pba_posterior_trace": posterior_trace,
+            },
+        )
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable PBA settings for result serialization."""
+
+        return {
+            "pba_batch_size": self.pba_batch_size,
+            "pba_confidence_threshold": self.pba_confidence_threshold,
+            "pba_repeat_count": self.pba_repeat_count,
+            "pba_max_test_runs": self.pba_max_test_runs,
+        }
+
+    @staticmethod
+    def _validate_accuracy(accuracy: float) -> None:
+        """Validate one oracle accuracy value before using it as a likelihood."""
+
+        if not 0.0 <= accuracy <= 1.0:
+            raise ValueError(f"oracle accuracy must be between 0 and 1: {accuracy!r}")
+
+    @classmethod
+    def _posterior_map(cls, posterior: Sequence[float]) -> tuple[int, float, list[int]]:
+        """Return the MAP index, probability, and all tied MAP indices."""
+
+        best_probability = max(posterior)
+        tied_indices = [
+            idx
+            for idx, probability in enumerate(posterior)
+            if abs(probability - best_probability) <= cls._POSTERIOR_TIE_EPSILON
+        ]
+        return tied_indices[0], best_probability, tied_indices
+
+    @staticmethod
+    def _posterior_median_index(posterior: Sequence[float]) -> int:
+        """Return the first candidate where posterior CDF reaches one half."""
+
+        cumulative_probability = 0.0
+        for idx, probability in enumerate(posterior):
+            cumulative_probability += probability
+            if cumulative_probability >= 0.5:
+                return idx
+        return len(posterior) - 1
+
+    @staticmethod
+    def _updated_posterior(
+        *,
+        posterior: Sequence[float],
+        probe_idx: int,
+        decision: OracleDecision,
+        oracle_accuracy: float,
+    ) -> list[float] | None:
+        """Apply one probabilistic-bisection likelihood update."""
+
+        updated = []
+        for candidate_idx, probability in enumerate(posterior):
+            expected_bad = candidate_idx <= probe_idx
+            if decision is OracleDecision.BAD:
+                likelihood = oracle_accuracy if expected_bad else 1.0 - oracle_accuracy
+            elif decision is OracleDecision.CLEAN:
+                likelihood = oracle_accuracy if not expected_bad else 1.0 - oracle_accuracy
+            else:
+                likelihood = 1.0
+            updated.append(probability * likelihood)
+
+        total_probability = sum(updated)
+        if total_probability <= 0.0:
+            return None
+        return [probability / total_probability for probability in updated]
+
+    @staticmethod
+    def _latest_decisions_by_path_order(
+        candidate_revisions: Sequence[str],
+        decisions: Sequence[OracleResult],
+    ) -> list[OracleResult]:
+        """Return the latest observed decision for each tested revision in path order."""
+
+        latest_by_revision: dict[str, OracleResult] = {}
+        for decision in decisions:
+            previous = latest_by_revision.get(decision.revision)
+            if (
+                previous is None
+                or decision.completed_at_minutes >= previous.completed_at_minutes
+            ):
+                latest_by_revision[decision.revision] = decision
+        return [
+            latest_by_revision[revision]
+            for revision in candidate_revisions
+            if revision in latest_by_revision
+        ]
+
+    @staticmethod
+    def _posterior_to_json(
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> list[dict[str, Any]]:
+        """Serialize the final posterior distribution in candidate order."""
+
+        return [
+            {
+                "revision": revision,
+                "probability": round(probability, 12),
+            }
+            for revision, probability in zip(candidate_revisions, posterior, strict=True)
+        ]
+
+    @staticmethod
+    def _undefined_reason_for_found_revision(
+        *,
+        found_revision: str | None,
+        path: list[str],
+        culprit_revision: str | None,
+    ) -> str | None:
+        """Return why a selected PBA revision is not a successful localization."""
+
+        if found_revision is None:
+            return "missing_found_revision"
+        if culprit_revision is None:
+            return "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return "culprit_not_in_search_range"
+        if found_revision != culprit_revision:
+            return "pba_found_is_not_culprit"
+        return None
+
+
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     Backfill.name: Backfill,
     BackfillWithRepeat.name: BackfillWithRepeat,
+    ProbabilisticBisectionPosteriorMedianUniformPrior.name: (
+        ProbabilisticBisectionPosteriorMedianUniformPrior
+    ),
     StandardMidpointBisection.name: StandardMidpointBisection,
 }

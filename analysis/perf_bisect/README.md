@@ -11,8 +11,8 @@ reports aggregate localization metrics.
   writing.
 - `calculate_oracle_metrics.py`: computes per-regression summary and replicate
   oracle accuracy from the historical measurement data.
-- `localization.py`: culprit localization algorithms. The initial algorithm is
-  `Backfill`.
+- `localization.py`: culprit localization algorithms, including backfill,
+  standard midpoint bisection, and probabilistic bisection variants.
 - `test_oracle.py`: test-oracle implementations, revision/signature indexes, and
   the simulated test executor. The initial oracle is `SummaryComparison`.
 - `per_regression_oracle_metrics.jsonl`: per-regression oracle accuracy output
@@ -32,9 +32,10 @@ the candidate range. `expected_decision` is `clean` before the culprit and `bad`
 at or after the culprit. If the known culprit is not in the reconstructed
 candidate range, these fields are `null` because the simulator cannot label each
 probed candidate's side from that path. Raw probe attempts are recorded in
-`decisions`; the decisions actually used for localization are recorded in
-`final_decisions`. Backfill results also record
-`retrigger_count` and `retrigger_intervals`.
+`decisions`; the decisions actually used for hard-decision localization are
+recorded in `final_decisions`. Backfill results also record `retrigger_count`
+and `retrigger_intervals`. Probabilistic-bisection results additionally record
+the final posterior and the posterior trace.
 
 ## Inputs
 
@@ -137,6 +138,49 @@ This process repeats up to `--backfill-retrigger-count` times before the
 localization remains undefined. The default is `2`, which models a small number
 of human retriggers without turning noisy results into an unbounded retry loop.
 
+## Probabilistic Bisection Localizer
+
+`ProbabilisticBisection_PosteriorMedian_UniformPrior` keeps a posterior
+distribution over every candidate culprit revision in the good-to-bad path. It
+uses a uniform prior, so every candidate starts with equal probability.
+
+Each probing round chooses the posterior median: the first revision whose
+cumulative posterior probability reaches `0.5`. The localizer submits
+`--pba-repeat-count` observations for that one revision. `pba_batch_size` is
+fixed at `1`, so this variant is sequential rather than batched.
+
+For each clean/bad observation, the localizer reads the oracle's accuracy for
+that probe. With `SummaryComparison`, this is the regression's
+`summary_oracle_accuracy`. If the observation matches what would be expected for
+a possible culprit, that culprit's posterior probability is multiplied by the
+oracle accuracy. If the observation contradicts that possible culprit, its
+posterior probability is multiplied by `1 - accuracy`. The posterior is then
+renormalized to sum to `1.0`.
+
+The localizer accepts a single culprit only when the highest posterior
+probability is at least `--pba-confidence-threshold` and no other candidate is
+tied for that highest probability. If there is a tie, it keeps probing until the
+tie breaks or the test budget is exhausted.
+
+`--pba-max-test-runs` is a hard budget for one regression. If the budget is
+reached before a candidate passes the confidence threshold, the result records
+the current MAP revision in `found_revision`, but the localization is still
+undefined with `posterior_confidence_below_threshold`. If multiple candidates
+remain tied for highest posterior probability, the result is undefined with
+`ambiguous_posterior_tie`.
+
+The tunable PBA parameters are:
+
+- `pba_confidence_threshold`
+- `pba_repeat_count`
+- `pba_max_test_runs`
+
+Optuna samples these from:
+
+- `--pba-confidence-threshold-min` / `--pba-confidence-threshold-max`
+- `--pba-repeat-count-min` / `--pba-repeat-count-max`
+- `--pba-max-test-runs-min` / `--pba-max-test-runs-max`
+
 ## Metrics
 
 Each summary output reports:
@@ -236,6 +280,23 @@ Change the number of Backfill retriggers:
 
 ```bash
 python analysis/perf_bisect/simulation.py --backfill-retrigger-count 3
+```
+
+Run only the posterior-median PBA localizer:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --dataset eval \
+  --localizers ProbabilisticBisection_PosteriorMedian_UniformPrior
+```
+
+Change PBA defaults:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --pba-confidence-threshold 0.9 \
+  --pba-repeat-count 2 \
+  --pba-max-test-runs 120
 ```
 
 Change the noisy-oracle random seed:

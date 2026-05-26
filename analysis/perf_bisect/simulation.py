@@ -54,10 +54,24 @@ DEFAULT_PROBE_REPEAT_COUNT_MIN = 1
 DEFAULT_PROBE_REPEAT_COUNT_MAX = 5
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MIN = 0
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MAX = 5
+DEFAULT_PBA_CONFIDENCE_THRESHOLD = 0.9
+DEFAULT_PBA_CONFIDENCE_THRESHOLD_MIN = 0.6
+DEFAULT_PBA_CONFIDENCE_THRESHOLD_MAX = 0.99
+DEFAULT_PBA_REPEAT_COUNT = 1
+DEFAULT_PBA_REPEAT_COUNT_MIN = 1
+DEFAULT_PBA_REPEAT_COUNT_MAX = 5
+DEFAULT_PBA_MAX_TEST_RUNS = 100
+DEFAULT_PBA_MAX_TEST_RUNS_MIN = 1
+DEFAULT_PBA_MAX_TEST_RUNS_MAX = 200
 OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
 TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
     "Backfill": ("backfill_retrigger_count",),
     "BackfillWithRepeat": ("backfill_retrigger_count", "probe_repeat_count"),
+    "ProbabilisticBisection_PosteriorMedian_UniformPrior": (
+        "pba_confidence_threshold",
+        "pba_repeat_count",
+        "pba_max_test_runs",
+    ),
     "StandardMidpointBisection": ("midpoint_retrigger_count",),
 }
 BEST_COMBO_METRIC_SPECS = (
@@ -101,6 +115,9 @@ class SimulationParameters:
     backfill_retrigger_count: int
     probe_repeat_count: int
     midpoint_retrigger_count: int
+    pba_confidence_threshold: float
+    pba_repeat_count: int
+    pba_max_test_runs: int
 
     def to_json(self) -> dict[str, Any]:
         """Serialize parameter values into JSON-compatible primitives."""
@@ -109,6 +126,9 @@ class SimulationParameters:
             "backfill_retrigger_count": self.backfill_retrigger_count,
             "probe_repeat_count": self.probe_repeat_count,
             "midpoint_retrigger_count": self.midpoint_retrigger_count,
+            "pba_confidence_threshold": self.pba_confidence_threshold,
+            "pba_repeat_count": self.pba_repeat_count,
+            "pba_max_test_runs": self.pba_max_test_runs,
         }
 
 
@@ -160,6 +180,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         backfill_retrigger_count=args.backfill_retrigger_count,
         probe_repeat_count=args.probe_repeat_count,
         midpoint_retrigger_count=args.midpoint_retrigger_count,
+        pba_confidence_threshold=args.pba_confidence_threshold,
+        pba_repeat_count=args.pba_repeat_count,
+        pba_max_test_runs=args.pba_max_test_runs,
     )
 
     signature_info = load_signature_info(args.signature_info)
@@ -195,6 +218,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "probe_repeat_count_max": args.probe_repeat_count_max,
             "midpoint_retrigger_count_min": args.midpoint_retrigger_count_min,
             "midpoint_retrigger_count_max": args.midpoint_retrigger_count_max,
+            "pba_confidence_threshold_min": args.pba_confidence_threshold_min,
+            "pba_confidence_threshold_max": args.pba_confidence_threshold_max,
+            "pba_repeat_count_min": args.pba_repeat_count_min,
+            "pba_repeat_count_max": args.pba_repeat_count_max,
+            "pba_max_test_runs_min": args.pba_max_test_runs_min,
+            "pba_max_test_runs_max": args.pba_max_test_runs_max,
             "objectives": [
                 {"metric": "mean_trtc_hours", "direction": "minimize"},
                 {"metric": "mean_test_runs", "direction": "minimize"},
@@ -220,6 +249,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             probe_repeat_count_max=args.probe_repeat_count_max,
             midpoint_retrigger_count_min=args.midpoint_retrigger_count_min,
             midpoint_retrigger_count_max=args.midpoint_retrigger_count_max,
+            pba_confidence_threshold_min=args.pba_confidence_threshold_min,
+            pba_confidence_threshold_max=args.pba_confidence_threshold_max,
+            pba_repeat_count_min=args.pba_repeat_count_min,
+            pba_repeat_count_max=args.pba_repeat_count_max,
+            pba_max_test_runs_min=args.pba_max_test_runs_min,
+            pba_max_test_runs_max=args.pba_max_test_runs_max,
             optuna_trials=args.optuna_trials,
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
@@ -361,6 +396,36 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pba-confidence-threshold",
+        type=float,
+        default=DEFAULT_PBA_CONFIDENCE_THRESHOLD,
+        help=(
+            "Posterior probability required for "
+            "ProbabilisticBisection_PosteriorMedian_UniformPrior to accept a "
+            "single culprit. Used directly when Optuna is disabled, and as a "
+            "fallback default for combos without tuned parameters."
+        ),
+    )
+    parser.add_argument(
+        "--pba-repeat-count",
+        type=int,
+        default=DEFAULT_PBA_REPEAT_COUNT,
+        help=(
+            "Number of repeated observations for each posterior-median PBA "
+            "probe. Used directly when Optuna is disabled, and as a fallback "
+            "default for combos without tuned parameters."
+        ),
+    )
+    parser.add_argument(
+        "--pba-max-test-runs",
+        type=int,
+        default=DEFAULT_PBA_MAX_TEST_RUNS,
+        help=(
+            "Maximum test jobs for one PBA regression before returning the MAP "
+            "guess as a low-confidence or ambiguous localization."
+        ),
+    )
+    parser.add_argument(
         "--optuna-trials",
         "--mopt-trials",
         dest="optuna_trials",
@@ -418,6 +483,42 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum StandardMidpointBisection retrigger count sampled by Optuna.",
     )
     parser.add_argument(
+        "--pba-confidence-threshold-min",
+        type=float,
+        default=DEFAULT_PBA_CONFIDENCE_THRESHOLD_MIN,
+        help="Minimum PBA confidence threshold sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-confidence-threshold-max",
+        type=float,
+        default=DEFAULT_PBA_CONFIDENCE_THRESHOLD_MAX,
+        help="Maximum PBA confidence threshold sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-repeat-count-min",
+        type=int,
+        default=DEFAULT_PBA_REPEAT_COUNT_MIN,
+        help="Minimum PBA repeat count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-repeat-count-max",
+        type=int,
+        default=DEFAULT_PBA_REPEAT_COUNT_MAX,
+        help="Maximum PBA repeat count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-max-test-runs-min",
+        type=int,
+        default=DEFAULT_PBA_MAX_TEST_RUNS_MIN,
+        help="Minimum PBA max-test-runs value sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-max-test-runs-max",
+        type=int,
+        default=DEFAULT_PBA_MAX_TEST_RUNS_MAX,
+        help="Maximum PBA max-test-runs value sampled by Optuna.",
+    )
+    parser.add_argument(
         "--random-seed",
         type=int,
         default=0,
@@ -430,6 +531,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--probe-repeat-count must be at least 1")
     if args.midpoint_retrigger_count < 0:
         parser.error("--midpoint-retrigger-count must be non-negative")
+    if not 0.0 < args.pba_confidence_threshold <= 1.0:
+        parser.error("--pba-confidence-threshold must be in (0, 1]")
+    if args.pba_repeat_count < 1:
+        parser.error("--pba-repeat-count must be at least 1")
+    if args.pba_max_test_runs < 1:
+        parser.error("--pba-max-test-runs must be at least 1")
     if args.optuna_trials < 0:
         parser.error("--optuna-trials must be non-negative")
     if args.backfill_retrigger_count_min < 0:
@@ -452,6 +559,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--midpoint-retrigger-count-max must be greater than or equal to "
             "--midpoint-retrigger-count-min"
+        )
+    if not 0.0 < args.pba_confidence_threshold_min <= 1.0:
+        parser.error("--pba-confidence-threshold-min must be in (0, 1]")
+    if not 0.0 < args.pba_confidence_threshold_max <= 1.0:
+        parser.error("--pba-confidence-threshold-max must be in (0, 1]")
+    if args.pba_confidence_threshold_max < args.pba_confidence_threshold_min:
+        parser.error(
+            "--pba-confidence-threshold-max must be greater than or equal to "
+            "--pba-confidence-threshold-min"
+        )
+    if args.pba_repeat_count_min < 1:
+        parser.error("--pba-repeat-count-min must be at least 1")
+    if args.pba_repeat_count_max < args.pba_repeat_count_min:
+        parser.error(
+            "--pba-repeat-count-max must be greater than or equal to "
+            "--pba-repeat-count-min"
+        )
+    if args.pba_max_test_runs_min < 1:
+        parser.error("--pba-max-test-runs-min must be at least 1")
+    if args.pba_max_test_runs_max < args.pba_max_test_runs_min:
+        parser.error(
+            "--pba-max-test-runs-max must be greater than or equal to "
+            "--pba-max-test-runs-min"
         )
     if args.optuna_seed is None:
         args.optuna_seed = args.random_seed
@@ -568,6 +698,14 @@ def run_dataset(
             "backfill_retrigger_count": default_parameters.backfill_retrigger_count,
             "probe_repeat_count": default_parameters.probe_repeat_count,
             "midpoint_retrigger_count": default_parameters.midpoint_retrigger_count,
+            "pba_batch_size": 1,
+            "pba_prior": "uniform",
+            "pba_query_strategy": "posterior_median",
+            "pba_confidence_threshold": (
+                default_parameters.pba_confidence_threshold
+            ),
+            "pba_repeat_count": default_parameters.pba_repeat_count,
+            "pba_max_test_runs": default_parameters.pba_max_test_runs,
             "random_seed": random_seed,
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
@@ -799,6 +937,12 @@ def build_localizer(
         return localizer_cls(
             midpoint_retrigger_count=parameters.midpoint_retrigger_count,
         )
+    if localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
+        return localizer_cls(
+            pba_confidence_threshold=parameters.pba_confidence_threshold,
+            pba_repeat_count=parameters.pba_repeat_count,
+            pba_max_test_runs=parameters.pba_max_test_runs,
+        )
     return localizer_cls()
 
 
@@ -818,6 +962,12 @@ def optimize_parameters_on_eval(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    pba_confidence_threshold_min: float,
+    pba_confidence_threshold_max: float,
+    pba_repeat_count_min: int,
+    pba_repeat_count_max: int,
+    pba_max_test_runs_min: int,
+    pba_max_test_runs_max: int,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -844,6 +994,12 @@ def optimize_parameters_on_eval(
                 probe_repeat_count_max=probe_repeat_count_max,
                 midpoint_retrigger_count_min=midpoint_retrigger_count_min,
                 midpoint_retrigger_count_max=midpoint_retrigger_count_max,
+                pba_confidence_threshold_min=pba_confidence_threshold_min,
+                pba_confidence_threshold_max=pba_confidence_threshold_max,
+                pba_repeat_count_min=pba_repeat_count_min,
+                pba_repeat_count_max=pba_repeat_count_max,
+                pba_max_test_runs_min=pba_max_test_runs_min,
+                pba_max_test_runs_max=pba_max_test_runs_max,
                 optuna_trials=optuna_trials,
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
@@ -873,6 +1029,12 @@ def optimize_combo_on_eval(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    pba_confidence_threshold_min: float,
+    pba_confidence_threshold_max: float,
+    pba_repeat_count_min: int,
+    pba_repeat_count_max: int,
+    pba_max_test_runs_min: int,
+    pba_max_test_runs_max: int,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -914,6 +1076,12 @@ def optimize_combo_on_eval(
             probe_repeat_count_max=probe_repeat_count_max,
             midpoint_retrigger_count_min=midpoint_retrigger_count_min,
             midpoint_retrigger_count_max=midpoint_retrigger_count_max,
+            pba_confidence_threshold_min=pba_confidence_threshold_min,
+            pba_confidence_threshold_max=pba_confidence_threshold_max,
+            pba_repeat_count_min=pba_repeat_count_min,
+            pba_repeat_count_max=pba_repeat_count_max,
+            pba_max_test_runs_min=pba_max_test_runs_min,
+            pba_max_test_runs_max=pba_max_test_runs_max,
         )
         _, metrics = run_combo(
             regressions=regressions,
@@ -960,6 +1128,12 @@ def suggest_parameters(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    pba_confidence_threshold_min: float,
+    pba_confidence_threshold_max: float,
+    pba_repeat_count_min: int,
+    pba_repeat_count_max: int,
+    pba_max_test_runs_min: int,
+    pba_max_test_runs_max: int,
 ) -> SimulationParameters:
     """Ask Optuna for one parameter set for the selected algorithm combo."""
 
@@ -967,6 +1141,9 @@ def suggest_parameters(
     backfill_retrigger_count = default_parameters.backfill_retrigger_count
     probe_repeat_count = default_parameters.probe_repeat_count
     midpoint_retrigger_count = default_parameters.midpoint_retrigger_count
+    pba_confidence_threshold = default_parameters.pba_confidence_threshold
+    pba_repeat_count = default_parameters.pba_repeat_count
+    pba_max_test_runs = default_parameters.pba_max_test_runs
     if localizer_name == "Backfill":
         backfill_retrigger_count = trial.suggest_int(
             "Backfill_backfill_retrigger_count",
@@ -990,10 +1167,32 @@ def suggest_parameters(
             int(midpoint_retrigger_count_min),
             int(midpoint_retrigger_count_max),
         )
+    elif localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
+        pba_confidence_threshold = trial.suggest_float(
+            (
+                "ProbabilisticBisection_PosteriorMedian_UniformPrior_"
+                "pba_confidence_threshold"
+            ),
+            float(pba_confidence_threshold_min),
+            float(pba_confidence_threshold_max),
+        )
+        pba_repeat_count = trial.suggest_int(
+            "ProbabilisticBisection_PosteriorMedian_UniformPrior_pba_repeat_count",
+            int(pba_repeat_count_min),
+            int(pba_repeat_count_max),
+        )
+        pba_max_test_runs = trial.suggest_int(
+            "ProbabilisticBisection_PosteriorMedian_UniformPrior_pba_max_test_runs",
+            int(pba_max_test_runs_min),
+            int(pba_max_test_runs_max),
+        )
     return SimulationParameters(
         backfill_retrigger_count=int(backfill_retrigger_count),
         probe_repeat_count=int(probe_repeat_count),
         midpoint_retrigger_count=int(midpoint_retrigger_count),
+        pba_confidence_threshold=float(pba_confidence_threshold),
+        pba_repeat_count=int(pba_repeat_count),
+        pba_max_test_runs=int(pba_max_test_runs),
     )
 
 
@@ -1040,6 +1239,9 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
         backfill_retrigger_count=int(raw_parameters["backfill_retrigger_count"]),
         probe_repeat_count=int(raw_parameters["probe_repeat_count"]),
         midpoint_retrigger_count=int(raw_parameters["midpoint_retrigger_count"]),
+        pba_confidence_threshold=float(raw_parameters["pba_confidence_threshold"]),
+        pba_repeat_count=int(raw_parameters["pba_repeat_count"]),
+        pba_max_test_runs=int(raw_parameters["pba_max_test_runs"]),
     )
 
 

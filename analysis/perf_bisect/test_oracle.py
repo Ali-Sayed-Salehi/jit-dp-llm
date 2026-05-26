@@ -219,6 +219,17 @@ class TestOracle:
             for revision in revisions
         ]
 
+    def accuracy_for(
+        self,
+        revision: str,
+        *,
+        regression: Mapping[str, Any],
+        revision_path: Sequence[str],
+    ) -> float:
+        """Return the clean/bad decision accuracy for one revision probe."""
+
+        raise NotImplementedError
+
 
 class SummaryComparison(TestOracle):
     """Classify revisions with a per-regression noisy summary oracle."""
@@ -352,6 +363,18 @@ class SummaryComparison(TestOracle):
         if expected_decision is OracleDecision.BAD:
             return OracleDecision.CLEAN
         return OracleDecision.BAD
+
+    def accuracy_for(
+        self,
+        revision: str,
+        *,
+        regression: Mapping[str, Any],
+        revision_path: Sequence[str],
+    ) -> float:
+        """Return the configured per-regression summary-oracle accuracy."""
+
+        del revision, regression, revision_path
+        return self.oracle_accuracy
 
     @staticmethod
     def _expected_decision(
