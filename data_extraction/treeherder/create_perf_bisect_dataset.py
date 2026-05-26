@@ -7,9 +7,6 @@ Inputs:
   - `datasets/mozilla_perf_bisect/all_commits.jsonl`
   - `datasets/mozilla_perf_bisect/alert_summary_fail_perf_sigs_no_fw_2_6_18.csv`
   - Optional: `datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl`
-  - `datasets/mozilla_code_review/all_commits.jsonl`
-  - `datasets/mozilla_code_review/risk_predictions_eval.json`
-  - `datasets/mozilla_code_review/risk_predictions_final_test.json`
 
 Output:
   - `datasets/mozilla_perf_bisect/perf_bisect_regressions_eval.jsonl`
@@ -22,7 +19,6 @@ Each output JSONL row contains:
   - `bad_revision`
   - `num_candidate_revisions`
   - `culprit_revision`
-  - `bug_inducing`
   - `failing_sig`
 
 `regression_id` is a sequential row identifier. IDs start at 1 in the eval
@@ -49,10 +45,6 @@ Implementation notes:
   - Eval and final-test split boundaries are computed from the shuffled
     `samples` arrays in the prediction JSON files by locating those commits in
     the parent-before-child `all_commits.jsonl` order.
-  - `bug_inducing` is the culprit revision's `true_label` from the code-review
-    risk prediction JSON files. Labels are inherited backward across contiguous
-    same-`Bug <id>` commit blocks, matching the risk-score expansion logic.
-    Culprit revisions without a direct or inherited label default to `0`.
   - If `per_sig_perf_data_info.jsonl` is present, its `alert_threshold` and
     `platform` fields are used. Otherwise `alert_threshold` remains `null`,
     and `platform` falls back to the alert payload's
@@ -68,7 +60,6 @@ import csv
 from dataclasses import dataclass
 import json
 import os
-import re
 import sys
 from typing import Any
 
@@ -114,24 +105,6 @@ DEFAULT_FINAL_TEST_PREDS_JSON = os.path.join(
     "mozilla_perf_bisect",
     "final_test_results_perf_codebert_final_test.json",
 )
-DEFAULT_CODE_REVIEW_COMMITS_JSONL = os.path.join(
-    REPO_ROOT,
-    "datasets",
-    "mozilla_code_review",
-    "all_commits.jsonl",
-)
-DEFAULT_CODE_REVIEW_EVAL_RISK_PREDS_JSON = os.path.join(
-    REPO_ROOT,
-    "datasets",
-    "mozilla_code_review",
-    "risk_predictions_eval.json",
-)
-DEFAULT_CODE_REVIEW_FINAL_TEST_RISK_PREDS_JSON = os.path.join(
-    REPO_ROOT,
-    "datasets",
-    "mozilla_code_review",
-    "risk_predictions_final_test.json",
-)
 DEFAULT_EVAL_OUTPUT_JSONL = os.path.join(
     REPO_ROOT,
     "datasets",
@@ -147,8 +120,6 @@ DEFAULT_FINAL_TEST_OUTPUT_JSONL = os.path.join(
 
 NULL_NODE = "0000000000000000000000000000000000000000"
 EXCLUDED_ALERT_SUMMARY_IDS = {46805}
-BUG_RE = re.compile(r"^\s*Bug\s+(\d+)\s*[-:]?\s*", re.IGNORECASE)
-REVERT_RE = re.compile(r"^\s*(revert|backed out)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -246,30 +217,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--code-review-commits-jsonl",
-        default=DEFAULT_CODE_REVIEW_COMMITS_JSONL,
-        help=(
-            "Path to the code-review all_commits.jsonl used to expand "
-            "bug-inducing labels across contiguous same-ticket commit blocks."
-        ),
-    )
-    parser.add_argument(
-        "--code-review-eval-risk-preds-json",
-        default=DEFAULT_CODE_REVIEW_EVAL_RISK_PREDS_JSON,
-        help=(
-            "Code-review risk prediction JSON whose true_label values provide "
-            "eval bug_inducing labels."
-        ),
-    )
-    parser.add_argument(
-        "--code-review-final-test-risk-preds-json",
-        default=DEFAULT_CODE_REVIEW_FINAL_TEST_RISK_PREDS_JSON,
-        help=(
-            "Code-review risk prediction JSON whose true_label values provide "
-            "final-test bug_inducing labels."
-        ),
-    )
-    parser.add_argument(
         "--eval-output",
         default=DEFAULT_EVAL_OUTPUT_JSONL,
         help="Eval output JSONL path.",
@@ -355,28 +302,6 @@ def load_commit_graph(commits_jsonl: str) -> CommitGraph:
 
     print(f"Loaded {total_commits} commits from {commits_jsonl}.")
     return CommitGraph(node_to_index=node_to_index, parents_by_node=parents_by_node)
-
-
-def load_commits_for_bug_labels(commits_jsonl: str) -> list[dict[str, Any]]:
-    ensure_file_exists(commits_jsonl)
-
-    commits: list[dict[str, Any]] = []
-    seen_nodes: set[str] = set()
-    for line_num, record in iter_jsonl(commits_jsonl):
-        if not isinstance(record, dict):
-            raise ValueError(f"Expected object at {commits_jsonl}:{line_num}.")
-
-        node = record.get("node")
-        if not isinstance(node, str) or not node:
-            raise ValueError(f"Commit at {commits_jsonl}:{line_num} is missing node.")
-        if node in seen_nodes:
-            raise ValueError(f"Duplicate commit node encountered: {node}")
-
-        seen_nodes.add(node)
-        commits.append(record)
-
-    print(f"Loaded {len(commits)} commits for bug labels from {commits_jsonl}.")
-    return commits
 
 
 def classify_culprit_boundary(
@@ -470,200 +395,6 @@ def load_prediction_sample_commit_ids(predictions_json: str) -> tuple[set[str], 
         )
 
     return commit_ids, len(samples)
-
-
-def load_prediction_rows(predictions_json: str) -> tuple[list[dict[str, Any]], str]:
-    ensure_file_exists(predictions_json)
-
-    try:
-        with open(predictions_json, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {predictions_json}: {e}") from e
-
-    if not isinstance(payload, dict):
-        raise ValueError(
-            f"Expected top-level object in {predictions_json}, "
-            f"got {type(payload).__name__}."
-        )
-
-    rows = payload.get("samples")
-    row_field_name = "samples"
-    if not isinstance(rows, list):
-        rows = payload.get("results")
-        row_field_name = "results"
-
-    if not isinstance(rows, list):
-        raise ValueError(
-            f"Expected {predictions_json} to contain a list field named "
-            "'samples' or 'results'."
-        )
-
-    return rows, row_field_name
-
-
-def parse_binary_label(
-    value: Any,
-    *,
-    path: str,
-    row_index: int,
-    field: str,
-) -> int:
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, int) and value in (0, 1):
-        return value
-    if isinstance(value, float) and value.is_integer() and int(value) in (0, 1):
-        return int(value)
-    raise ValueError(
-        f"{path}: row {row_index} has invalid {field}: {value!r}; "
-        "expected 0 or 1."
-    )
-
-
-def load_bug_inducing_labels_from_predictions(predictions_json: str) -> dict[str, int]:
-    rows, row_field_name = load_prediction_rows(predictions_json)
-
-    labels: dict[str, int] = {}
-    for row_index, row in enumerate(rows):
-        if not isinstance(row, dict):
-            raise ValueError(
-                f"{predictions_json}: {row_field_name}[{row_index}] is not an object."
-            )
-
-        commit_id = row.get("commit_id")
-        if not isinstance(commit_id, str) or not commit_id.strip():
-            raise ValueError(
-                f"{predictions_json}: {row_field_name}[{row_index}] has invalid "
-                "commit_id."
-            )
-        commit_id = commit_id.strip()
-
-        if "true_label" not in row:
-            raise ValueError(
-                f"{predictions_json}: {row_field_name}[{row_index}] is missing "
-                "true_label."
-            )
-        label = parse_binary_label(
-            row.get("true_label"),
-            path=predictions_json,
-            row_index=row_index,
-            field="true_label",
-        )
-
-        existing = labels.get(commit_id)
-        if existing is not None and existing != label:
-            raise ValueError(
-                f"{predictions_json}: duplicate commit_id {commit_id!r} has "
-                f"conflicting true_label values: {existing} vs {label}."
-            )
-        labels[commit_id] = label
-
-    if not labels:
-        raise ValueError(f"No bug-inducing labels found in {predictions_json}.")
-
-    print(
-        f"Loaded {len(labels)} bug-inducing labels from {len(rows)} "
-        f"{row_field_name} rows in {predictions_json}."
-    )
-    return labels
-
-
-def load_combined_bug_inducing_labels(predictions_jsons: list[str]) -> dict[str, int]:
-    combined: dict[str, int] = {}
-
-    for predictions_json in predictions_jsons:
-        labels = load_bug_inducing_labels_from_predictions(predictions_json)
-        for commit_id, label in labels.items():
-            existing = combined.get(commit_id)
-            if existing is not None and existing != label:
-                raise ValueError(
-                    f"{commit_id} appears in multiple risk prediction files with "
-                    f"different true_label values: {existing} vs {label}."
-                )
-            combined[commit_id] = label
-
-    return combined
-
-
-def bug_id_from_desc(desc: Any) -> str | None:
-    text = desc if isinstance(desc, str) else ""
-    if REVERT_RE.match(text):
-        return None
-    match = BUG_RE.match(text)
-    return match.group(1) if match else None
-
-
-def expand_labels_to_contiguous_bug_blocks(
-    *,
-    commits: list[dict[str, Any]],
-    node_to_index: dict[str, int],
-    direct_labels: dict[str, int],
-) -> tuple[dict[str, int], dict[str, str]]:
-    expanded: dict[str, int] = dict(direct_labels)
-    inherited_from: dict[str, str] = {}
-
-    for labeled_commit_id, label in direct_labels.items():
-        index = node_to_index.get(labeled_commit_id)
-        if index is None:
-            continue
-
-        bug_id = bug_id_from_desc(commits[index].get("desc"))
-        if bug_id is None:
-            continue
-
-        cursor = index
-        while cursor >= 0 and bug_id_from_desc(commits[cursor].get("desc")) == bug_id:
-            commit_id = commits[cursor]["node"]
-            existing = expanded.get(commit_id)
-            if existing is not None and existing != label:
-                raise ValueError(
-                    f"Conflicting inherited bug-inducing labels for {commit_id}: "
-                    f"{existing} vs {label} from {labeled_commit_id}."
-                )
-
-            expanded[commit_id] = label
-            if commit_id != labeled_commit_id:
-                inherited_from[commit_id] = labeled_commit_id
-            cursor -= 1
-
-    return expanded, inherited_from
-
-
-def load_bug_inducing_labels(
-    *,
-    commits_jsonl: str,
-    prediction_jsons: list[str],
-) -> dict[str, int]:
-    commits = load_commits_for_bug_labels(commits_jsonl)
-    node_to_index = {
-        commit["node"]: index
-        for index, commit in enumerate(commits)
-        if isinstance(commit.get("node"), str)
-    }
-    direct_labels = load_combined_bug_inducing_labels(prediction_jsons)
-    expanded_labels, inherited_from = expand_labels_to_contiguous_bug_blocks(
-        commits=commits,
-        node_to_index=node_to_index,
-        direct_labels=direct_labels,
-    )
-
-    missing_direct_labels = sum(
-        1 for commit_id in direct_labels if commit_id not in node_to_index
-    )
-    if missing_direct_labels:
-        print(
-            f"[WARN] {missing_direct_labels} direct bug-inducing labels could "
-            "not be expanded because their commits are missing from "
-            f"{commits_jsonl}."
-        )
-
-    print(
-        "Prepared bug-inducing labels for "
-        f"{len(expanded_labels)} commits "
-        f"({len(direct_labels)} direct, {len(inherited_from)} inherited)."
-    )
-    return expanded_labels
 
 
 def build_split_boundary(
@@ -874,8 +605,6 @@ def collect_output_rows(
     bad_revision: str,
     num_candidate_revisions: int,
     culprit_revision: str,
-    bug_inducing: int,
-    bug_inducing_label_found: bool,
     failing_sig_records: list[dict[str, Any]],
     stats: Counter[str],
     limit: int,
@@ -891,16 +620,11 @@ def collect_output_rows(
                 "bad_revision": bad_revision,
                 "num_candidate_revisions": num_candidate_revisions,
                 "culprit_revision": culprit_revision,
-                "bug_inducing": bug_inducing,
                 "failing_sig": failing_sig,
             }
         )
         stats["rows_written"] += 1
         stats[f"rows_written_{split_name}"] += 1
-        if bug_inducing_label_found:
-            stats["rows_with_bug_inducing_label"] += 1
-        else:
-            stats["rows_without_bug_inducing_label"] += 1
 
     return False
 
@@ -929,14 +653,9 @@ def create_dataset(
     sig_info_jsonl: str,
     eval_preds_json: str,
     final_test_preds_json: str,
-    code_review_commits_jsonl: str = DEFAULT_CODE_REVIEW_COMMITS_JSONL,
-    code_review_eval_risk_preds_json: str = DEFAULT_CODE_REVIEW_EVAL_RISK_PREDS_JSON,
-    code_review_final_test_risk_preds_json: str = (
-        DEFAULT_CODE_REVIEW_FINAL_TEST_RISK_PREDS_JSON
-    ),
-    eval_output_jsonl: str = DEFAULT_EVAL_OUTPUT_JSONL,
-    final_test_output_jsonl: str = DEFAULT_FINAL_TEST_OUTPUT_JSONL,
-    limit: int = 0,
+    eval_output_jsonl: str,
+    final_test_output_jsonl: str,
+    limit: int,
 ) -> None:
     ensure_file_exists(alert_summaries_csv)
     ensure_file_exists(commits_jsonl)
@@ -945,13 +664,6 @@ def create_dataset(
 
     commit_graph = load_commit_graph(commits_jsonl)
     node_to_index = commit_graph.node_to_index
-    bug_inducing_labels = load_bug_inducing_labels(
-        commits_jsonl=code_review_commits_jsonl,
-        prediction_jsons=[
-            code_review_eval_risk_preds_json,
-            code_review_final_test_risk_preds_json,
-        ],
-    )
     eval_boundary = build_split_boundary(
         name="eval",
         predictions_json=eval_preds_json,
@@ -1078,9 +790,6 @@ def create_dataset(
                 )
                 continue
 
-            bug_inducing_label_found = culprit_revision in bug_inducing_labels
-            bug_inducing = bug_inducing_labels.get(culprit_revision, 0)
-
             try:
                 alerts = parse_alerts(row.get("alerts") or "", row_num=row_num)
             except ValueError as e:
@@ -1107,8 +816,6 @@ def create_dataset(
                     bad_revision=bad_revision,
                     num_candidate_revisions=num_candidate_revisions,
                     culprit_revision=culprit_revision,
-                    bug_inducing=bug_inducing,
-                    bug_inducing_label_found=bug_inducing_label_found,
                     failing_sig_records=failing_sig_records,
                     stats=stats,
                     limit=limit,
@@ -1191,14 +898,6 @@ def create_dataset(
         f"{stats['rows_skipped_too_few_candidate_revisions']}"
     )
     print(
-        "  rows_with_bug_inducing_label="
-        f"{stats['rows_with_bug_inducing_label']}"
-    )
-    print(
-        "  rows_without_bug_inducing_label="
-        f"{stats['rows_without_bug_inducing_label']}"
-    )
-    print(
         "  failing_sigs_missing_alert_threshold="
         f"{stats['failing_sigs_missing_alert_threshold']}"
     )
@@ -1217,11 +916,6 @@ def main() -> None:
         sig_info_jsonl=args.sig_info_jsonl,
         eval_preds_json=args.eval_preds_json,
         final_test_preds_json=args.final_test_preds_json,
-        code_review_commits_jsonl=args.code_review_commits_jsonl,
-        code_review_eval_risk_preds_json=args.code_review_eval_risk_preds_json,
-        code_review_final_test_risk_preds_json=(
-            args.code_review_final_test_risk_preds_json
-        ),
         eval_output_jsonl=args.eval_output,
         final_test_output_jsonl=args.final_test_output,
         limit=args.limit,
