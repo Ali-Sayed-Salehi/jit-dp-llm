@@ -23,8 +23,12 @@ repository are fetched with `differential.revision.search` and appended to:
     datasets/mozilla_code_review/all_drevs.jsonl
 
 Each output line is one raw revision object returned by Conduit. If the output
-file already exists, DREV IDs already present in the file are skipped, allowing
-interrupted runs to resume without duplicate rows.
+file already exists, DREV IDs already present in the file are skipped. The same
+output file is also used for timestamp-based resume: the script scans existing
+rows, finds the maximum persisted `fields.dateCreated`, and re-queries from
+that timestamp inclusively. Inclusive resume plus DREV-ID deduplication avoids
+losing rows when a page boundary or interrupted write falls in the middle of
+several revisions with the same timestamp.
 """
 
 from __future__ import annotations
@@ -75,6 +79,13 @@ class DrevWindow:
     end_epoch: int
     start_datetime: datetime
     end_datetime: datetime
+
+
+@dataclass
+class ExistingOutputState:
+    drev_ids: set[int]
+    max_date_created: int | None
+    can_resume_from_timestamp: bool
 
 
 class ConduitCaller:
@@ -414,22 +425,102 @@ def build_drev_window(
     )
 
 
-def load_existing_drev_ids(path: Path) -> set[int]:
-    if not path.exists():
-        return set()
+def revision_date_created(revision: dict[str, Any]) -> int:
+    fields = revision.get("fields", {})
+    if not isinstance(fields, dict):
+        raise ValueError(f"Revision row is missing fields: {revision!r}")
+    date_created = fields.get("dateCreated")
+    if isinstance(date_created, bool):
+        raise ValueError(f"Revision row has invalid dateCreated: {revision!r}")
+    try:
+        timestamp = int(date_created)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Revision row has invalid dateCreated: {revision!r}"
+        ) from exc
+    if timestamp < 0:
+        raise ValueError(f"Revision row has negative dateCreated: {revision!r}")
+    return timestamp
+
+
+def revision_repository_phid(revision: dict[str, Any]) -> str | None:
+    fields = revision.get("fields", {})
+    if not isinstance(fields, dict):
+        return None
+    repository_phid = fields.get("repositoryPHID")
+    return repository_phid if isinstance(repository_phid, str) else None
+
+
+def load_existing_output_state(
+    *,
+    output_jsonl: Path,
+    repository_phid: str,
+    window: DrevWindow,
+) -> ExistingOutputState:
+    if not output_jsonl.exists():
+        return ExistingOutputState(
+            drev_ids=set(),
+            max_date_created=None,
+            can_resume_from_timestamp=False,
+        )
 
     existing_drev_ids: set[int] = set()
     duplicate_count = 0
-    for line_num, record in iter_jsonl(path):
+    max_date_created: int | None = None
+    previous_date_created: int | None = None
+    can_resume_from_timestamp = True
+
+    for line_num, record in iter_jsonl(output_jsonl):
         drev = record.get("drev") if isinstance(record.get("drev"), dict) else record
-        drev_id = drev.get("id") if isinstance(drev, dict) else None
+        if not isinstance(drev, dict):
+            raise ValueError(f"{output_jsonl}:{line_num}: missing DREV object")
+
+        drev_id = drev.get("id")
         if not isinstance(drev_id, int):
-            raise ValueError(f"{path}:{line_num}: missing integer DREV id")
+            raise ValueError(f"{output_jsonl}:{line_num}: missing integer DREV id")
+
+        repository = revision_repository_phid(drev)
+        if repository is not None and repository != repository_phid:
+            print(
+                f"[WARN] {output_jsonl}:{line_num}: D{drev_id} belongs to "
+                f"{repository}, not {repository_phid}; timestamp resume disabled.",
+                file=sys.stderr,
+            )
+            can_resume_from_timestamp = False
+
+        date_created = revision_date_created(drev)
+        if not window.start_epoch <= date_created <= window.end_epoch:
+            print(
+                f"[WARN] {output_jsonl}:{line_num}: D{drev_id} has "
+                f"dateCreated={date_created} outside the current query window; "
+                "timestamp resume disabled.",
+                file=sys.stderr,
+            )
+            can_resume_from_timestamp = False
+
+        if (
+            previous_date_created is not None
+            and date_created < previous_date_created
+        ):
+            print(
+                f"[WARN] {output_jsonl}:{line_num}: dateCreated went backward "
+                f"from {previous_date_created} to {date_created}; timestamp "
+                "resume disabled.",
+                file=sys.stderr,
+            )
+            can_resume_from_timestamp = False
+        previous_date_created = date_created
+        max_date_created = (
+            date_created
+            if max_date_created is None
+            else max(max_date_created, date_created)
+        )
+
         if drev_id in existing_drev_ids:
             duplicate_count += 1
             print(
                 f"[WARN] Duplicate existing output row for D{drev_id} "
-                f"at {path}:{line_num}",
+                f"at {output_jsonl}:{line_num}",
                 file=sys.stderr,
             )
             continue
@@ -437,16 +528,34 @@ def load_existing_drev_ids(path: Path) -> set[int]:
 
     if existing_drev_ids:
         print(
-            f"Found {len(existing_drev_ids)} existing DREV rows in {path}; "
+            f"Found {len(existing_drev_ids)} existing DREV rows in {output_jsonl}; "
             "matching DREVs will be skipped.",
             file=sys.stderr,
         )
     if duplicate_count:
         print(
-            f"[WARN] Found {duplicate_count} duplicate existing output rows in {path}.",
+            f"[WARN] Found {duplicate_count} duplicate existing output rows in "
+            f"{output_jsonl}.",
             file=sys.stderr,
         )
-    return existing_drev_ids
+    if can_resume_from_timestamp and max_date_created is not None:
+        print(
+            f"Resuming from existing output timestamp: "
+            f"createdStart={max_date_created}.",
+            file=sys.stderr,
+        )
+    elif existing_drev_ids:
+        print(
+            "[WARN] Timestamp resume disabled; scanning the full query window and "
+            "deduping against existing output.",
+            file=sys.stderr,
+        )
+
+    return ExistingOutputState(
+        drev_ids=existing_drev_ids,
+        max_date_created=max_date_created,
+        can_resume_from_timestamp=can_resume_from_timestamp,
+    )
 
 
 def fetch_and_write_drevs(
@@ -456,6 +565,7 @@ def fetch_and_write_drevs(
     existing_drev_ids: set[int],
     repository_phid: str,
     window: DrevWindow,
+    resume_created_start_epoch: int,
     page_limit: int,
     max_pages: int | None,
 ) -> dict[str, int]:
@@ -465,7 +575,7 @@ def fetch_and_write_drevs(
         raise ValueError("--max-pages must be positive when provided")
 
     constraints = {
-        "createdStart": window.start_epoch,
+        "createdStart": resume_created_start_epoch,
         "createdEnd": window.end_epoch,
         "repositoryPHIDs": [repository_phid],
     }
@@ -494,6 +604,7 @@ def fetch_and_write_drevs(
                     f"`data` is {type(data).__name__}"
                 )
 
+            page_written_count = 0
             for revision in data:
                 if not isinstance(revision, dict):
                     raise ValueError(
@@ -507,15 +618,20 @@ def fetch_and_write_drevs(
                     raise ValueError(
                         f"Revision row is missing integer id: {revision!r}"
                     )
+                revision_date_created(revision)
 
                 if drev_id in existing_drev_ids:
                     stats["existing_rows_skipped"] += 1
                     continue
 
                 output_file.write(json.dumps(revision) + "\n")
-                output_file.flush()
                 existing_drev_ids.add(drev_id)
                 stats["drevs_written"] += 1
+                page_written_count += 1
+
+            if page_written_count:
+                output_file.flush()
+                os.fsync(output_file.fileno())
 
             cursor = result.get("cursor", {})
             after_cursor = cursor.get("after") if isinstance(cursor, dict) else None
@@ -588,13 +704,26 @@ def main(argv: list[str] | None = None) -> None:
 
     caller = ConduitCaller(min_interval_seconds=args.rate_limit_min_interval)
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
-    existing_drev_ids = load_existing_drev_ids(output_jsonl)
+    existing_output = load_existing_output_state(
+        output_jsonl=output_jsonl,
+        repository_phid=repository_phid,
+        window=window,
+    )
+    resume_created_start_epoch = (
+        existing_output.max_date_created
+        if (
+            existing_output.can_resume_from_timestamp
+            and existing_output.max_date_created is not None
+        )
+        else window.start_epoch
+    )
     stats = fetch_and_write_drevs(
         client=client,
         output_jsonl=output_jsonl,
-        existing_drev_ids=existing_drev_ids,
+        existing_drev_ids=existing_output.drev_ids,
         repository_phid=repository_phid,
         window=window,
+        resume_created_start_epoch=resume_created_start_epoch,
         page_limit=args.page_limit,
         max_pages=args.max_pages,
     )
