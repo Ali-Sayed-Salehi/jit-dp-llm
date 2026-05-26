@@ -64,9 +64,7 @@ python data_extraction/conduit/get_per_commit_drevs.py \
   --final-test-predictions-json datasets/mozilla_code_review/risk_predictions_final_test.json \
   --risk-scores-jsonl datasets/mozilla_code_review/per_commit_risk_scores.jsonl \
   --api-url https://phabricator.services.mozilla.com/api/ \
-  --rate-limit-min-interval 0.5 \
-  --max-retries 5 \
-  --retry-base-sleep 5.0
+  --rate-limit-min-interval 0.5
 ```
 
 This script:
@@ -93,19 +91,18 @@ python data_extraction/conduit/get_drevs_transactions.py \
   --output-jsonl datasets/mozilla_code_review/per_commit_drev_transactions.jsonl \
   --api-url https://phabricator.services.mozilla.com/api/ \
   --page-limit 100 \
-  --rate-limit-min-interval 0.5 \
-  --max-retries 5 \
-  --retry-base-sleep 5.0
+  --rate-limit-min-interval 0.5
 ```
 
 This script:
 
 - loads `per_commit_drevs.jsonl`;
+- skips commit rows already present in the output JSONL;
 - validates `dataset_split`, DREV id/PHID, and `risk_score`;
 - fetches all transaction pages for each unique DREV PHID with
-  `transaction.search`;
+  `transaction.search`, skipping failed API calls without retrying;
 - preserves `dataset_split` and `risk_score`;
-- writes one row per commit/DREV with all transactions nested in a list.
+- appends one row per commit/DREV with all transactions nested in a list.
 
 Output row shape:
 

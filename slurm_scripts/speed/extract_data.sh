@@ -85,16 +85,12 @@ echo "running the data extraction script . . ."
 # --eval-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_eval.json \
 # --final-test-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_final_test.json \
 # --debug \
-# --rate-limit-min-interval 0.5 \
-# --max-retries 5 \
-# --retry-base-sleep 5.0
+# --rate-limit-min-interval 0.5
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_drevs_transactions.py \
 # --debug \
 # --page-limit 100 \
-# --rate-limit-min-interval 0.5 \
-# --max-retries 5 \
-# --retry-base-sleep 5.0
+# --rate-limit-min-interval 0.5
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_file_path_timelines.py \
 # --skip-repo-update \

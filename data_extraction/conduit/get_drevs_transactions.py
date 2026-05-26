@@ -7,13 +7,18 @@ This script reads:
     datasets/mozilla_code_review/per_commit_drevs.jsonl
 
 For each DREV row, it fetches all transactions with Conduit's
-`transaction.search` and writes one JSON object per commit/DREV to:
+`transaction.search` and appends one JSON object per commit/DREV to:
 
     datasets/mozilla_code_review/per_commit_drev_transactions.jsonl
 
 Each output row contains `commit_id`, `drev_id`, `dataset_split`, `risk_score`,
 and `transactions`, where `transactions` is the list of raw transaction objects
 returned by Conduit.
+
+If the output file already exists, rows with commit IDs already present in the
+file are skipped before any Conduit API call is made. Failed API calls are
+skipped without retrying, so interrupted or rate-limited runs can be resumed by
+running the script again later.
 
 Use `--debug` to process only 10 eval DREV rows and 10 final-test DREV rows
 from per_commit_drevs.jsonl. The debug subset is selected before initializing
@@ -60,42 +65,20 @@ class ConduitCaller:
         self,
         *,
         min_interval_seconds: float,
-        max_retries: int,
-        retry_base_sleep_seconds: float,
     ) -> None:
         self.min_interval_seconds = min_interval_seconds
-        self.max_retries = max_retries
-        self.retry_base_sleep_seconds = retry_base_sleep_seconds
         self.last_call_time = 0.0
 
     def call(self, method: Any, **kwargs: Any) -> Any:
-        for attempt in range(self.max_retries):
-            now = time.time()
-            elapsed = now - self.last_call_time
-            if elapsed < self.min_interval_seconds:
-                time.sleep(self.min_interval_seconds - elapsed)
+        now = time.time()
+        elapsed = now - self.last_call_time
+        if elapsed < self.min_interval_seconds:
+            time.sleep(self.min_interval_seconds - elapsed)
 
-            try:
-                result = method(**kwargs)
-                self.last_call_time = time.time()
-                return result
-            except Exception as exc:
-                message = str(exc)
-                if "429" not in message and "Too Many Requests" not in message:
-                    raise
-
-                wait_seconds = self.retry_base_sleep_seconds * (attempt + 1)
-                print(
-                    "Received 429 from Phabricator "
-                    f"(attempt {attempt + 1}/{self.max_retries}); "
-                    f"sleeping {wait_seconds:g}s before retry.",
-                    file=sys.stderr,
-                )
-                time.sleep(wait_seconds)
-
-        raise RuntimeError(
-            f"Exceeded {self.max_retries} retries due to repeated 429 responses."
-        )
+        try:
+            return method(**kwargs)
+        finally:
+            self.last_call_time = time.time()
 
 
 class PhabricatorClient:
@@ -190,18 +173,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.5,
         help="Minimum seconds between Conduit calls.",
     )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=5,
-        help="Maximum retries for Conduit 429 responses.",
-    )
-    parser.add_argument(
-        "--retry-base-sleep",
-        type=float,
-        default=5.0,
-        help="Base sleep seconds for Conduit 429 backoff.",
-    )
     return parser.parse_args(argv)
 
 
@@ -233,6 +204,40 @@ def iter_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
             if not isinstance(record, dict):
                 raise ValueError(f"Expected object at {path}:{line_num}")
             yield line_num, record
+
+
+def load_existing_output_commit_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+
+    existing_commit_ids: set[str] = set()
+    duplicate_count = 0
+    for line_num, record in iter_jsonl(path):
+        commit_id = record.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id:
+            raise ValueError(f"{path}:{line_num}: missing commit_id")
+        if commit_id in existing_commit_ids:
+            duplicate_count += 1
+            print(
+                f"[WARN] Duplicate existing output row for commit {commit_id} "
+                f"at {path}:{line_num}",
+                file=sys.stderr,
+            )
+            continue
+        existing_commit_ids.add(commit_id)
+
+    if existing_commit_ids:
+        print(
+            f"Found {len(existing_commit_ids)} existing rows in {path}; "
+            "matching commits will be skipped.",
+            file=sys.stderr,
+        )
+    if duplicate_count:
+        print(
+            f"[WARN] Found {duplicate_count} duplicate existing output rows in {path}.",
+            file=sys.stderr,
+        )
+    return existing_commit_ids
 
 
 def parse_risk_score(value: Any, *, line_label: str) -> float:
@@ -342,21 +347,26 @@ def write_transactions(
     output_jsonl: Path,
     client: PhabricatorClient,
     page_limit: int,
+    existing_commit_ids: set[str],
 ) -> dict[str, int]:
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     refs_by_phid: dict[str, list[DrevRef]] = {}
-    for ref in refs:
-        refs_by_phid.setdefault(ref.phid, []).append(ref)
-
     stats = {
         "drev_rows_seen": len(refs),
+        "existing_rows_skipped": 0,
         "unique_drevs_fetched": 0,
         "drev_rows_written": 0,
         "transaction_records_written": 0,
         "fetch_errors": 0,
     }
 
-    with output_jsonl.open("w", encoding="utf-8") as output_file:
+    for ref in refs:
+        if ref.commit_id in existing_commit_ids:
+            stats["existing_rows_skipped"] += 1
+            continue
+        refs_by_phid.setdefault(ref.phid, []).append(ref)
+
+    with output_jsonl.open("a", encoding="utf-8") as output_file:
         for phid, phid_refs in refs_by_phid.items():
             first_ref = phid_refs[0]
             try:
@@ -380,6 +390,8 @@ def write_transactions(
                     "transactions": transactions,
                 }
                 output_file.write(json.dumps(output_row) + "\n")
+                output_file.flush()
+                existing_commit_ids.add(ref.commit_id)
                 stats["drev_rows_written"] += 1
                 stats["transaction_records_written"] += len(transactions)
 
@@ -405,10 +417,9 @@ def main(argv: list[str] | None = None) -> None:
             file=sys.stderr,
         )
 
+    existing_commit_ids = load_existing_output_commit_ids(output_jsonl)
     caller = ConduitCaller(
         min_interval_seconds=args.rate_limit_min_interval,
-        max_retries=args.max_retries,
-        retry_base_sleep_seconds=args.retry_base_sleep,
     )
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
 
@@ -417,6 +428,7 @@ def main(argv: list[str] | None = None) -> None:
         output_jsonl=output_jsonl,
         client=client,
         page_limit=args.page_limit,
+        existing_commit_ids=existing_commit_ids,
     )
 
     print(f"Wrote {stats['drev_rows_written']} rows to {output_jsonl}")

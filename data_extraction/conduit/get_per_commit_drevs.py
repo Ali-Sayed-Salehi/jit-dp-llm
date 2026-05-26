@@ -9,7 +9,7 @@ in the commit description, for example:
     https://phabricator.services.mozilla.com/D206595
 
 Commits without a matching trailing URL are skipped. Matching DREVs are fetched
-through Conduit and only published, closed revisions are written to:
+through Conduit and only published, closed revisions are appended to:
 
     datasets/mozilla_code_review/per_commit_drevs.jsonl
 
@@ -23,6 +23,10 @@ to derive Mercurial-order split boundaries. It only considers commits from the
 start of the eval boundary through the end of the final-test boundary. Per-
 commit risk scores are loaded from per_commit_risk_scores.jsonl, which should be
 generated first with get_commit_risk_scores.py.
+
+If the output file already exists, rows with commit IDs already present in the
+file are skipped before any Conduit API call is made, allowing interrupted runs
+to resume without refetching completed commits.
 
 Use `--debug` to process only 10 eval commits and 10 final-test commits. The
 debug subset is selected before initializing the Phabricator client, so skipped
@@ -91,55 +95,25 @@ class CommitWorkItem:
     risk_score: float
 
 
-@dataclass
-class PlannedDrevRow:
-    commit_id: str
-    dataset_split: str
-    risk_score: float
-    drev: dict[str, Any]
-
-
 class ConduitCaller:
     def __init__(
         self,
         *,
         min_interval_seconds: float,
-        max_retries: int,
-        retry_base_sleep_seconds: float,
     ) -> None:
         self.min_interval_seconds = min_interval_seconds
-        self.max_retries = max_retries
-        self.retry_base_sleep_seconds = retry_base_sleep_seconds
         self.last_call_time = 0.0
 
     def call(self, method: Any, **kwargs: Any) -> Any:
-        for attempt in range(self.max_retries):
-            now = time.time()
-            elapsed = now - self.last_call_time
-            if elapsed < self.min_interval_seconds:
-                time.sleep(self.min_interval_seconds - elapsed)
+        now = time.time()
+        elapsed = now - self.last_call_time
+        if elapsed < self.min_interval_seconds:
+            time.sleep(self.min_interval_seconds - elapsed)
 
-            try:
-                result = method(**kwargs)
-                self.last_call_time = time.time()
-                return result
-            except Exception as exc:
-                message = str(exc)
-                if "429" not in message and "Too Many Requests" not in message:
-                    raise
-
-                wait_seconds = self.retry_base_sleep_seconds * (attempt + 1)
-                print(
-                    "Received 429 from Phabricator "
-                    f"(attempt {attempt + 1}/{self.max_retries}); "
-                    f"sleeping {wait_seconds:g}s before retry.",
-                    file=sys.stderr,
-                )
-                time.sleep(wait_seconds)
-
-        raise RuntimeError(
-            f"Exceeded {self.max_retries} retries due to repeated 429 responses."
-        )
+        try:
+            return method(**kwargs)
+        finally:
+            self.last_call_time = time.time()
 
 
 class PhabricatorClient:
@@ -229,18 +203,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.5,
         help="Minimum seconds between Conduit calls.",
     )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=5,
-        help="Maximum retries for Conduit 429 responses.",
-    )
-    parser.add_argument(
-        "--retry-base-sleep",
-        type=float,
-        default=5.0,
-        help="Base sleep seconds for Conduit 429 backoff.",
-    )
     return parser.parse_args(argv)
 
 
@@ -272,6 +234,40 @@ def iter_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
             if not isinstance(record, dict):
                 raise ValueError(f"Expected object at {path}:{line_num}")
             yield line_num, record
+
+
+def load_existing_output_commit_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+
+    existing_commit_ids: set[str] = set()
+    duplicate_count = 0
+    for line_num, record in iter_jsonl(path):
+        commit_id = record.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id:
+            raise ValueError(f"{path}:{line_num}: missing commit_id")
+        if commit_id in existing_commit_ids:
+            duplicate_count += 1
+            print(
+                f"[WARN] Duplicate existing output row for commit {commit_id} "
+                f"at {path}:{line_num}",
+                file=sys.stderr,
+            )
+            continue
+        existing_commit_ids.add(commit_id)
+
+    if existing_commit_ids:
+        print(
+            f"Found {len(existing_commit_ids)} existing rows in {path}; "
+            "matching commits will be skipped.",
+            file=sys.stderr,
+        )
+    if duplicate_count:
+        print(
+            f"[WARN] Found {duplicate_count} duplicate existing output rows in {path}.",
+            file=sys.stderr,
+        )
+    return existing_commit_ids
 
 
 def extract_drev_id(desc: str | None) -> int | None:
@@ -612,10 +608,12 @@ def process_commits(
     work_items: Iterator[CommitWorkItem],
     output_jsonl: Path,
     client: PhabricatorClient,
+    existing_commit_ids: set[str],
 ) -> dict[str, int]:
     revision_cache: dict[int, dict[str, Any] | None] = {}
     stats = {
         "commits_seen": 0,
+        "existing_rows_skipped": 0,
         "commits_with_trailing_drev_url": 0,
         "unique_drevs_fetched": 0,
         "published_closed_drevs_written": 0,
@@ -623,59 +621,53 @@ def process_commits(
         "fetch_errors": 0,
     }
 
-    planned_rows: list[PlannedDrevRow] = []
-
-    for work_item in work_items:
-        commit = work_item.commit
-        stats["commits_seen"] += 1
-        commit_id = commit.get("node")
-        if not isinstance(commit_id, str) or not commit_id:
-            print(
-                f"[WARN] Skipping commit without valid node: {commit!r}",
-                file=sys.stderr,
-            )
-            continue
-
-        drev_id = extract_drev_id(commit.get("desc"))
-        if drev_id is None:
-            continue
-        stats["commits_with_trailing_drev_url"] += 1
-
-        if drev_id not in revision_cache:
-            try:
-                revision_cache[drev_id] = client.get_revision_by_id(drev_id)
-                stats["unique_drevs_fetched"] += 1
-            except Exception as exc:
-                revision_cache[drev_id] = None
-                stats["fetch_errors"] += 1
-                print(f"[WARN] Failed to fetch D{drev_id}: {exc}", file=sys.stderr)
-
-        revision = revision_cache[drev_id]
-        if revision is None:
-            continue
-        if not is_published_and_closed(revision):
-            stats["skipped_unpublished_or_open"] += 1
-            continue
-
-        planned_rows.append(
-            PlannedDrevRow(
-                commit_id=commit_id,
-                dataset_split=work_item.dataset_split,
-                risk_score=work_item.risk_score,
-                drev=revision,
-            )
-        )
-
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    with output_jsonl.open("w", encoding="utf-8") as output_file:
-        for row in planned_rows:
+    with output_jsonl.open("a", encoding="utf-8") as output_file:
+        for work_item in work_items:
+            commit = work_item.commit
+            stats["commits_seen"] += 1
+            commit_id = commit.get("node")
+            if not isinstance(commit_id, str) or not commit_id:
+                print(
+                    f"[WARN] Skipping commit without valid node: {commit!r}",
+                    file=sys.stderr,
+                )
+                continue
+
+            if commit_id in existing_commit_ids:
+                stats["existing_rows_skipped"] += 1
+                continue
+
+            drev_id = extract_drev_id(commit.get("desc"))
+            if drev_id is None:
+                continue
+            stats["commits_with_trailing_drev_url"] += 1
+
+            if drev_id not in revision_cache:
+                try:
+                    revision_cache[drev_id] = client.get_revision_by_id(drev_id)
+                    stats["unique_drevs_fetched"] += 1
+                except Exception as exc:
+                    revision_cache[drev_id] = None
+                    stats["fetch_errors"] += 1
+                    print(f"[WARN] Failed to fetch D{drev_id}: {exc}", file=sys.stderr)
+
+            revision = revision_cache[drev_id]
+            if revision is None:
+                continue
+            if not is_published_and_closed(revision):
+                stats["skipped_unpublished_or_open"] += 1
+                continue
+
             output_row = {
-                "commit_id": row.commit_id,
-                "dataset_split": row.dataset_split,
-                "risk_score": row.risk_score,
-                "drev": row.drev,
+                "commit_id": commit_id,
+                "dataset_split": work_item.dataset_split,
+                "risk_score": work_item.risk_score,
+                "drev": revision,
             }
             output_file.write(json.dumps(output_row) + "\n")
+            output_file.flush()
+            existing_commit_ids.add(commit_id)
             stats["published_closed_drevs_written"] += 1
 
     return stats
@@ -749,15 +741,15 @@ def main(argv: list[str] | None = None) -> None:
 
     caller = ConduitCaller(
         min_interval_seconds=args.rate_limit_min_interval,
-        max_retries=args.max_retries,
-        retry_base_sleep_seconds=args.retry_base_sleep,
     )
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
+    existing_commit_ids = load_existing_output_commit_ids(output_jsonl)
 
     stats = process_commits(
         work_items=iter(work_items),
         output_jsonl=output_jsonl,
         client=client,
+        existing_commit_ids=existing_commit_ids,
     )
 
     print(f"Wrote {stats['published_closed_drevs_written']} rows to {output_jsonl}")
