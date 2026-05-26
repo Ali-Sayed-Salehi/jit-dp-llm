@@ -110,6 +110,7 @@ echo "running the data extraction script . . ."
 # --skip-repo-update \
 # --file-path-timeline-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/file_path_timeline.jsonl \
 # --output-dataset-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/drev_review_data.jsonl \
+# --debug-count 10 \
 # --debug
 
 

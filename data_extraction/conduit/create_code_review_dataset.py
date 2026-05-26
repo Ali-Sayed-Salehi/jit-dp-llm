@@ -98,6 +98,13 @@ class FilePathCanonicalizer:
         return path
 
 
+@dataclass(frozen=True)
+class ChangedFiles:
+    files: list[str]
+    raw_file_count: int
+    canonicalization_count: int
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -586,16 +593,24 @@ def get_canonical_changed_files(
     commit_id: str,
     commit_index: int,
     file_path_canonicalizer: FilePathCanonicalizer,
-) -> list[str]:
+) -> ChangedFiles:
     changed_files = get_changed_files(repo_path, commit_id)
-    canonical_files = [
-        file_path_canonicalizer.canonicalize(
+    canonical_files: list[str] = []
+    canonicalization_count = 0
+    for file_path in changed_files:
+        canonical_file_path = file_path_canonicalizer.canonicalize(
             commit_index=commit_index,
             path=file_path,
         )
-        for file_path in changed_files
-    ]
-    return dedupe_preserving_order(canonical_files)
+        if canonical_file_path != file_path:
+            canonicalization_count += 1
+        canonical_files.append(canonical_file_path)
+
+    return ChangedFiles(
+        files=dedupe_preserving_order(canonical_files),
+        raw_file_count=len(changed_files),
+        canonicalization_count=canonicalization_count,
+    )
 
 
 def unix_timestamp_to_iso(value: Any) -> str | None:
@@ -703,20 +718,27 @@ def extract_reviews(
 def build_output_row(
     *,
     input_row: InputRow,
-    changed_files_by_commit: dict[str, list[str]],
+    changed_files_by_commit: dict[str, ChangedFiles],
     commit_indices_by_id: dict[str, int],
     autoland_repo: Path,
     file_path_canonicalizer: FilePathCanonicalizer,
     include_app_comments: bool,
+    stats: dict[str, int],
 ) -> dict[str, Any]:
     commit_id = input_row.commit_id
     if commit_id not in changed_files_by_commit:
-        changed_files_by_commit[commit_id] = get_canonical_changed_files(
+        changed_files = get_canonical_changed_files(
             repo_path=autoland_repo,
             commit_id=commit_id,
             commit_index=commit_indices_by_id[commit_id],
             file_path_canonicalizer=file_path_canonicalizer,
         )
+        changed_files_by_commit[commit_id] = changed_files
+        if changed_files.canonicalization_count > 0:
+            stats["commits_with_canonicalized_paths"] += 1
+    changed_files = changed_files_by_commit[commit_id]
+    stats["changed_file_paths_seen"] += changed_files.raw_file_count
+    stats["file_path_canonicalizations"] += changed_files.canonicalization_count
 
     create_transaction = find_create_transaction(input_row.transactions)
     drev_author = None
@@ -732,7 +754,7 @@ def build_output_row(
         "risk_score": input_row.risk_score,
         "drev_submission_date": drev_submission_date,
         "drev_author": drev_author,
-        "files_changed": changed_files_by_commit[commit_id],
+        "files_changed": changed_files.files,
         "reviews": extract_reviews(
             input_row.transactions,
             include_app_comments=include_app_comments,
@@ -753,8 +775,11 @@ def write_dataset(
         "rows_seen": len(rows),
         "rows_written": 0,
         "reviews_written": 0,
+        "changed_file_paths_seen": 0,
+        "file_path_canonicalizations": 0,
+        "commits_with_canonicalized_paths": 0,
     }
-    changed_files_by_commit: dict[str, list[str]] = {}
+    changed_files_by_commit: dict[str, ChangedFiles] = {}
 
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with output_jsonl.open("w", encoding="utf-8") as output_file:
@@ -766,6 +791,7 @@ def write_dataset(
                 autoland_repo=autoland_repo,
                 file_path_canonicalizer=file_path_canonicalizer,
                 include_app_comments=include_app_comments,
+                stats=stats,
             )
 
             output_file.write(json.dumps(output_row) + "\n")
