@@ -81,6 +81,15 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_risk_scores.py
 
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_all_drevs.py \
+# --input-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/all_commits.jsonl \
+# --eval-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_eval.json \
+# --final-test-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_final_test.json \
+# --output-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/all_drevs.jsonl \
+# --page-limit 100 \
+# --rate-limit-min-interval 0.5 \
+# --max-pages 2
+
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_per_commit_drevs.py \
 # --eval-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_eval.json \
 # --final-test-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_final_test.json \
