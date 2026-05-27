@@ -26,7 +26,7 @@ class LocalizationResult:
     found_revision: str | None
     success: bool
     undefined_reason: str | None
-    trtc_hours: float | None
+    elapsed_hours: float
     test_runs: int
     oracle_queries: int
     path_length: int
@@ -57,11 +57,7 @@ class LocalizationResult:
             "found_revision": self.found_revision,
             "success": self.success,
             "undefined_reason": self.undefined_reason,
-            "trtc_hours": (
-                round(self.trtc_hours, 4)
-                if self.trtc_hours is not None
-                else None
-            ),
+            "elapsed_hours": round(self.elapsed_hours, 4),
             "test_runs": self.test_runs,
             "oracle_queries": self.oracle_queries,
             "path_length": self.path_length,
@@ -183,6 +179,20 @@ class CulpritLocalizer:
             return None
         return int(raw_id)
 
+    @staticmethod
+    def _elapsed_hours(
+        oracle: TestOracle,
+        decisions: Sequence[OracleResult] = (),
+    ) -> float:
+        """Return wall-clock test elapsed time for this localization attempt."""
+
+        executor = getattr(oracle, "executor", None)
+        if executor is not None:
+            return executor.now_minutes / 60.0
+        if decisions:
+            return max(decision.completed_at_minutes for decision in decisions) / 60.0
+        return 0.0
+
 
 class Backfill(CulpritLocalizer):
     """Probe every revision after the known-good revision and find the first bad one."""
@@ -226,7 +236,7 @@ class Backfill(CulpritLocalizer):
                 found_revision=None,
                 success=False,
                 undefined_reason="no_revision_path",
-                trtc_hours=None,
+                elapsed_hours=self._elapsed_hours(oracle),
                 test_runs=getattr(oracle, "executor", None).test_runs
                 if hasattr(getattr(oracle, "executor", None), "test_runs")
                 else 0,
@@ -287,11 +297,7 @@ class Backfill(CulpritLocalizer):
 
         success = found_revision is not None and found_revision == culprit_revision
         executor = getattr(oracle, "executor", None)
-        trtc_hours = (
-            executor.now_minutes / 60.0
-            if success and executor is not None
-            else None
-        )
+        elapsed_hours = self._elapsed_hours(oracle, all_decisions)
 
         return LocalizationResult(
             localizer=self.name,
@@ -305,7 +311,7 @@ class Backfill(CulpritLocalizer):
             found_revision=found_revision,
             success=success,
             undefined_reason=None if success else undefined_reason,
-            trtc_hours=trtc_hours,
+            elapsed_hours=elapsed_hours,
             test_runs=(
                 executor.test_runs
                 if executor is not None
@@ -599,7 +605,7 @@ class StandardMidpointBisection(CulpritLocalizer):
                 found_revision=None,
                 success=False,
                 undefined_reason="no_revision_path",
-                trtc_hours=None,
+                elapsed_hours=self._elapsed_hours(oracle),
                 test_runs=getattr(oracle, "executor", None).test_runs
                 if hasattr(getattr(oracle, "executor", None), "test_runs")
                 else 0,
@@ -671,11 +677,7 @@ class StandardMidpointBisection(CulpritLocalizer):
 
         success = found_revision is not None and undefined_reason is None
         executor = getattr(oracle, "executor", None)
-        trtc_hours = (
-            executor.now_minutes / 60.0
-            if success and executor is not None
-            else None
-        )
+        elapsed_hours = self._elapsed_hours(oracle, all_decisions)
         final_decisions = [
             final_decision_by_revision[revision]
             for revision in path[1:]
@@ -694,7 +696,7 @@ class StandardMidpointBisection(CulpritLocalizer):
             found_revision=found_revision,
             success=success,
             undefined_reason=None if success else undefined_reason,
-            trtc_hours=trtc_hours,
+            elapsed_hours=elapsed_hours,
             test_runs=(
                 executor.test_runs
                 if executor is not None
@@ -819,7 +821,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
                 found_revision=None,
                 success=False,
                 undefined_reason="no_revision_path",
-                trtc_hours=None,
+                elapsed_hours=self._elapsed_hours(oracle),
                 test_runs=getattr(oracle, "executor", None).test_runs
                 if hasattr(getattr(oracle, "executor", None), "test_runs")
                 else 0,
@@ -922,11 +924,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             )
         success = found_revision is not None and undefined_reason is None
         executor = getattr(oracle, "executor", None)
-        trtc_hours = (
-            executor.now_minutes / 60.0
-            if success and executor is not None
-            else None
-        )
+        elapsed_hours = self._elapsed_hours(oracle, all_decisions)
         final_decisions = self._latest_decisions_by_path_order(
             candidate_revisions,
             all_decisions,
@@ -945,7 +943,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             found_revision=found_revision,
             success=success,
             undefined_reason=None if success else undefined_reason,
-            trtc_hours=trtc_hours,
+            elapsed_hours=elapsed_hours,
             test_runs=(
                 executor.test_runs
                 if executor is not None

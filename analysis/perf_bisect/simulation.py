@@ -82,8 +82,8 @@ BEST_COMBO_METRIC_SPECS = (
         "vote_weight": 4,
     },
     {
-        "field": "best_combo_by_mean_trtc",
-        "metric": "mean_trtc_hours",
+        "field": "best_combo_by_mean_elapsed",
+        "metric": "mean_elapsed_hours",
         "direction": "minimize",
         "vote_weight": 1,
     },
@@ -94,8 +94,8 @@ BEST_COMBO_METRIC_SPECS = (
         "vote_weight": 1,
     },
     {
-        "field": "best_combo_by_max_trtc",
-        "metric": "max_trtc_hours",
+        "field": "best_combo_by_max_elapsed",
+        "metric": "max_elapsed_hours",
         "direction": "minimize",
         "vote_weight": 1,
     },
@@ -225,13 +225,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pba_max_test_runs_min": args.pba_max_test_runs_min,
             "pba_max_test_runs_max": args.pba_max_test_runs_max,
             "objectives": [
-                {"metric": "mean_trtc_hours", "direction": "minimize"},
+                {"metric": "mean_elapsed_hours", "direction": "minimize"},
                 {"metric": "mean_test_runs", "direction": "minimize"},
                 {"metric": "success_rate_percent", "direction": "maximize"},
             ],
             "selection": (
                 "highest success_rate_percent on the Pareto frontier; ties "
-                "minimize mean_test_runs, then mean_trtc_hours"
+                "minimize mean_test_runs, then mean_elapsed_hours"
             ),
         }
         combo_parameters = optimize_parameters_on_eval(
@@ -825,7 +825,7 @@ def run_preference_sort_key(run: Mapping[str, Any]) -> tuple[Any, ...]:
         ),
         primary_metric_sort_value(
             run,
-            metric="mean_trtc_hours",
+            metric="mean_elapsed_hours",
             direction="minimize",
         ),
         primary_metric_sort_value(
@@ -835,7 +835,7 @@ def run_preference_sort_key(run: Mapping[str, Any]) -> tuple[Any, ...]:
         ),
         primary_metric_sort_value(
             run,
-            metric="max_trtc_hours",
+            metric="max_elapsed_hours",
             direction="minimize",
         ),
         primary_metric_sort_value(
@@ -1200,7 +1200,7 @@ def objective_values(metrics: Mapping[str, Any]) -> tuple[float, float, float]:
     """Return Optuna objective values from aggregate simulation metrics."""
 
     return (
-        finite_objective_value(metrics.get("mean_trtc_hours")),
+        finite_objective_value(metrics.get("mean_elapsed_hours")),
         finite_objective_value(metrics.get("mean_test_runs")),
         float(metrics.get("success_rate_percent") or 0.0),
     )
@@ -1286,15 +1286,11 @@ def run_one_regression(
 
 
 def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
-    """Compute aggregate success, TRTC, and test-run metrics for one run."""
+    """Compute aggregate success, elapsed-time, and test-run metrics for one run."""
 
     total = len(results)
     successes = [result for result in results if result.success]
-    trtc_values = [
-        result.trtc_hours
-        for result in successes
-        if result.trtc_hours is not None
-    ]
+    elapsed_values = [result.elapsed_hours for result in results]
     test_runs = [result.test_runs for result in results]
     undefined_causes = Counter(
         result.undefined_reason or "unknown"
@@ -1310,8 +1306,12 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         "success_rate_percent": (
             round(len(successes) / total * 100.0, 1) if total else 0.0
         ),
-        "mean_trtc_hours": round(mean(trtc_values), 2) if trtc_values else None,
-        "max_trtc_hours": round(max(trtc_values), 2) if trtc_values else None,
+        "mean_elapsed_hours": round(mean(elapsed_values), 2)
+        if elapsed_values
+        else None,
+        "max_elapsed_hours": round(max(elapsed_values), 2)
+        if elapsed_values
+        else None,
         "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }

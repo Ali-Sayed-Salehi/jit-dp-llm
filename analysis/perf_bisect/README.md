@@ -185,10 +185,9 @@ Optuna samples these from:
 
 Each summary output reports:
 
-- `mean_trtc_hours`: mean time from regression to culprit for successful
-  localizations only.
-- `max_trtc_hours`: max time from regression to culprit for successful
-  localizations only.
+- `mean_elapsed_hours`: mean wall-clock test elapsed time across all
+  regressions, including undefined localizations.
+- `max_elapsed_hours`: max wall-clock test elapsed time across all regressions.
 - `mean_test_runs`: mean number of submitted test jobs across all regressions,
   including undefined localizations.
 - `max_test_runs`: max number of submitted test jobs across all regressions.
@@ -199,8 +198,7 @@ Each summary output reports:
 - `undefined_causes`: counts of undefined localizations grouped by
   `undefined_reason`.
 
-Undefined results do not affect TRTC metrics, but they do affect success rate and
-test-run metrics.
+Undefined results affect elapsed-time, success-rate, and test-run metrics.
 
 ## Oracle Accuracy Dataset
 
