@@ -12,7 +12,8 @@ reports aggregate localization metrics.
 - `calculate_oracle_metrics.py`: computes per-regression summary and replicate
   oracle accuracy from the historical measurement data.
 - `localization.py`: culprit localization algorithms, including backfill,
-  standard midpoint bisection, and probabilistic bisection variants.
+  standard midpoint bisection, midpoint multisection, and probabilistic
+  bisection variants.
 - `test_oracle.py`: test-oracle implementations, revision/signature indexes, and
   the simulated test executor. The initial oracle is `SummaryComparison`.
 - `per_regression_oracle_metrics.jsonl`: per-regression oracle accuracy output
@@ -137,6 +138,21 @@ measurement values. The raw attempts remain in `decisions`.
 This process repeats up to `--backfill-retrigger-count` times before the
 localization remains undefined. The default is `2`, which models a small number
 of human retriggers without turning noisy results into an unbounded retry loop.
+
+## Standard Midpoint Multisection Localizer
+
+`StandardMidpointMultisection` keeps the same known-good/known-bad invariant as
+standard midpoint bisection, but divides the current interval into equal
+sections each round. It tests the internal right-boundary revisions for those
+sections in one parallel `classify_many` batch, then uses all boundary results
+together to choose the adjacent clean-to-bad section as the next interval.
+
+`--multisection-section-count` controls the requested number of sections, and
+`--multisection-retrigger-count` controls how many additional boundary batches
+are retriggered before voting on those boundaries. Optuna samples these from:
+
+- `--multisection-section-count-min` / `--multisection-section-count-max`
+- `--multisection-retrigger-count-min` / `--multisection-retrigger-count-max`
 
 ## Probabilistic Bisection Localizer
 

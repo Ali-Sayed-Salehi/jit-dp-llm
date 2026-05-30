@@ -765,6 +765,280 @@ class StandardMidpointBisection(CulpritLocalizer):
         return None
 
 
+class StandardMidpointMultisection(StandardMidpointBisection):
+    """Find the first bad revision by testing equal interval cuts in parallel."""
+
+    name = "StandardMidpointMultisection"
+
+    def __init__(
+        self,
+        *,
+        multisection_section_count: int = 4,
+        multisection_retrigger_count: int = 0,
+    ) -> None:
+        """Configure interval fan-out and repeated boundary probes."""
+
+        if multisection_section_count < 2:
+            raise ValueError("multisection_section_count must be at least 2")
+        if multisection_retrigger_count < 0:
+            raise ValueError("multisection_retrigger_count must be non-negative")
+        self.multisection_section_count = multisection_section_count
+        self.multisection_retrigger_count = multisection_retrigger_count
+
+    def localize(
+        self,
+        regression: Mapping[str, Any],
+        *,
+        revision_perf: RevisionPerfIndex,
+        oracle: TestOracle,
+    ) -> LocalizationResult:
+        """Probe equal section boundaries until the candidate interval is adjacent."""
+
+        good_revision = str(regression["good_revision"])
+        bad_revision = str(regression["bad_revision"])
+        culprit_revision = regression.get("culprit_revision")
+        culprit_revision = str(culprit_revision) if culprit_revision is not None else None
+        regression_id = self._regression_id(regression)
+        signature_id = self._signature_id(regression)
+
+        path = revision_perf.path_between(good_revision, bad_revision)
+        if path is None or len(path) < 2:
+            return LocalizationResult(
+                localizer=self.name,
+                oracle=oracle.name,
+                regression_id=regression_id,
+                alert_summary_id=regression.get("alert_summary_id"),
+                signature_id=signature_id,
+                good_revision=good_revision,
+                bad_revision=bad_revision,
+                culprit_revision=culprit_revision,
+                found_revision=None,
+                success=False,
+                undefined_reason="no_revision_path",
+                elapsed_hours=self._elapsed_hours(oracle),
+                test_runs=getattr(oracle, "executor", None).test_runs
+                if hasattr(getattr(oracle, "executor", None), "test_runs")
+                else 0,
+                oracle_queries=getattr(oracle, "query_count", 0),
+                path_length=0,
+                candidate_revisions_tested=0,
+                extra=self._settings_to_json(),
+            )
+
+        low_idx = 0
+        high_idx = len(path) - 1
+        all_decisions: list[OracleResult] = []
+        final_decision_by_revision: dict[str, OracleResult] = {}
+        retrigger_intervals: list[list[str]] = []
+        found_revision = None
+        undefined_reason = None
+
+        while high_idx - low_idx > 1:
+            boundary_indices = self._section_boundary_indices(
+                low_idx=low_idx,
+                high_idx=high_idx,
+                section_count=self.multisection_section_count,
+            )
+            boundary_revisions = [path[idx] for idx in boundary_indices]
+            decisions_by_revision: dict[str, list[OracleResult]] = {
+                revision: [] for revision in boundary_revisions
+            }
+
+            boundary_decisions = oracle.classify_many(
+                boundary_revisions,
+                regression=regression,
+                revision_path=path,
+            )
+            all_decisions.extend(boundary_decisions)
+            for decision in boundary_decisions:
+                decisions_by_revision[decision.revision].append(decision)
+
+            if self.multisection_retrigger_count:
+                retrigger_revisions = [
+                    revision
+                    for _ in range(self.multisection_retrigger_count)
+                    for revision in boundary_revisions
+                ]
+                retrigger_intervals.extend(
+                    list(boundary_revisions)
+                    for _ in range(self.multisection_retrigger_count)
+                )
+                retrigger_decisions = oracle.classify_many(
+                    retrigger_revisions,
+                    regression=regression,
+                    revision_path=path,
+                )
+                all_decisions.extend(retrigger_decisions)
+                for decision in retrigger_decisions:
+                    decisions_by_revision[decision.revision].append(decision)
+
+            tied_revisions = [
+                revision
+                for revision in boundary_revisions
+                if Backfill._has_clean_bad_tie(decisions_by_revision[revision])
+            ]
+            if tied_revisions:
+                tie_break_decisions = oracle.classify_many(
+                    tied_revisions,
+                    regression=regression,
+                    revision_path=path,
+                )
+                all_decisions.extend(tie_break_decisions)
+                for decision in tie_break_decisions:
+                    decisions_by_revision[decision.revision].append(decision)
+
+            selected_by_idx: dict[int, OracleResult] = {}
+            for boundary_idx, boundary_revision in zip(
+                boundary_indices,
+                boundary_revisions,
+                strict=True,
+            ):
+                selected_decision, undefined_reason = self._select_midpoint_decision(
+                    decisions_by_revision[boundary_revision],
+                )
+                if selected_decision is None:
+                    break
+                final_decision_by_revision[boundary_revision] = selected_decision
+                selected_by_idx[boundary_idx] = selected_decision
+            if undefined_reason is not None:
+                break
+
+            next_interval, undefined_reason = self._next_interval_from_boundaries(
+                low_idx=low_idx,
+                high_idx=high_idx,
+                boundary_indices=boundary_indices,
+                selected_by_idx=selected_by_idx,
+            )
+            if next_interval is None:
+                break
+            low_idx, high_idx = next_interval
+        else:
+            found_revision = path[high_idx]
+            undefined_reason = self._undefined_reason_for_found_revision(
+                found_revision=found_revision,
+                path=path,
+                culprit_revision=culprit_revision,
+            )
+
+        success = found_revision is not None and undefined_reason is None
+        executor = getattr(oracle, "executor", None)
+        elapsed_hours = self._elapsed_hours(oracle, all_decisions)
+        final_decisions = [
+            final_decision_by_revision[revision]
+            for revision in path[1:]
+            if revision in final_decision_by_revision
+        ]
+
+        return LocalizationResult(
+            localizer=self.name,
+            oracle=oracle.name,
+            regression_id=regression_id,
+            alert_summary_id=regression.get("alert_summary_id"),
+            signature_id=signature_id,
+            good_revision=good_revision,
+            bad_revision=bad_revision,
+            culprit_revision=culprit_revision,
+            found_revision=found_revision,
+            success=success,
+            undefined_reason=None if success else undefined_reason,
+            elapsed_hours=elapsed_hours,
+            test_runs=(
+                executor.test_runs
+                if executor is not None
+                else sum(d.test_runs for d in all_decisions)
+            ),
+            oracle_queries=getattr(oracle, "query_count", len(all_decisions)),
+            path_length=len(path),
+            candidate_revisions_tested=len(final_decisions),
+            decisions=all_decisions,
+            final_decisions=final_decisions,
+            retrigger_intervals=retrigger_intervals,
+            revision_path=path,
+            extra=self._settings_to_json(),
+        )
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable multisection settings for result serialization."""
+
+        return {
+            "multisection_section_count": self.multisection_section_count,
+            "multisection_retrigger_count": self.multisection_retrigger_count,
+        }
+
+    @staticmethod
+    def _section_boundary_indices(
+        *,
+        low_idx: int,
+        high_idx: int,
+        section_count: int,
+    ) -> list[int]:
+        """Return internal right-boundary indices for equal interval sections."""
+
+        candidate_count = high_idx - low_idx
+        effective_section_count = min(section_count, candidate_count)
+        return [
+            low_idx + (candidate_count * section_number) // effective_section_count
+            for section_number in range(1, effective_section_count)
+        ]
+
+    @staticmethod
+    def _next_interval_from_boundaries(
+        *,
+        low_idx: int,
+        high_idx: int,
+        boundary_indices: Sequence[int],
+        selected_by_idx: Mapping[int, OracleResult],
+    ) -> tuple[tuple[int, int] | None, str | None]:
+        """Choose the adjacent clean-to-bad boundary pair for the next interval."""
+
+        ordered_boundaries: list[tuple[int, OracleDecision]] = [
+            (low_idx, OracleDecision.CLEAN)
+        ]
+        ordered_boundaries.extend(
+            (idx, selected_by_idx[idx].decision) for idx in boundary_indices
+        )
+        ordered_boundaries.append((high_idx, OracleDecision.BAD))
+
+        previous_decision = ordered_boundaries[0][1]
+        for _, decision in ordered_boundaries[1:]:
+            if (
+                previous_decision is OracleDecision.BAD
+                and decision is OracleDecision.CLEAN
+            ):
+                return None, "non_monotonic_multisection_decisions"
+            previous_decision = decision
+
+        for right_position, (_, decision) in enumerate(
+            ordered_boundaries[1:],
+            start=1,
+        ):
+            if decision is OracleDecision.BAD:
+                next_low = ordered_boundaries[right_position - 1][0]
+                next_high = ordered_boundaries[right_position][0]
+                if next_low >= next_high:
+                    return None, "non_shrinking_multisection_interval"
+                return (next_low, next_high), None
+
+        return None, "no_bad_revision_found"
+
+    @staticmethod
+    def _undefined_reason_for_found_revision(
+        *,
+        found_revision: str,
+        path: list[str],
+        culprit_revision: str | None,
+    ) -> str | None:
+        """Return why a completed multisection result is not successful."""
+
+        if culprit_revision is None:
+            return "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return "culprit_not_in_search_range"
+        if found_revision != culprit_revision:
+            return "multisection_found_is_not_culprit"
+        return None
+
+
 class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
     """Probabilistic bisection using posterior-median probes and a uniform prior."""
 
@@ -1101,4 +1375,5 @@ LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
         ProbabilisticBisectionPosteriorMedianUniformPrior
     ),
     StandardMidpointBisection.name: StandardMidpointBisection,
+    StandardMidpointMultisection.name: StandardMidpointMultisection,
 }

@@ -54,6 +54,12 @@ DEFAULT_PROBE_REPEAT_COUNT_MIN = 1
 DEFAULT_PROBE_REPEAT_COUNT_MAX = 5
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MIN = 0
 DEFAULT_MIDPOINT_RETRIGGER_COUNT_MAX = 5
+DEFAULT_MULTISECTION_SECTION_COUNT = 4
+DEFAULT_MULTISECTION_SECTION_COUNT_MIN = 2
+DEFAULT_MULTISECTION_SECTION_COUNT_MAX = 16
+DEFAULT_MULTISECTION_RETRIGGER_COUNT = 0
+DEFAULT_MULTISECTION_RETRIGGER_COUNT_MIN = 0
+DEFAULT_MULTISECTION_RETRIGGER_COUNT_MAX = 5
 DEFAULT_PBA_CONFIDENCE_THRESHOLD = 0.9
 DEFAULT_PBA_CONFIDENCE_THRESHOLD_MIN = 0.6
 DEFAULT_PBA_CONFIDENCE_THRESHOLD_MAX = 0.99
@@ -73,6 +79,10 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_max_test_runs",
     ),
     "StandardMidpointBisection": ("midpoint_retrigger_count",),
+    "StandardMidpointMultisection": (
+        "multisection_section_count",
+        "multisection_retrigger_count",
+    ),
 }
 BEST_COMBO_METRIC_SPECS = (
     {
@@ -115,6 +125,8 @@ class SimulationParameters:
     backfill_retrigger_count: int
     probe_repeat_count: int
     midpoint_retrigger_count: int
+    multisection_section_count: int
+    multisection_retrigger_count: int
     pba_confidence_threshold: float
     pba_repeat_count: int
     pba_max_test_runs: int
@@ -126,6 +138,8 @@ class SimulationParameters:
             "backfill_retrigger_count": self.backfill_retrigger_count,
             "probe_repeat_count": self.probe_repeat_count,
             "midpoint_retrigger_count": self.midpoint_retrigger_count,
+            "multisection_section_count": self.multisection_section_count,
+            "multisection_retrigger_count": self.multisection_retrigger_count,
             "pba_confidence_threshold": self.pba_confidence_threshold,
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
@@ -180,6 +194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         backfill_retrigger_count=args.backfill_retrigger_count,
         probe_repeat_count=args.probe_repeat_count,
         midpoint_retrigger_count=args.midpoint_retrigger_count,
+        multisection_section_count=args.multisection_section_count,
+        multisection_retrigger_count=args.multisection_retrigger_count,
         pba_confidence_threshold=args.pba_confidence_threshold,
         pba_repeat_count=args.pba_repeat_count,
         pba_max_test_runs=args.pba_max_test_runs,
@@ -218,6 +234,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "probe_repeat_count_max": args.probe_repeat_count_max,
             "midpoint_retrigger_count_min": args.midpoint_retrigger_count_min,
             "midpoint_retrigger_count_max": args.midpoint_retrigger_count_max,
+            "multisection_section_count_min": args.multisection_section_count_min,
+            "multisection_section_count_max": args.multisection_section_count_max,
+            "multisection_retrigger_count_min": (
+                args.multisection_retrigger_count_min
+            ),
+            "multisection_retrigger_count_max": (
+                args.multisection_retrigger_count_max
+            ),
             "pba_confidence_threshold_min": args.pba_confidence_threshold_min,
             "pba_confidence_threshold_max": args.pba_confidence_threshold_max,
             "pba_repeat_count_min": args.pba_repeat_count_min,
@@ -249,6 +273,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             probe_repeat_count_max=args.probe_repeat_count_max,
             midpoint_retrigger_count_min=args.midpoint_retrigger_count_min,
             midpoint_retrigger_count_max=args.midpoint_retrigger_count_max,
+            multisection_section_count_min=args.multisection_section_count_min,
+            multisection_section_count_max=args.multisection_section_count_max,
+            multisection_retrigger_count_min=args.multisection_retrigger_count_min,
+            multisection_retrigger_count_max=args.multisection_retrigger_count_max,
             pba_confidence_threshold_min=args.pba_confidence_threshold_min,
             pba_confidence_threshold_max=args.pba_confidence_threshold_max,
             pba_repeat_count_min=args.pba_repeat_count_min,
@@ -396,6 +424,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--multisection-section-count",
+        type=int,
+        default=DEFAULT_MULTISECTION_SECTION_COUNT,
+        help=(
+            "Number of equal sections for StandardMidpointMultisection. Each "
+            "round tests section cut boundaries in parallel. Used directly "
+            "when Optuna is disabled, and as a fallback default for combos "
+            "without tuned parameters."
+        ),
+    )
+    parser.add_argument(
+        "--multisection-retrigger-count",
+        type=int,
+        default=DEFAULT_MULTISECTION_RETRIGGER_COUNT,
+        help=(
+            "Number of additional boundary-decision batches to retrigger for "
+            "StandardMidpointMultisection before selecting the next interval. "
+            "Used directly when Optuna is disabled, and as a fallback default "
+            "for combos without tuned parameters."
+        ),
+    )
+    parser.add_argument(
         "--pba-confidence-threshold",
         type=float,
         default=DEFAULT_PBA_CONFIDENCE_THRESHOLD,
@@ -483,6 +533,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum StandardMidpointBisection retrigger count sampled by Optuna.",
     )
     parser.add_argument(
+        "--multisection-section-count-min",
+        type=int,
+        default=DEFAULT_MULTISECTION_SECTION_COUNT_MIN,
+        help="Minimum StandardMidpointMultisection section count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--multisection-section-count-max",
+        type=int,
+        default=DEFAULT_MULTISECTION_SECTION_COUNT_MAX,
+        help="Maximum StandardMidpointMultisection section count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--multisection-retrigger-count-min",
+        type=int,
+        default=DEFAULT_MULTISECTION_RETRIGGER_COUNT_MIN,
+        help="Minimum StandardMidpointMultisection retrigger count sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--multisection-retrigger-count-max",
+        type=int,
+        default=DEFAULT_MULTISECTION_RETRIGGER_COUNT_MAX,
+        help="Maximum StandardMidpointMultisection retrigger count sampled by Optuna.",
+    )
+    parser.add_argument(
         "--pba-confidence-threshold-min",
         type=float,
         default=DEFAULT_PBA_CONFIDENCE_THRESHOLD_MIN,
@@ -531,6 +605,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--probe-repeat-count must be at least 1")
     if args.midpoint_retrigger_count < 0:
         parser.error("--midpoint-retrigger-count must be non-negative")
+    if args.multisection_section_count < 2:
+        parser.error("--multisection-section-count must be at least 2")
+    if args.multisection_retrigger_count < 0:
+        parser.error("--multisection-retrigger-count must be non-negative")
     if not 0.0 < args.pba_confidence_threshold <= 1.0:
         parser.error("--pba-confidence-threshold must be in (0, 1]")
     if args.pba_repeat_count < 1:
@@ -559,6 +637,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--midpoint-retrigger-count-max must be greater than or equal to "
             "--midpoint-retrigger-count-min"
+        )
+    if args.multisection_section_count_min < 2:
+        parser.error("--multisection-section-count-min must be at least 2")
+    if args.multisection_section_count_max < args.multisection_section_count_min:
+        parser.error(
+            "--multisection-section-count-max must be greater than or equal to "
+            "--multisection-section-count-min"
+        )
+    if args.multisection_retrigger_count_min < 0:
+        parser.error("--multisection-retrigger-count-min must be non-negative")
+    if args.multisection_retrigger_count_max < args.multisection_retrigger_count_min:
+        parser.error(
+            "--multisection-retrigger-count-max must be greater than or equal to "
+            "--multisection-retrigger-count-min"
         )
     if not 0.0 < args.pba_confidence_threshold_min <= 1.0:
         parser.error("--pba-confidence-threshold-min must be in (0, 1]")
@@ -698,6 +790,12 @@ def run_dataset(
             "backfill_retrigger_count": default_parameters.backfill_retrigger_count,
             "probe_repeat_count": default_parameters.probe_repeat_count,
             "midpoint_retrigger_count": default_parameters.midpoint_retrigger_count,
+            "multisection_section_count": (
+                default_parameters.multisection_section_count
+            ),
+            "multisection_retrigger_count": (
+                default_parameters.multisection_retrigger_count
+            ),
             "pba_batch_size": 1,
             "pba_prior": "uniform",
             "pba_query_strategy": "posterior_median",
@@ -937,6 +1035,11 @@ def build_localizer(
         return localizer_cls(
             midpoint_retrigger_count=parameters.midpoint_retrigger_count,
         )
+    if localizer_name == "StandardMidpointMultisection":
+        return localizer_cls(
+            multisection_section_count=parameters.multisection_section_count,
+            multisection_retrigger_count=parameters.multisection_retrigger_count,
+        )
     if localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
         return localizer_cls(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
@@ -962,6 +1065,10 @@ def optimize_parameters_on_eval(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    multisection_section_count_min: int,
+    multisection_section_count_max: int,
+    multisection_retrigger_count_min: int,
+    multisection_retrigger_count_max: int,
     pba_confidence_threshold_min: float,
     pba_confidence_threshold_max: float,
     pba_repeat_count_min: int,
@@ -994,6 +1101,10 @@ def optimize_parameters_on_eval(
                 probe_repeat_count_max=probe_repeat_count_max,
                 midpoint_retrigger_count_min=midpoint_retrigger_count_min,
                 midpoint_retrigger_count_max=midpoint_retrigger_count_max,
+                multisection_section_count_min=multisection_section_count_min,
+                multisection_section_count_max=multisection_section_count_max,
+                multisection_retrigger_count_min=multisection_retrigger_count_min,
+                multisection_retrigger_count_max=multisection_retrigger_count_max,
                 pba_confidence_threshold_min=pba_confidence_threshold_min,
                 pba_confidence_threshold_max=pba_confidence_threshold_max,
                 pba_repeat_count_min=pba_repeat_count_min,
@@ -1029,6 +1140,10 @@ def optimize_combo_on_eval(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    multisection_section_count_min: int,
+    multisection_section_count_max: int,
+    multisection_retrigger_count_min: int,
+    multisection_retrigger_count_max: int,
     pba_confidence_threshold_min: float,
     pba_confidence_threshold_max: float,
     pba_repeat_count_min: int,
@@ -1076,6 +1191,10 @@ def optimize_combo_on_eval(
             probe_repeat_count_max=probe_repeat_count_max,
             midpoint_retrigger_count_min=midpoint_retrigger_count_min,
             midpoint_retrigger_count_max=midpoint_retrigger_count_max,
+            multisection_section_count_min=multisection_section_count_min,
+            multisection_section_count_max=multisection_section_count_max,
+            multisection_retrigger_count_min=multisection_retrigger_count_min,
+            multisection_retrigger_count_max=multisection_retrigger_count_max,
             pba_confidence_threshold_min=pba_confidence_threshold_min,
             pba_confidence_threshold_max=pba_confidence_threshold_max,
             pba_repeat_count_min=pba_repeat_count_min,
@@ -1128,6 +1247,10 @@ def suggest_parameters(
     probe_repeat_count_max: int,
     midpoint_retrigger_count_min: int,
     midpoint_retrigger_count_max: int,
+    multisection_section_count_min: int,
+    multisection_section_count_max: int,
+    multisection_retrigger_count_min: int,
+    multisection_retrigger_count_max: int,
     pba_confidence_threshold_min: float,
     pba_confidence_threshold_max: float,
     pba_repeat_count_min: int,
@@ -1141,6 +1264,8 @@ def suggest_parameters(
     backfill_retrigger_count = default_parameters.backfill_retrigger_count
     probe_repeat_count = default_parameters.probe_repeat_count
     midpoint_retrigger_count = default_parameters.midpoint_retrigger_count
+    multisection_section_count = default_parameters.multisection_section_count
+    multisection_retrigger_count = default_parameters.multisection_retrigger_count
     pba_confidence_threshold = default_parameters.pba_confidence_threshold
     pba_repeat_count = default_parameters.pba_repeat_count
     pba_max_test_runs = default_parameters.pba_max_test_runs
@@ -1167,6 +1292,17 @@ def suggest_parameters(
             int(midpoint_retrigger_count_min),
             int(midpoint_retrigger_count_max),
         )
+    elif localizer_name == "StandardMidpointMultisection":
+        multisection_section_count = trial.suggest_int(
+            "StandardMidpointMultisection_multisection_section_count",
+            int(multisection_section_count_min),
+            int(multisection_section_count_max),
+        )
+        multisection_retrigger_count = trial.suggest_int(
+            "StandardMidpointMultisection_multisection_retrigger_count",
+            int(multisection_retrigger_count_min),
+            int(multisection_retrigger_count_max),
+        )
     elif localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
         pba_confidence_threshold = trial.suggest_float(
             (
@@ -1190,6 +1326,8 @@ def suggest_parameters(
         backfill_retrigger_count=int(backfill_retrigger_count),
         probe_repeat_count=int(probe_repeat_count),
         midpoint_retrigger_count=int(midpoint_retrigger_count),
+        multisection_section_count=int(multisection_section_count),
+        multisection_retrigger_count=int(multisection_retrigger_count),
         pba_confidence_threshold=float(pba_confidence_threshold),
         pba_repeat_count=int(pba_repeat_count),
         pba_max_test_runs=int(pba_max_test_runs),
@@ -1239,6 +1377,12 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
         backfill_retrigger_count=int(raw_parameters["backfill_retrigger_count"]),
         probe_repeat_count=int(raw_parameters["probe_repeat_count"]),
         midpoint_retrigger_count=int(raw_parameters["midpoint_retrigger_count"]),
+        multisection_section_count=int(
+            raw_parameters["multisection_section_count"]
+        ),
+        multisection_retrigger_count=int(
+            raw_parameters["multisection_retrigger_count"]
+        ),
         pba_confidence_threshold=float(raw_parameters["pba_confidence_threshold"]),
         pba_repeat_count=int(raw_parameters["pba_repeat_count"]),
         pba_max_test_runs=int(raw_parameters["pba_max_test_runs"]),
