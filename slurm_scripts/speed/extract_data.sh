@@ -88,13 +88,14 @@ echo "running the data extraction script . . ."
 # --output-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/all_drevs.jsonl \
 # --page-limit 100 \
 # --rate-limit-min-interval 0.5
+# Default repositories: autoland and mozilla-central.
 # Debug-only: add --max-pages 2 for a smoke test. It intentionally truncates output.
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_per_commit_drevs.py \
+# --all-drevs-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/all_drevs.jsonl \
 # --eval-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_eval.json \
 # --final-test-predictions-json /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/risk_predictions_final_test.json \
-# --debug \
-# --rate-limit-min-interval 0.5
+# --debug
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_drevs_transactions.py \
 # --debug \

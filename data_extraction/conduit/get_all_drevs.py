@@ -18,17 +18,23 @@ on both sides:
     final-test end boundary + 1 month
 
 All Differential Revisions created in that padded window for the selected
-repository are fetched with `differential.revision.search` and appended to:
+repositories are fetched with `differential.revision.search` and appended to:
 
     datasets/mozilla_code_review/all_drevs.jsonl
 
 Each output line is one raw revision object returned by Conduit. If the output
 file already exists, DREV IDs already present in the file are skipped. The same
-output file is also used for timestamp-based resume: the script scans existing
-rows, finds the maximum persisted `fields.dateCreated`, and re-queries from
-that timestamp inclusively. Inclusive resume plus DREV-ID deduplication avoids
-losing rows when a page boundary or interrupted write falls in the middle of
-several revisions with the same timestamp.
+output file is also used for per-repository timestamp-based resume: the script
+scans existing rows, finds the maximum persisted `fields.dateCreated` for each
+selected repository, and re-queries from that timestamp inclusively. Inclusive
+resume plus DREV-ID deduplication avoids losing rows when a page boundary or
+interrupted write falls in the middle of several revisions with the same
+timestamp.
+
+After the repository creation-window queries finish, the script also scans
+in-boundary commit messages for trailing DREV URLs and fetches any referenced
+DREV IDs still missing from the output. This covers reviews created before the
+padded DREV creation window but landed by commits inside the dataset interval.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from typing import Any, Iterator
@@ -56,11 +63,16 @@ DEFAULT_FINAL_TEST_PREDICTIONS_JSON = (
 DEFAULT_PHABRICATOR_API_URL = "https://phabricator.services.mozilla.com/api/"
 
 NULL_NODE = "0000000000000000000000000000000000000000"
-DEFAULT_REPOSITORY_KEY = "autoland"
+DEFAULT_REPOSITORY_KEYS = ("autoland", "mozilla-central")
 REPO_PHIDS = {
     "mozilla-central": "PHID-REPO-saax4qdxlbbhahhp2kg5",
     "autoland": "PHID-REPO-wxrrnneqyw2v3wcqbkfj",
 }
+DREV_URL_RE = re.compile(
+    r"https://phabricator\.services\.mozilla\.com/D(\d+)\s*\Z",
+    re.IGNORECASE,
+)
+MISSING_BACKFILL_WARNING_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -82,10 +94,16 @@ class DrevWindow:
 
 
 @dataclass
-class ExistingOutputState:
-    drev_ids: set[int]
+class ExistingRepositoryOutputState:
+    row_count: int
     max_date_created: int | None
     can_resume_from_timestamp: bool
+
+
+@dataclass
+class ExistingOutputState:
+    drev_ids: set[int]
+    repositories: dict[str, ExistingRepositoryOutputState]
 
 
 class ConduitCaller:
@@ -147,6 +165,13 @@ class PhabricatorClient:
             kwargs["after"] = after_cursor
         return self.caller.call(self.phab.differential.revision.search, **kwargs)
 
+    def search_revisions_by_ids(self, drev_ids: list[int]) -> dict[str, Any]:
+        return self.caller.call(
+            self.phab.differential.revision.search,
+            constraints={"ids": drev_ids},
+            limit=len(drev_ids),
+        )
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -173,15 +198,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--repository-key",
         choices=sorted(REPO_PHIDS),
-        default=DEFAULT_REPOSITORY_KEY,
-        help="Known Mozilla repository to query.",
+        action="append",
+        default=None,
+        help=(
+            "Known Mozilla repository to query. May be specified more than "
+            "once. Defaults to autoland and mozilla-central."
+        ),
     )
     parser.add_argument(
         "--repository-phid",
+        action="append",
         default=None,
         help=(
-            "Explicit repository PHID to query. Overrides --repository-key when "
-            "provided."
+            "Explicit repository PHID to query. May be specified more than "
+            "once. Overrides --repository-key when provided."
         ),
     )
     parser.add_argument(
@@ -221,7 +251,42 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Replace the existing output JSONL instead of appending missing DREVs.",
     )
+    parser.add_argument(
+        "--skip-referenced-drev-backfill",
+        action="store_true",
+        help=(
+            "Skip the final by-ID backfill for DREVs referenced by in-boundary "
+            "commits but not found by the repository creation-window queries."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def resolve_repositories(args: argparse.Namespace) -> list[tuple[str, str]]:
+    phid_to_key = {phid: key for key, phid in REPO_PHIDS.items()}
+    repositories: list[tuple[str, str]] = []
+    seen_phids: set[str] = set()
+
+    if args.repository_phid:
+        for index, repository_phid in enumerate(args.repository_phid, start=1):
+            if not isinstance(repository_phid, str) or not repository_phid:
+                raise ValueError("--repository-phid values must be non-empty")
+            if repository_phid in seen_phids:
+                continue
+            repository_label = phid_to_key.get(repository_phid, f"custom-{index}")
+            repositories.append((repository_label, repository_phid))
+            seen_phids.add(repository_phid)
+        return repositories
+
+    repository_keys = args.repository_key or list(DEFAULT_REPOSITORY_KEYS)
+    for repository_key in repository_keys:
+        repository_phid = REPO_PHIDS[repository_key]
+        if repository_phid in seen_phids:
+            continue
+        repositories.append((repository_key, repository_phid))
+        seen_phids.add(repository_phid)
+
+    return repositories
 
 
 def load_api_token() -> str:
@@ -323,6 +388,35 @@ def load_prediction_commit_ids(path: Path) -> list[str]:
     if not commit_ids:
         raise ValueError(f"{path} contains no prediction commit ids")
     return commit_ids
+
+
+def extract_drev_id(desc: str | None) -> int | None:
+    if not desc:
+        return None
+    match = DREV_URL_RE.search(desc)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def collect_referenced_drev_ids(
+    *,
+    commits: list[dict[str, Any]],
+    eval_boundary: SplitBoundary,
+    final_test_boundary: SplitBoundary,
+) -> set[int]:
+    if eval_boundary.start_index > final_test_boundary.end_index:
+        raise ValueError(
+            "Eval start boundary comes after final-test end boundary: "
+            f"{eval_boundary.start_commit_id} > {final_test_boundary.end_commit_id}"
+        )
+
+    drev_ids: set[int] = set()
+    for index in range(eval_boundary.start_index, final_test_boundary.end_index + 1):
+        drev_id = extract_drev_id(commits[index].get("desc"))
+        if drev_id is not None:
+            drev_ids.add(drev_id)
+    return drev_ids
 
 
 def build_split_boundary(
@@ -457,21 +551,35 @@ def revision_repository_phid(revision: dict[str, Any]) -> str | None:
 def load_existing_output_state(
     *,
     output_jsonl: Path,
-    repository_phid: str,
+    repository_phids: set[str],
     window: DrevWindow,
 ) -> ExistingOutputState:
+    repository_work_state: dict[str, dict[str, Any]] = {
+        repository_phid: {
+            "row_count": 0,
+            "max_date_created": None,
+            "previous_date_created": None,
+            "can_resume_from_timestamp": True,
+        }
+        for repository_phid in repository_phids
+    }
     if not output_jsonl.exists():
         return ExistingOutputState(
             drev_ids=set(),
-            max_date_created=None,
-            can_resume_from_timestamp=False,
+            repositories={
+                repository_phid: ExistingRepositoryOutputState(
+                    row_count=0,
+                    max_date_created=None,
+                    can_resume_from_timestamp=False,
+                )
+                for repository_phid in repository_phids
+            },
         )
 
     existing_drev_ids: set[int] = set()
     duplicate_count = 0
-    max_date_created: int | None = None
-    previous_date_created: int | None = None
-    can_resume_from_timestamp = True
+    other_repository_count = 0
+    missing_repository_count = 0
 
     for line_num, record in iter_jsonl(output_jsonl):
         drev = record.get("drev") if isinstance(record.get("drev"), dict) else record
@@ -483,41 +591,44 @@ def load_existing_output_state(
             raise ValueError(f"{output_jsonl}:{line_num}: missing integer DREV id")
 
         repository = revision_repository_phid(drev)
-        if repository is not None and repository != repository_phid:
-            print(
-                f"[WARN] {output_jsonl}:{line_num}: D{drev_id} belongs to "
-                f"{repository}, not {repository_phid}; timestamp resume disabled.",
-                file=sys.stderr,
-            )
-            can_resume_from_timestamp = False
+        if repository is None:
+            missing_repository_count += 1
+        elif repository not in repository_work_state:
+            other_repository_count += 1
 
         date_created = revision_date_created(drev)
-        if not window.start_epoch <= date_created <= window.end_epoch:
-            print(
-                f"[WARN] {output_jsonl}:{line_num}: D{drev_id} has "
-                f"dateCreated={date_created} outside the current query window; "
-                "timestamp resume disabled.",
-                file=sys.stderr,
-            )
-            can_resume_from_timestamp = False
+        if repository in repository_work_state:
+            state = repository_work_state[repository]
+            state["row_count"] += 1
+            if not window.start_epoch <= date_created <= window.end_epoch:
+                print(
+                    f"[WARN] {output_jsonl}:{line_num}: D{drev_id} has "
+                    f"dateCreated={date_created} outside the current query "
+                    f"window for {repository}; timestamp resume disabled for "
+                    "that repository.",
+                    file=sys.stderr,
+                )
+                state["can_resume_from_timestamp"] = False
 
-        if (
-            previous_date_created is not None
-            and date_created < previous_date_created
-        ):
-            print(
-                f"[WARN] {output_jsonl}:{line_num}: dateCreated went backward "
-                f"from {previous_date_created} to {date_created}; timestamp "
-                "resume disabled.",
-                file=sys.stderr,
+            previous_date_created = state["previous_date_created"]
+            if (
+                previous_date_created is not None
+                and date_created < previous_date_created
+            ):
+                print(
+                    f"[WARN] {output_jsonl}:{line_num}: dateCreated for "
+                    f"{repository} went backward from {previous_date_created} "
+                    f"to {date_created}; timestamp resume disabled for that "
+                    "repository.",
+                    file=sys.stderr,
+                )
+                state["can_resume_from_timestamp"] = False
+            state["previous_date_created"] = date_created
+            state["max_date_created"] = (
+                date_created
+                if state["max_date_created"] is None
+                else max(state["max_date_created"], date_created)
             )
-            can_resume_from_timestamp = False
-        previous_date_created = date_created
-        max_date_created = (
-            date_created
-            if max_date_created is None
-            else max(max_date_created, date_created)
-        )
 
         if drev_id in existing_drev_ids:
             duplicate_count += 1
@@ -529,35 +640,52 @@ def load_existing_output_state(
             continue
         existing_drev_ids.add(drev_id)
 
+    repository_states = {
+        repository_phid: ExistingRepositoryOutputState(
+            row_count=int(state["row_count"]),
+            max_date_created=state["max_date_created"],
+            can_resume_from_timestamp=bool(state["can_resume_from_timestamp"])
+            if state["max_date_created"] is not None
+            else False,
+        )
+        for repository_phid, state in repository_work_state.items()
+    }
+
     if existing_drev_ids:
         print(
             f"Found {len(existing_drev_ids)} existing DREV rows in {output_jsonl}; "
             "matching DREVs will be skipped.",
             file=sys.stderr,
         )
+    for repository_phid, state in repository_states.items():
+        if state.row_count:
+            print(
+                f"Found {state.row_count} existing rows for repository "
+                f"{repository_phid}.",
+                file=sys.stderr,
+            )
     if duplicate_count:
         print(
             f"[WARN] Found {duplicate_count} duplicate existing output rows in "
             f"{output_jsonl}.",
             file=sys.stderr,
         )
-    if can_resume_from_timestamp and max_date_created is not None:
+    if other_repository_count:
         print(
-            f"Resuming from existing output timestamp: "
-            f"createdStart={max_date_created}.",
+            f"Found {other_repository_count} rows for repositories outside the "
+            "current query set; they will still be used for DREV-ID dedupe.",
             file=sys.stderr,
         )
-    elif existing_drev_ids:
+    if missing_repository_count:
         print(
-            "[WARN] Timestamp resume disabled; scanning the full query window and "
-            "deduping against existing output.",
+            f"[WARN] Found {missing_repository_count} rows without "
+            "fields.repositoryPHID; they will still be used for DREV-ID dedupe.",
             file=sys.stderr,
         )
 
     return ExistingOutputState(
         drev_ids=existing_drev_ids,
-        max_date_created=max_date_created,
-        can_resume_from_timestamp=can_resume_from_timestamp,
+        repositories=repository_states,
     )
 
 
@@ -566,6 +694,7 @@ def fetch_and_write_drevs(
     client: PhabricatorClient,
     output_jsonl: Path,
     existing_drev_ids: set[int],
+    repository_label: str,
     repository_phid: str,
     window: DrevWindow,
     resume_created_start_epoch: int,
@@ -640,7 +769,7 @@ def fetch_and_write_drevs(
             cursor = result.get("cursor", {})
             after_cursor = cursor.get("after") if isinstance(cursor, dict) else None
             print(
-                f"Fetched page {stats['pages_fetched']}: "
+                f"[{repository_label}] Fetched page {stats['pages_fetched']}: "
                 f"{stats['drevs_seen']} DREVs seen, "
                 f"{stats['drevs_written']} written.",
                 file=sys.stderr,
@@ -658,6 +787,122 @@ def fetch_and_write_drevs(
                     file=sys.stderr,
                 )
                 return stats
+
+
+def fetch_and_write_drevs_by_id(
+    *,
+    client: PhabricatorClient,
+    output_jsonl: Path,
+    existing_drev_ids: set[int],
+    drev_ids: set[int],
+    batch_size: int,
+) -> dict[str, int]:
+    if batch_size <= 0:
+        raise ValueError("--page-limit must be positive")
+
+    ids_to_fetch = sorted(
+        drev_id for drev_id in drev_ids if drev_id not in existing_drev_ids
+    )
+    stats = {
+        "backfill_drevs_requested": len(ids_to_fetch),
+        "backfill_batches_fetched": 0,
+        "backfill_drevs_seen": 0,
+        "backfill_drevs_written": 0,
+        "backfill_drevs_missing": 0,
+    }
+    if not ids_to_fetch:
+        print(
+            "Referenced-DREV backfill: no missing referenced DREV IDs.",
+            file=sys.stderr,
+        )
+        return stats
+
+    print(
+        f"Referenced-DREV backfill: fetching {len(ids_to_fetch)} missing "
+        "commit-referenced DREV IDs.",
+        file=sys.stderr,
+    )
+
+    missing_ids: set[int] = set()
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    with output_jsonl.open("a", encoding="utf-8") as output_file:
+        for start in range(0, len(ids_to_fetch), batch_size):
+            batch_ids = ids_to_fetch[start : start + batch_size]
+            result = client.search_revisions_by_ids(batch_ids)
+            stats["backfill_batches_fetched"] += 1
+
+            data = result.get("data", [])
+            if not isinstance(data, list):
+                raise ValueError(
+                    "Unexpected differential.revision.search response: "
+                    f"`data` is {type(data).__name__}"
+                )
+
+            returned_ids: set[int] = set()
+            batch_written_count = 0
+            for revision in data:
+                if not isinstance(revision, dict):
+                    raise ValueError(
+                        "Unexpected differential.revision.search response: "
+                        f"revision row is {type(revision).__name__}"
+                    )
+                drev_id = revision.get("id")
+                if not isinstance(drev_id, int):
+                    raise ValueError(
+                        f"Revision row is missing integer id: {revision!r}"
+                    )
+                returned_ids.add(drev_id)
+                stats["backfill_drevs_seen"] += 1
+                revision_date_created(revision)
+
+                if drev_id in existing_drev_ids:
+                    continue
+                output_file.write(json.dumps(revision) + "\n")
+                existing_drev_ids.add(drev_id)
+                stats["backfill_drevs_written"] += 1
+                batch_written_count += 1
+
+            missing_ids.update(set(batch_ids) - returned_ids)
+            if batch_written_count:
+                output_file.flush()
+                os.fsync(output_file.fileno())
+
+            print(
+                "Referenced-DREV backfill batch "
+                f"{stats['backfill_batches_fetched']}: "
+                f"{stats['backfill_drevs_seen']} DREVs seen, "
+                f"{stats['backfill_drevs_written']} written.",
+                file=sys.stderr,
+            )
+
+    stats["backfill_drevs_missing"] = len(missing_ids)
+    if missing_ids:
+        preview = ", ".join(
+            f"D{drev_id}"
+            for drev_id in sorted(missing_ids)[:MISSING_BACKFILL_WARNING_LIMIT]
+        )
+        print(
+            f"[WARN] {len(missing_ids)} referenced DREV IDs were not returned "
+            f"by Conduit. First missing IDs: {preview}",
+            file=sys.stderr,
+        )
+
+    return stats
+
+
+def empty_stats() -> dict[str, int]:
+    return {
+        "pages_fetched": 0,
+        "drevs_seen": 0,
+        "existing_rows_skipped": 0,
+        "drevs_written": 0,
+        "stopped_after_max_pages": 0,
+    }
+
+
+def add_stats(total: dict[str, int], increment: dict[str, int]) -> None:
+    for key, value in increment.items():
+        total[key] = total.get(key, 0) + value
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -680,7 +925,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.overwrite and output_jsonl.exists():
         output_jsonl.unlink()
 
-    repository_phid = args.repository_phid or REPO_PHIDS[args.repository_key]
+    repositories = resolve_repositories(args)
+    if not repositories:
+        raise ValueError("At least one repository must be selected")
 
     commits = load_commits(input_jsonl)
     node_to_index = {commit["node"]: index for index, commit in enumerate(commits)}
@@ -710,8 +957,9 @@ def main(argv: list[str] | None = None) -> None:
         file=sys.stderr,
     )
     print(
-        f"Repository PHID: {repository_phid} "
-        f"(key={args.repository_key!r}, output={output_jsonl})",
+        "Repository PHIDs: "
+        + ", ".join(f"{label}={phid}" for label, phid in repositories)
+        + f" (output={output_jsonl})",
         file=sys.stderr,
     )
     if args.max_pages is not None:
@@ -725,30 +973,101 @@ def main(argv: list[str] | None = None) -> None:
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
     existing_output = load_existing_output_state(
         output_jsonl=output_jsonl,
-        repository_phid=repository_phid,
+        repository_phids={repository_phid for _, repository_phid in repositories},
         window=window,
     )
-    resume_created_start_epoch = (
-        existing_output.max_date_created
-        if (
-            existing_output.can_resume_from_timestamp
-            and existing_output.max_date_created is not None
+    total_stats = empty_stats()
+    for repository_label, repository_phid in repositories:
+        repository_state = existing_output.repositories[repository_phid]
+        resume_created_start_epoch = (
+            repository_state.max_date_created
+            if (
+                repository_state.can_resume_from_timestamp
+                and repository_state.max_date_created is not None
+            )
+            else window.start_epoch
         )
-        else window.start_epoch
-    )
-    stats = fetch_and_write_drevs(
-        client=client,
-        output_jsonl=output_jsonl,
-        existing_drev_ids=existing_output.drev_ids,
-        repository_phid=repository_phid,
-        window=window,
-        resume_created_start_epoch=resume_created_start_epoch,
-        page_limit=args.page_limit,
-        max_pages=args.max_pages,
-    )
+        if (
+            repository_state.can_resume_from_timestamp
+            and repository_state.max_date_created is not None
+        ):
+            print(
+                f"[{repository_label}] Resuming from existing output timestamp: "
+                f"createdStart={repository_state.max_date_created}.",
+                file=sys.stderr,
+            )
+        elif repository_state.row_count:
+            print(
+                f"[{repository_label}] [WARN] Timestamp resume disabled; "
+                "scanning the full query window and deduping against existing "
+                "output.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[{repository_label}] No existing rows for this repository; "
+                "scanning the full query window.",
+                file=sys.stderr,
+            )
 
-    print(f"Wrote {stats['drevs_written']} rows to {output_jsonl}.")
-    print(json.dumps(stats, sort_keys=True), file=sys.stderr)
+        stats = fetch_and_write_drevs(
+            client=client,
+            output_jsonl=output_jsonl,
+            existing_drev_ids=existing_output.drev_ids,
+            repository_label=repository_label,
+            repository_phid=repository_phid,
+            window=window,
+            resume_created_start_epoch=resume_created_start_epoch,
+            page_limit=args.page_limit,
+            max_pages=args.max_pages,
+        )
+        add_stats(total_stats, stats)
+        print(
+            json.dumps(
+                {
+                    "repository": repository_label,
+                    "repository_phid": repository_phid,
+                    **stats,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+
+    if args.skip_referenced_drev_backfill:
+        print(
+            "Referenced-DREV backfill skipped by "
+            "--skip-referenced-drev-backfill.",
+            file=sys.stderr,
+        )
+    elif args.max_pages is not None:
+        print(
+            "Referenced-DREV backfill skipped because --max-pages is set for "
+            "a bounded debug run.",
+            file=sys.stderr,
+        )
+    else:
+        referenced_drev_ids = collect_referenced_drev_ids(
+            commits=commits,
+            eval_boundary=eval_boundary,
+            final_test_boundary=final_test_boundary,
+        )
+        backfill_stats = fetch_and_write_drevs_by_id(
+            client=client,
+            output_jsonl=output_jsonl,
+            existing_drev_ids=existing_output.drev_ids,
+            drev_ids=referenced_drev_ids,
+            batch_size=args.page_limit,
+        )
+        add_stats(total_stats, backfill_stats)
+        print(json.dumps(backfill_stats, sort_keys=True), file=sys.stderr)
+
+    total_written = total_stats.get("drevs_written", 0) + total_stats.get(
+        "backfill_drevs_written",
+        0,
+    )
+    print(f"Wrote {total_written} rows to {output_jsonl}.")
+    print(json.dumps(total_stats, sort_keys=True), file=sys.stderr)
 
 
 if __name__ == "__main__":

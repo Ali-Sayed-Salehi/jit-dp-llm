@@ -55,28 +55,56 @@ Output row shape:
 {"commit_id": "...", "risk_score": 0.42, "bug_inducing": 1, "desc": "Bug ..."}
 ```
 
-2. Fetch published, closed DREVs for scored commits:
+2. Fetch raw DREVs for the dataset window:
 
 ```bash
-python data_extraction/conduit/get_per_commit_drevs.py \
+python data_extraction/conduit/get_all_drevs.py \
   --input-jsonl datasets/mozilla_code_review/all_commits.jsonl \
-  --output-jsonl datasets/mozilla_code_review/per_commit_drevs.jsonl \
   --eval-predictions-json datasets/mozilla_code_review/risk_predictions_eval.json \
   --final-test-predictions-json datasets/mozilla_code_review/risk_predictions_final_test.json \
-  --risk-scores-jsonl datasets/mozilla_code_review/per_commit_risk_scores.jsonl \
-  --api-url https://phabricator.services.mozilla.com/api/ \
+  --output-jsonl datasets/mozilla_code_review/all_drevs.jsonl \
+  --page-limit 100 \
   --rate-limit-min-interval 0.5
 ```
 
 This script:
 
+- derives the same padded eval-through-final-test creation window;
+- fetches both `autoland` and `mozilla-central` DREVs by default;
+- resumes independently per repository from existing `all_drevs.jsonl` rows;
+- backfills any still-missing DREV IDs referenced by in-boundary commit
+  messages;
+- skips DREV IDs already present in the output file.
+
+Use repeated `--repository-key` flags only when you need to restrict or
+override the default repository set.
+
+3. Select published, closed DREVs for scored commits:
+
+```bash
+python data_extraction/conduit/get_per_commit_drevs.py \
+  --input-jsonl datasets/mozilla_code_review/all_commits.jsonl \
+  --all-drevs-jsonl datasets/mozilla_code_review/all_drevs.jsonl \
+  --output-jsonl datasets/mozilla_code_review/per_commit_drevs.jsonl \
+  --eval-predictions-json datasets/mozilla_code_review/risk_predictions_eval.json \
+  --final-test-predictions-json datasets/mozilla_code_review/risk_predictions_final_test.json \
+  --risk-scores-jsonl datasets/mozilla_code_review/per_commit_risk_scores.jsonl
+```
+
+This script:
+
+- loads DREV records from `all_drevs.jsonl`;
 - loads scored commit ids from `per_commit_risk_scores.jsonl`;
 - scans only the eval-through-final-test Mercurial interval;
 - keeps only commits with a leading bug id and per-commit risk row;
 - looks for a trailing `https://phabricator.services.mozilla.com/D...` URL in
   the commit message;
-- fetches each matching DREV with `differential.revision.search`;
+- looks up each matching DREV id from `all_drevs.jsonl`;
 - writes only published, closed DREVs to `per_commit_drevs.jsonl`.
+
+`all_drevs.jsonl` must contain every repository PHID you expect to match. If it
+only contains `autoland` DREVs, commit URLs that point at `mozilla-central`
+DREVs will be reported as missing and skipped.
 
 Output row shape:
 
@@ -84,7 +112,7 @@ Output row shape:
 {"commit_id": "...", "dataset_split": "eval", "drev": {...}}
 ```
 
-3. Fetch transactions for those DREVs:
+4. Fetch transactions for those DREVs:
 
 ```bash
 python data_extraction/conduit/get_drevs_transactions.py \
@@ -116,7 +144,7 @@ Output row shape:
 }
 ```
 
-4. Build the compact review dataset:
+5. Build the compact review dataset:
 
 ```bash
 python data_extraction/conduit/create_code_review_dataset.py \
@@ -157,8 +185,9 @@ Output row shape:
 }
 ```
 
-Add `--debug` to stages 2, 3, or 4 for a split-balanced smoke test. Debug mode
-selects the bounded subset before API calls or dataset assembly.
+Add `--debug` to stages 3, 4, or 5 for a split-balanced smoke test. Debug mode
+selects the bounded subset before API calls or dataset assembly. For stage 2,
+use `--max-pages` only for a bounded pagination smoke test.
 
 Cluster-specific commented commands are also available in
 `slurm_scripts/speed/extract_data.sh`.
@@ -170,9 +199,14 @@ Cluster-specific commented commands are also available in
     rows, copies `true_label` into `bug_inducing`, and expands both fields
     across contiguous same-bug commit blocks.
 
+- `get_all_drevs.py`
+  - Fetches raw `autoland` and `mozilla-central` Differential Revisions for
+    the padded dataset creation window.
+
 - `get_per_commit_drevs.py`
-  - Fetches published, closed Differential Revisions linked by trailing DREV
-    URLs in eligible Mercurial commit messages.
+  - Selects published, closed Differential Revisions from `all_drevs.jsonl`
+    that are linked by trailing DREV URLs in eligible Mercurial commit
+    messages.
 
 - `get_drevs_transactions.py`
   - Fetches full Conduit transaction history for each DREV row.
