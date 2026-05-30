@@ -11,14 +11,16 @@ For each DREV row, it fetches all transactions with Conduit's
 
     datasets/mozilla_code_review/per_commit_drev_transactions.jsonl
 
-Each output row contains `commit_id`, `drev_id`, `dataset_split`, and
-`transactions`, where `transactions` is the list of raw transaction objects
+Each output row contains `commit_id`, `drev_id`, `drev_phid`, `dataset_split`,
+and `transactions`, where `transactions` is the list of raw transaction objects
 returned by Conduit.
 
 If the output file already exists, rows with commit IDs already present in the
-file are skipped before any Conduit API call is made. Failed API calls are
-skipped without retrying, so interrupted or rate-limited runs can be resumed by
-running the script again later.
+file are skipped before any Conduit API call is made. Existing output rows are
+also used as a DREV-level transaction cache keyed by DREV PHID, so missing
+commit rows for an already-fetched DREV can be written without refetching from
+Conduit. Rate-limit errors abort the run immediately, preserving rows already
+written so the run can be resumed later.
 
 Use `--debug` to process only 10 eval DREV rows and 10 final-test DREV rows
 from per_commit_drevs.jsonl. The debug subset is selected before initializing
@@ -57,6 +59,12 @@ class DrevRef:
     drev_id: int
     dataset_split: str
     phid: str
+
+
+@dataclass
+class ExistingOutputState:
+    commit_ids: set[str]
+    transactions_by_phid: dict[str, list[dict[str, Any]]]
 
 
 class ConduitCaller:
@@ -205,11 +213,12 @@ def iter_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
             yield line_num, record
 
 
-def load_existing_output_commit_ids(path: Path) -> set[str]:
+def load_existing_output_state(path: Path) -> ExistingOutputState:
     if not path.exists():
-        return set()
+        return ExistingOutputState(commit_ids=set(), transactions_by_phid={})
 
     existing_commit_ids: set[str] = set()
+    transactions_by_phid: dict[str, list[dict[str, Any]]] = {}
     duplicate_count = 0
     for line_num, record in iter_jsonl(path):
         commit_id = record.get("commit_id")
@@ -225,6 +234,34 @@ def load_existing_output_commit_ids(path: Path) -> set[str]:
             continue
         existing_commit_ids.add(commit_id)
 
+        transactions = record.get("transactions")
+        if not isinstance(transactions, list):
+            print(
+                f"[WARN] {path}:{line_num}: missing transactions list; row "
+                "cannot be used as a DREV transaction cache entry.",
+                file=sys.stderr,
+            )
+            continue
+
+        typed_transactions: list[dict[str, Any]] = []
+        for transaction_index, transaction in enumerate(transactions):
+            if not isinstance(transaction, dict):
+                print(
+                    f"[WARN] {path}:{line_num}: transactions[{transaction_index}] "
+                    "is not an object; row cannot be used as a DREV "
+                    "transaction cache entry.",
+                    file=sys.stderr,
+                )
+                typed_transactions = []
+                break
+            typed_transactions.append(transaction)
+
+        drev_phid = record.get("drev_phid")
+        if not isinstance(drev_phid, str) or not drev_phid:
+            continue
+        if drev_phid not in transactions_by_phid:
+            transactions_by_phid[drev_phid] = typed_transactions
+
     if existing_commit_ids:
         print(
             f"Found {len(existing_commit_ids)} existing rows in {path}; "
@@ -236,7 +273,16 @@ def load_existing_output_commit_ids(path: Path) -> set[str]:
             f"[WARN] Found {duplicate_count} duplicate existing output rows in {path}.",
             file=sys.stderr,
         )
-    return existing_commit_ids
+    if transactions_by_phid:
+        print(
+            f"Loaded cached transactions for {len(transactions_by_phid)} DREVs "
+            f"from {path}.",
+            file=sys.stderr,
+        )
+    return ExistingOutputState(
+        commit_ids=existing_commit_ids,
+        transactions_by_phid=transactions_by_phid,
+    )
 
 
 def parse_drev_ref(record: dict[str, Any], *, line_label: str) -> DrevRef | None:
@@ -317,13 +363,18 @@ def describe_debug_split_counts(refs: list[DrevRef]) -> str:
     return ", ".join(f"{counts[split]} {split}" for split in DEBUG_DATASET_SPLITS)
 
 
+def is_rate_limit_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "429" in message or "rate limit" in message or "rate-limit" in message
+
+
 def write_transactions(
     *,
     refs: list[DrevRef],
     output_jsonl: Path,
     client: PhabricatorClient,
     page_limit: int,
-    existing_commit_ids: set[str],
+    existing_state: ExistingOutputState,
 ) -> dict[str, int]:
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     refs_by_phid: dict[str, list[DrevRef]] = {}
@@ -331,13 +382,14 @@ def write_transactions(
         "drev_rows_seen": len(refs),
         "existing_rows_skipped": 0,
         "unique_drevs_fetched": 0,
+        "cached_drevs_reused": 0,
         "drev_rows_written": 0,
         "transaction_records_written": 0,
         "fetch_errors": 0,
     }
 
     for ref in refs:
-        if ref.commit_id in existing_commit_ids:
+        if ref.commit_id in existing_state.commit_ids:
             stats["existing_rows_skipped"] += 1
             continue
         refs_by_phid.setdefault(ref.phid, []).append(ref)
@@ -345,28 +397,44 @@ def write_transactions(
     with output_jsonl.open("a", encoding="utf-8") as output_file:
         for phid, phid_refs in refs_by_phid.items():
             first_ref = phid_refs[0]
-            try:
-                transactions = client.get_transactions(phid, page_limit=page_limit)
-                stats["unique_drevs_fetched"] += 1
-            except Exception as exc:
-                stats["fetch_errors"] += 1
-                print(
-                    f"[WARN] Failed to fetch transactions for D{first_ref.drev_id} "
-                    f"({phid}): {exc}",
-                    file=sys.stderr,
-                )
-                continue
+            transactions = existing_state.transactions_by_phid.get(phid)
+            if transactions is not None:
+                stats["cached_drevs_reused"] += 1
+            else:
+                try:
+                    transactions = client.get_transactions(phid, page_limit=page_limit)
+                    existing_state.transactions_by_phid[phid] = transactions
+                    stats["unique_drevs_fetched"] += 1
+                except Exception as exc:
+                    if is_rate_limit_error(exc):
+                        print(
+                            f"[ERROR] Rate limit while fetching transactions "
+                            f"for D{first_ref.drev_id} ({phid}); aborting so "
+                            "the run can be resumed later without refetching "
+                            "already-written rows.",
+                            file=sys.stderr,
+                        )
+                        raise
+                    stats["fetch_errors"] += 1
+                    print(
+                        f"[WARN] Failed to fetch transactions for D{first_ref.drev_id} "
+                        f"({phid}): {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
 
             for ref in phid_refs:
                 output_row = {
                     "commit_id": ref.commit_id,
                     "drev_id": ref.drev_id,
+                    "drev_phid": ref.phid,
                     "dataset_split": ref.dataset_split,
                     "transactions": transactions,
                 }
                 output_file.write(json.dumps(output_row) + "\n")
                 output_file.flush()
-                existing_commit_ids.add(ref.commit_id)
+                os.fsync(output_file.fileno())
+                existing_state.commit_ids.add(ref.commit_id)
                 stats["drev_rows_written"] += 1
                 stats["transaction_records_written"] += len(transactions)
 
@@ -392,7 +460,7 @@ def main(argv: list[str] | None = None) -> None:
             file=sys.stderr,
         )
 
-    existing_commit_ids = load_existing_output_commit_ids(output_jsonl)
+    existing_state = load_existing_output_state(output_jsonl)
     caller = ConduitCaller(
         min_interval_seconds=args.rate_limit_min_interval,
     )
@@ -403,7 +471,7 @@ def main(argv: list[str] | None = None) -> None:
         output_jsonl=output_jsonl,
         client=client,
         page_limit=args.page_limit,
-        existing_commit_ids=existing_commit_ids,
+        existing_state=existing_state,
     )
 
     print(f"Wrote {stats['drev_rows_written']} rows to {output_jsonl}")
