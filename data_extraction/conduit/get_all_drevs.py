@@ -211,7 +211,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-pages",
         type=int,
         default=None,
-        help="Maximum number of Conduit pages to fetch. Intended for debugging.",
+        help=(
+            "Maximum number of Conduit pages to fetch. Intended for debugging; "
+            "when set, output may stop before --createdEnd."
+        ),
     )
     parser.add_argument(
         "--overwrite",
@@ -584,6 +587,7 @@ def fetch_and_write_drevs(
         "drevs_seen": 0,
         "existing_rows_skipped": 0,
         "drevs_written": 0,
+        "stopped_after_max_pages": 0,
     }
     after_cursor: str | None = None
 
@@ -644,6 +648,15 @@ def fetch_and_write_drevs(
             if after_cursor is None:
                 return stats
             if max_pages is not None and stats["pages_fetched"] >= max_pages:
+                stats["stopped_after_max_pages"] = 1
+                print(
+                    "[WARN] Stopped after "
+                    f"--max-pages={max_pages} with pagination cursor "
+                    f"after={after_cursor!r}; output is intentionally "
+                    "incomplete. Re-run without --max-pages to fetch through "
+                    "the full DREV creation window.",
+                    file=sys.stderr,
+                )
                 return stats
 
 
@@ -701,6 +714,12 @@ def main(argv: list[str] | None = None) -> None:
         f"(key={args.repository_key!r}, output={output_jsonl})",
         file=sys.stderr,
     )
+    if args.max_pages is not None:
+        print(
+            "[WARN] --max-pages is set; this is a bounded debug run and may "
+            "not reach the DREV creation window end.",
+            file=sys.stderr,
+        )
 
     caller = ConduitCaller(min_interval_seconds=args.rate_limit_min_interval)
     client = PhabricatorClient(api_url=args.api_url, caller=caller)
