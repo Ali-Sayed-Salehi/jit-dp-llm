@@ -43,6 +43,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
 DEFAULT_ORACLE_METRICS = (
     REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
 )
+DEFAULT_RISK_SCORES = DEFAULT_BISECT_DATA_DIR / "per_commit_risk_scores.jsonl"
 
 DATASETS = {
     "eval": "perf_bisect_regressions_eval.jsonl",
@@ -78,6 +79,7 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_repeat_count",
         "pba_max_test_runs",
     ),
+    "RiskWeightedBisection": ("midpoint_retrigger_count",),
     "StandardMidpointBisection": ("midpoint_retrigger_count",),
     "StandardMidpointMultisection": (
         "multisection_section_count",
@@ -204,6 +206,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
     oracle_metrics = load_oracle_metrics(args.oracle_metrics)
+    risk_scores_required = uses_risk_weighted_bisection(args.localizers)
+    risk_scores = load_risk_scores(args.risk_scores) if risk_scores_required else {}
+    risk_scores_path = args.risk_scores if risk_scores_required else None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     required_dataset_names = set(dataset_names)
@@ -263,6 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             signature_info=signature_info,
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
+            risk_scores=risk_scores,
             oracle_names=args.oracles,
             localizer_names=args.localizers,
             workers=args.workers,
@@ -296,9 +302,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             signature_info_path=args.signature_info,
             revision_data_path=args.revision_data,
             oracle_metrics_path=args.oracle_metrics,
+            risk_scores_path=risk_scores_path,
             signature_info=signature_info,
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
+            risk_scores=risk_scores,
             oracle_names=args.oracles,
             localizer_names=args.localizers,
             workers=args.workers,
@@ -359,6 +367,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Path to per_regression_oracle_metrics.jsonl. SummaryComparison "
             "uses summary_oracle_accuracy as its noisy-oracle accuracy."
+        ),
+    )
+    parser.add_argument(
+        "--risk-scores",
+        type=Path,
+        default=DEFAULT_RISK_SCORES,
+        help=(
+            "Path to per_commit_risk_scores.jsonl. RiskWeightedBisection uses "
+            "risk_score values from this file to choose bisection probes."
         ),
     )
     parser.add_argument(
@@ -706,9 +723,11 @@ def run_dataset(
     signature_info_path: Path,
     revision_data_path: Path,
     oracle_metrics_path: Path,
+    risk_scores_path: Path | None,
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
+    risk_scores: Mapping[str, float],
     oracle_names: Sequence[str],
     localizer_names: Sequence[str],
     workers: int,
@@ -737,6 +756,7 @@ def run_dataset(
                 signature_info=signature_info,
                 revision_perf=revision_perf,
                 oracle_metrics=oracle_metrics,
+                risk_scores=risk_scores,
                 workers=workers,
                 parameters=parameters,
                 random_seed=random_seed,
@@ -808,6 +828,8 @@ def run_dataset(
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
     }
+    if risk_scores_path is not None:
+        base_output["inputs"]["risk_scores"] = str(risk_scores_path)
     if optimization_settings is not None:
         base_output["settings"]["optimization"] = dict(optimization_settings)
     best_combo_fields = compute_best_combo_fields(summary_runs)
@@ -987,6 +1009,7 @@ def run_combo(
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
+    risk_scores: Mapping[str, float],
     workers: int,
     parameters: SimulationParameters,
     random_seed: int | None,
@@ -996,6 +1019,7 @@ def run_combo(
     localizer = build_localizer(
         localizer_name,
         parameters=parameters,
+        risk_scores=risk_scores,
     )
     results = [
         run_one_regression(
@@ -1018,6 +1042,7 @@ def build_localizer(
     localizer_name: str,
     *,
     parameters: SimulationParameters,
+    risk_scores: Mapping[str, float],
 ) -> CulpritLocalizer:
     """Construct a localizer from the registry."""
 
@@ -1046,6 +1071,11 @@ def build_localizer(
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
         )
+    if localizer_name == "RiskWeightedBisection":
+        return localizer_cls(
+            midpoint_retrigger_count=parameters.midpoint_retrigger_count,
+            risk_scores=risk_scores,
+        )
     return localizer_cls()
 
 
@@ -1055,6 +1085,7 @@ def optimize_parameters_on_eval(
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
+    risk_scores: Mapping[str, float],
     oracle_names: Sequence[str],
     localizer_names: Sequence[str],
     workers: int,
@@ -1093,6 +1124,7 @@ def optimize_parameters_on_eval(
                 signature_info=signature_info,
                 revision_perf=revision_perf,
                 oracle_metrics=oracle_metrics,
+                risk_scores=risk_scores,
                 workers=workers,
                 default_parameters=default_parameters,
                 backfill_retrigger_count_min=backfill_retrigger_count_min,
@@ -1132,6 +1164,7 @@ def optimize_combo_on_eval(
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
+    risk_scores: Mapping[str, float],
     workers: int,
     default_parameters: SimulationParameters,
     backfill_retrigger_count_min: int,
@@ -1209,6 +1242,7 @@ def optimize_combo_on_eval(
             signature_info=signature_info,
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
+            risk_scores=risk_scores,
             workers=workers,
             parameters=parameters,
             random_seed=random_seed,
@@ -1289,6 +1323,12 @@ def suggest_parameters(
     elif localizer_name == "StandardMidpointBisection":
         midpoint_retrigger_count = trial.suggest_int(
             "StandardMidpointBisection_midpoint_retrigger_count",
+            int(midpoint_retrigger_count_min),
+            int(midpoint_retrigger_count_max),
+        )
+    elif localizer_name == "RiskWeightedBisection":
+        midpoint_retrigger_count = trial.suggest_int(
+            "RiskWeightedBisection_midpoint_retrigger_count",
             int(midpoint_retrigger_count_min),
             int(midpoint_retrigger_count_max),
         )
@@ -1500,6 +1540,40 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
     with path.open() as fh:
         return [json.loads(line) for line in fh if line.strip()]
+
+
+def uses_risk_weighted_bisection(localizer_names: Sequence[str]) -> bool:
+    """Return whether the requested localizers need per-commit risk scores."""
+
+    return "RiskWeightedBisection" in localizer_names
+
+
+def load_risk_scores(path: Path) -> dict[str, float]:
+    """Load validated per-commit risk scores keyed by revision hash."""
+
+    scores: dict[str, float] = {}
+    for row_index, raw in enumerate(load_jsonl(path), start=1):
+        commit_id = raw.get("commit_id")
+        if not isinstance(commit_id, str) or not commit_id:
+            raise ValueError(f"{path}: row {row_index} has invalid commit_id")
+        if commit_id in scores:
+            raise ValueError(f"{path}: duplicate commit_id {commit_id!r}")
+
+        raw_score = raw.get("risk_score")
+        try:
+            risk_score = float(raw_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{path}: row {row_index} has invalid risk_score {raw_score!r}"
+            ) from exc
+        if not math.isfinite(risk_score) or not 0.0 <= risk_score <= 1.0:
+            raise ValueError(
+                f"{path}: row {row_index} risk_score must be finite and in [0, 1]: "
+                f"{raw_score!r}"
+            )
+        scores[commit_id] = risk_score
+
+    return scores
 
 
 def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:

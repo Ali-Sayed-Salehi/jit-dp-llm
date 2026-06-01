@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Sequence
 
@@ -612,6 +613,7 @@ class StandardMidpointBisection(CulpritLocalizer):
                 oracle_queries=getattr(oracle, "query_count", 0),
                 path_length=0,
                 candidate_revisions_tested=0,
+                extra=self._settings_to_json(),
             )
 
         low_idx = 0
@@ -623,7 +625,11 @@ class StandardMidpointBisection(CulpritLocalizer):
         undefined_reason = None
 
         while high_idx - low_idx > 1:
-            midpoint_idx = (low_idx + high_idx) // 2
+            midpoint_idx = self._probe_index(
+                path=path,
+                low_idx=low_idx,
+                high_idx=high_idx,
+            )
             midpoint_revision = path[midpoint_idx]
             midpoint_decisions = oracle.classify_many(
                 [midpoint_revision],
@@ -708,7 +714,20 @@ class StandardMidpointBisection(CulpritLocalizer):
             decisions=all_decisions,
             final_decisions=final_decisions,
             retrigger_intervals=retrigger_intervals,
+            extra=self._settings_to_json(),
         )
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable bisection settings for result serialization."""
+
+        return {}
+
+    @staticmethod
+    def _probe_index(*, path: list[str], low_idx: int, high_idx: int) -> int:
+        """Return the next revision index to probe inside the current interval."""
+
+        del path
+        return (low_idx + high_idx) // 2
 
     @staticmethod
     def _select_midpoint_decision(
@@ -762,6 +781,108 @@ class StandardMidpointBisection(CulpritLocalizer):
             return "culprit_not_in_search_range"
         if found_revision != culprit_revision:
             return "bisect_found_is_not_culprit"
+        return None
+
+
+class RiskWeightedBisection(StandardMidpointBisection):
+    """Find the first bad revision by splitting candidate risk-score mass."""
+
+    name = "RiskWeightedBisection"
+
+    def __init__(
+        self,
+        *,
+        risk_scores: Mapping[str, float],
+        midpoint_retrigger_count: int = 0,
+    ) -> None:
+        """Configure risk scores and midpoint-style repeated probes."""
+
+        super().__init__(midpoint_retrigger_count=midpoint_retrigger_count)
+        if not risk_scores:
+            raise ValueError("risk_scores must not be empty")
+
+        validated_scores: dict[str, float] = {}
+        for revision, raw_risk_score in risk_scores.items():
+            try:
+                risk_score = float(raw_risk_score)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"risk score must be numeric for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                ) from exc
+            if not math.isfinite(risk_score):
+                raise ValueError(f"risk score must be finite for {revision!r}")
+            if not 0.0 <= risk_score <= 1.0:
+                raise ValueError(
+                    f"risk score must be between 0 and 1 for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                )
+            validated_scores[revision] = risk_score
+        self.risk_scores = validated_scores
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable risk-weighted bisection settings."""
+
+        return {
+            "midpoint_retrigger_count": self.midpoint_retrigger_count,
+            "risk_weighting": "sum",
+        }
+
+    def _probe_index(self, *, path: list[str], low_idx: int, high_idx: int) -> int:
+        """Choose the internal probe that most evenly splits summed risk scores."""
+
+        standard_midpoint_idx = super()._probe_index(
+            path=path,
+            low_idx=low_idx,
+            high_idx=high_idx,
+        )
+        total_risk = sum(
+            self._risk_score(path[candidate_idx])
+            for candidate_idx in range(low_idx + 1, high_idx + 1)
+        )
+        if total_risk <= 0.0:
+            return standard_midpoint_idx
+
+        best_idx = standard_midpoint_idx
+        best_key: tuple[float, int, int] | None = None
+        left_risk = 0.0
+        for candidate_idx in range(low_idx + 1, high_idx):
+            left_risk += self._risk_score(path[candidate_idx])
+            right_risk = total_risk - left_risk
+            key = (
+                abs(left_risk - right_risk),
+                abs(candidate_idx - standard_midpoint_idx),
+                candidate_idx,
+            )
+            if best_key is None or key < best_key:
+                best_key = key
+                best_idx = candidate_idx
+
+        return best_idx
+
+    def _risk_score(self, revision: str) -> float:
+        """Return the validated risk score for one candidate revision."""
+
+        try:
+            return float(self.risk_scores[revision])
+        except KeyError as exc:
+            raise ValueError(f"missing risk score for revision {revision!r}") from exc
+
+    @staticmethod
+    def _undefined_reason_for_found_revision(
+        *,
+        found_revision: str,
+        path: list[str],
+        culprit_revision: str | None,
+    ) -> str | None:
+        """Return why a completed risk-weighted bisection result is not successful."""
+
+        if culprit_revision is None:
+            return "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return "culprit_not_in_search_range"
+        if found_revision != culprit_revision:
+            return "risk_weighted_bisect_found_is_not_culprit"
         return None
 
 
@@ -1374,6 +1495,7 @@ LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     ProbabilisticBisectionPosteriorMedianUniformPrior.name: (
         ProbabilisticBisectionPosteriorMedianUniformPrior
     ),
+    RiskWeightedBisection.name: RiskWeightedBisection,
     StandardMidpointBisection.name: StandardMidpointBisection,
     StandardMidpointMultisection.name: StandardMidpointMultisection,
 }

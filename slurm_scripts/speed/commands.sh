@@ -137,10 +137,12 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
 --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
 --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
+--oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/per_regression_oracle_metrics.jsonl \
+--risk-scores /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_commit_risk_scores.jsonl \
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
---localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_UniformPrior StandardMidpointBisection StandardMidpointMultisection \
+--localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_UniformPrior RiskWeightedBisection StandardMidpointBisection StandardMidpointMultisection \
 --random-seed 42 \
 --optuna-seed 42 \
 --optuna-trials 50 \
