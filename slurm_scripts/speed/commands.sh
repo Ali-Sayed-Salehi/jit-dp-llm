@@ -151,6 +151,7 @@ echo "Running script ..."
 #   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior if provided.
 # - --optuna-trials/--optuna-seed control tuning for every selected tunable
 #   localizer/oracle combo; --random-seed controls noisy oracle draws.
+
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
 --dataset all \
 --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
@@ -175,6 +176,34 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --pba-repeat-count-max 5 \
 --pba-max-test-runs-min 20 \
 --pba-max-test-runs-max 200
+
+
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \
+# --worker-counts 1 2 4 8 16 \
+# --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
+# --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
+# --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
+# --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/per_regression_oracle_metrics.jsonl \
+# --risk-scores /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_commit_risk_scores.jsonl \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
+# --sweep-output-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/machine_count_sweep_final_test.json \
+# --plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/plots \
+# --oracles SummaryComparison \
+# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+# --random-seed 42 \
+# --optuna-seed 42 \
+# --optuna-trials 50 \
+# --midpoint-retrigger-count-max 200 \
+# --multisection-section-count-max 16 \
+# --multisection-retrigger-count-max 200 \
+# --backfill-retrigger-count-max 200 \
+# --probe-repeat-count-max 200 \
+# --pba-confidence-threshold-min 0.6 \
+# --pba-confidence-threshold-max 0.99 \
+# --pba-repeat-count-max 5 \
+# --pba-max-test-runs-min 20 \
+# --pba-max-test-runs-max 200
+
 
 
 echo "Script finished"

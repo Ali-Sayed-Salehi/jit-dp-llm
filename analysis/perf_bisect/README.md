@@ -350,6 +350,20 @@ Change executor capacity:
 python analysis/perf_bisect/simulation.py --workers 4
 ```
 
+Sweep executor capacity and plot final-test metrics:
+
+```bash
+python analysis/perf_bisect/plot_for_machine_counts.py \
+  --worker-counts 1 2 4 8 \
+  --optuna-trials 50 \
+  --random-seed 42
+```
+
+The sweep script runs eval and final-test simulation for each worker count,
+tuning parameters independently at each count. It writes aggregate sweep results
+to `analysis/perf_bisect/results/machine_count_sweep_final_test.json` and plots
+to `analysis/perf_bisect/results/plots` by default.
+
 Change the number of Backfill retriggers:
 
 ```bash
