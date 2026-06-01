@@ -70,10 +70,19 @@ DEFAULT_PBA_REPEAT_COUNT_MAX = 5
 DEFAULT_PBA_MAX_TEST_RUNS = 100
 DEFAULT_PBA_MAX_TEST_RUNS_MIN = 1
 DEFAULT_PBA_MAX_TEST_RUNS_MAX = 200
+DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT = 0.05
+DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MIN = 0.0
+DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MAX = 0.5
 OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
 TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
     "Backfill": ("backfill_retrigger_count",),
     "BackfillWithRepeat": ("backfill_retrigger_count", "probe_repeat_count"),
+    "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior": (
+        "pba_confidence_threshold",
+        "pba_repeat_count",
+        "pba_max_test_runs",
+        "pba_risk_prior_uniform_weight",
+    ),
     "ProbabilisticBisection_PosteriorMedian_UniformPrior": (
         "pba_confidence_threshold",
         "pba_repeat_count",
@@ -132,6 +141,7 @@ class SimulationParameters:
     pba_confidence_threshold: float
     pba_repeat_count: int
     pba_max_test_runs: int
+    pba_risk_prior_uniform_weight: float
 
     def to_json(self) -> dict[str, Any]:
         """Serialize parameter values into JSON-compatible primitives."""
@@ -145,6 +155,9 @@ class SimulationParameters:
             "pba_confidence_threshold": self.pba_confidence_threshold,
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
+            "pba_risk_prior_uniform_weight": (
+                self.pba_risk_prior_uniform_weight
+            ),
         }
 
 
@@ -201,12 +214,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         pba_confidence_threshold=args.pba_confidence_threshold,
         pba_repeat_count=args.pba_repeat_count,
         pba_max_test_runs=args.pba_max_test_runs,
+        pba_risk_prior_uniform_weight=args.pba_risk_prior_uniform_weight,
     )
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
     oracle_metrics = load_oracle_metrics(args.oracle_metrics)
-    risk_scores_required = uses_risk_weighted_bisection(args.localizers)
+    risk_scores_required = uses_risk_scores(args.localizers)
     risk_scores = load_risk_scores(args.risk_scores) if risk_scores_required else {}
     risk_scores_path = args.risk_scores if risk_scores_required else None
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,6 +267,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pba_repeat_count_max": args.pba_repeat_count_max,
             "pba_max_test_runs_min": args.pba_max_test_runs_min,
             "pba_max_test_runs_max": args.pba_max_test_runs_max,
+            "pba_risk_prior_uniform_weight_min": (
+                args.pba_risk_prior_uniform_weight_min
+            ),
+            "pba_risk_prior_uniform_weight_max": (
+                args.pba_risk_prior_uniform_weight_max
+            ),
             "objectives": [
                 {"metric": "mean_elapsed_hours", "direction": "minimize"},
                 {"metric": "mean_test_runs", "direction": "minimize"},
@@ -289,6 +309,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             pba_repeat_count_max=args.pba_repeat_count_max,
             pba_max_test_runs_min=args.pba_max_test_runs_min,
             pba_max_test_runs_max=args.pba_max_test_runs_max,
+            pba_risk_prior_uniform_weight_min=(
+                args.pba_risk_prior_uniform_weight_min
+            ),
+            pba_risk_prior_uniform_weight_max=(
+                args.pba_risk_prior_uniform_weight_max
+            ),
             optuna_trials=args.optuna_trials,
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
@@ -374,8 +400,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_RISK_SCORES,
         help=(
-            "Path to per_commit_risk_scores.jsonl. RiskWeightedBisection uses "
-            "risk_score values from this file to choose bisection probes."
+            "Path to per_commit_risk_scores.jsonl. Risk-aware localizers use "
+            "risk_score values from this file."
         ),
     )
     parser.add_argument(
@@ -490,6 +516,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Maximum test jobs for one PBA regression before returning the MAP "
             "guess as a low-confidence or ambiguous localization."
+        ),
+    )
+    parser.add_argument(
+        "--pba-risk-prior-uniform-weight",
+        type=float,
+        default=DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT,
+        help=(
+            "Uniform-prior mixture weight for "
+            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior. A larger "
+            "value trusts per-commit risk scores less."
         ),
     )
     parser.add_argument(
@@ -610,6 +646,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum PBA max-test-runs value sampled by Optuna.",
     )
     parser.add_argument(
+        "--pba-risk-prior-uniform-weight-min",
+        type=float,
+        default=DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MIN,
+        help="Minimum risk-aware PBA uniform-prior mixture weight sampled by Optuna.",
+    )
+    parser.add_argument(
+        "--pba-risk-prior-uniform-weight-max",
+        type=float,
+        default=DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MAX,
+        help="Maximum risk-aware PBA uniform-prior mixture weight sampled by Optuna.",
+    )
+    parser.add_argument(
         "--random-seed",
         type=int,
         default=0,
@@ -632,6 +680,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--pba-repeat-count must be at least 1")
     if args.pba_max_test_runs < 1:
         parser.error("--pba-max-test-runs must be at least 1")
+    if not 0.0 <= args.pba_risk_prior_uniform_weight <= 1.0:
+        parser.error("--pba-risk-prior-uniform-weight must be in [0, 1]")
     if args.optuna_trials < 0:
         parser.error("--optuna-trials must be non-negative")
     if args.backfill_retrigger_count_min < 0:
@@ -691,6 +741,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--pba-max-test-runs-max must be greater than or equal to "
             "--pba-max-test-runs-min"
+        )
+    if not 0.0 <= args.pba_risk_prior_uniform_weight_min <= 1.0:
+        parser.error("--pba-risk-prior-uniform-weight-min must be in [0, 1]")
+    if not 0.0 <= args.pba_risk_prior_uniform_weight_max <= 1.0:
+        parser.error("--pba-risk-prior-uniform-weight-max must be in [0, 1]")
+    if (
+        args.pba_risk_prior_uniform_weight_max
+        < args.pba_risk_prior_uniform_weight_min
+    ):
+        parser.error(
+            "--pba-risk-prior-uniform-weight-max must be greater than or "
+            "equal to --pba-risk-prior-uniform-weight-min"
         )
     if args.optuna_seed is None:
         args.optuna_seed = args.random_seed
@@ -817,13 +879,15 @@ def run_dataset(
                 default_parameters.multisection_retrigger_count
             ),
             "pba_batch_size": 1,
-            "pba_prior": "uniform",
             "pba_query_strategy": "posterior_median",
             "pba_confidence_threshold": (
                 default_parameters.pba_confidence_threshold
             ),
             "pba_repeat_count": default_parameters.pba_repeat_count,
             "pba_max_test_runs": default_parameters.pba_max_test_runs,
+            "pba_risk_prior_uniform_weight": (
+                default_parameters.pba_risk_prior_uniform_weight
+            ),
             "random_seed": random_seed,
             "random_seed_derivation": "random_seed + regression_id - 1",
         },
@@ -1071,6 +1135,16 @@ def build_localizer(
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
         )
+    if localizer_name == "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior":
+        return localizer_cls(
+            pba_confidence_threshold=parameters.pba_confidence_threshold,
+            pba_repeat_count=parameters.pba_repeat_count,
+            pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_risk_prior_uniform_weight=(
+                parameters.pba_risk_prior_uniform_weight
+            ),
+            risk_scores=risk_scores,
+        )
     if localizer_name == "RiskWeightedBisection":
         return localizer_cls(
             midpoint_retrigger_count=parameters.midpoint_retrigger_count,
@@ -1106,6 +1180,8 @@ def optimize_parameters_on_eval(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_risk_prior_uniform_weight_min: float,
+    pba_risk_prior_uniform_weight_max: float,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -1143,6 +1219,12 @@ def optimize_parameters_on_eval(
                 pba_repeat_count_max=pba_repeat_count_max,
                 pba_max_test_runs_min=pba_max_test_runs_min,
                 pba_max_test_runs_max=pba_max_test_runs_max,
+                pba_risk_prior_uniform_weight_min=(
+                    pba_risk_prior_uniform_weight_min
+                ),
+                pba_risk_prior_uniform_weight_max=(
+                    pba_risk_prior_uniform_weight_max
+                ),
                 optuna_trials=optuna_trials,
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
@@ -1183,6 +1265,8 @@ def optimize_combo_on_eval(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_risk_prior_uniform_weight_min: float,
+    pba_risk_prior_uniform_weight_max: float,
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
@@ -1234,6 +1318,8 @@ def optimize_combo_on_eval(
             pba_repeat_count_max=pba_repeat_count_max,
             pba_max_test_runs_min=pba_max_test_runs_min,
             pba_max_test_runs_max=pba_max_test_runs_max,
+            pba_risk_prior_uniform_weight_min=pba_risk_prior_uniform_weight_min,
+            pba_risk_prior_uniform_weight_max=pba_risk_prior_uniform_weight_max,
         )
         _, metrics = run_combo(
             regressions=regressions,
@@ -1291,6 +1377,8 @@ def suggest_parameters(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_risk_prior_uniform_weight_min: float,
+    pba_risk_prior_uniform_weight_max: float,
 ) -> SimulationParameters:
     """Ask Optuna for one parameter set for the selected algorithm combo."""
 
@@ -1303,6 +1391,9 @@ def suggest_parameters(
     pba_confidence_threshold = default_parameters.pba_confidence_threshold
     pba_repeat_count = default_parameters.pba_repeat_count
     pba_max_test_runs = default_parameters.pba_max_test_runs
+    pba_risk_prior_uniform_weight = (
+        default_parameters.pba_risk_prior_uniform_weight
+    )
     if localizer_name == "Backfill":
         backfill_retrigger_count = trial.suggest_int(
             "Backfill_backfill_retrigger_count",
@@ -1362,6 +1453,33 @@ def suggest_parameters(
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
+    elif localizer_name == "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior":
+        pba_confidence_threshold = trial.suggest_float(
+            (
+                "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_"
+                "pba_confidence_threshold"
+            ),
+            float(pba_confidence_threshold_min),
+            float(pba_confidence_threshold_max),
+        )
+        pba_repeat_count = trial.suggest_int(
+            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_pba_repeat_count",
+            int(pba_repeat_count_min),
+            int(pba_repeat_count_max),
+        )
+        pba_max_test_runs = trial.suggest_int(
+            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_pba_max_test_runs",
+            int(pba_max_test_runs_min),
+            int(pba_max_test_runs_max),
+        )
+        pba_risk_prior_uniform_weight = trial.suggest_float(
+            (
+                "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_"
+                "pba_risk_prior_uniform_weight"
+            ),
+            float(pba_risk_prior_uniform_weight_min),
+            float(pba_risk_prior_uniform_weight_max),
+        )
     return SimulationParameters(
         backfill_retrigger_count=int(backfill_retrigger_count),
         probe_repeat_count=int(probe_repeat_count),
@@ -1371,6 +1489,7 @@ def suggest_parameters(
         pba_confidence_threshold=float(pba_confidence_threshold),
         pba_repeat_count=int(pba_repeat_count),
         pba_max_test_runs=int(pba_max_test_runs),
+        pba_risk_prior_uniform_weight=float(pba_risk_prior_uniform_weight),
     )
 
 
@@ -1426,6 +1545,12 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
         pba_confidence_threshold=float(raw_parameters["pba_confidence_threshold"]),
         pba_repeat_count=int(raw_parameters["pba_repeat_count"]),
         pba_max_test_runs=int(raw_parameters["pba_max_test_runs"]),
+        pba_risk_prior_uniform_weight=float(
+            raw_parameters.get(
+                "pba_risk_prior_uniform_weight",
+                DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT,
+            )
+        ),
     )
 
 
@@ -1542,10 +1667,17 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def uses_risk_weighted_bisection(localizer_names: Sequence[str]) -> bool:
+def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
     """Return whether the requested localizers need per-commit risk scores."""
 
-    return "RiskWeightedBisection" in localizer_names
+    return any(
+        localizer_name
+        in {
+            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
+            "RiskWeightedBisection",
+        }
+        for localizer_name in localizer_names
+    )
 
 
 def load_risk_scores(path: Path) -> dict[str, float]:

@@ -160,6 +160,15 @@ are retriggered before voting on those boundaries. Optuna samples these from:
 distribution over every candidate culprit revision in the good-to-bad path. It
 uses a uniform prior, so every candidate starts with equal probability.
 
+`ProbabilisticBisection_PosteriorMedian_RiskAwarePrior` uses the same posterior
+update and query strategy, but initializes the posterior from
+`--risk-scores`. It normalizes `risk_score` values over the current candidate
+path, then mixes in a uniform prior controlled by
+`--pba-risk-prior-uniform-weight`. This keeps low-risk commits recoverable when
+the risk model is overconfident. The risk-aware variant also requires at least
+one known oracle observation before accepting a posterior-MAP culprit, unless
+there is only one candidate revision.
+
 Each probing round chooses the posterior median: the first revision whose
 cumulative posterior probability reaches `0.5`. The localizer submits
 `--pba-repeat-count` observations for that one revision. `pba_batch_size` is
@@ -190,12 +199,16 @@ The tunable PBA parameters are:
 - `pba_confidence_threshold`
 - `pba_repeat_count`
 - `pba_max_test_runs`
+- `pba_risk_prior_uniform_weight` for
+  `ProbabilisticBisection_PosteriorMedian_RiskAwarePrior`
 
 Optuna samples these from:
 
 - `--pba-confidence-threshold-min` / `--pba-confidence-threshold-max`
 - `--pba-repeat-count-min` / `--pba-repeat-count-max`
 - `--pba-max-test-runs-min` / `--pba-max-test-runs-max`
+- `--pba-risk-prior-uniform-weight-min` /
+  `--pba-risk-prior-uniform-weight-max`
 
 ## Metrics
 
@@ -304,13 +317,22 @@ python analysis/perf_bisect/simulation.py \
   --localizers ProbabilisticBisection_PosteriorMedian_UniformPrior
 ```
 
+Run only the risk-aware posterior-median PBA localizer:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --dataset eval \
+  --localizers ProbabilisticBisection_PosteriorMedian_RiskAwarePrior
+```
+
 Change PBA defaults:
 
 ```bash
 python analysis/perf_bisect/simulation.py \
   --pba-confidence-threshold 0.9 \
   --pba-repeat-count 2 \
-  --pba-max-test-runs 120
+  --pba-max-test-runs 120 \
+  --pba-risk-prior-uniform-weight 0.05
 ```
 
 Change the noisy-oracle random seed:

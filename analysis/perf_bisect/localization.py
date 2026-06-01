@@ -1164,6 +1164,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
     """Probabilistic bisection using posterior-median probes and a uniform prior."""
 
     name = "ProbabilisticBisection_PosteriorMedian_UniformPrior"
+    pba_prior = "uniform"
     pba_batch_size = 1
     _POSTERIOR_TIE_EPSILON = 1e-12
 
@@ -1227,17 +1228,22 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             )
 
         candidate_revisions = path[1:]
-        posterior = [1.0 / len(candidate_revisions) for _ in candidate_revisions]
+        posterior = self._initial_posterior(candidate_revisions)
         all_decisions: list[OracleResult] = []
         posterior_trace: list[dict[str, Any]] = []
         found_revision = None
         undefined_reason = None
+        known_observation_total = 0
 
         while len(all_decisions) < self.pba_max_test_runs:
             best_idx, best_probability, tied_indices = self._posterior_map(posterior)
             if (
                 best_probability >= self.pba_confidence_threshold
                 and len(tied_indices) == 1
+                and self._can_accept_posterior(
+                    candidate_revisions=candidate_revisions,
+                    known_observation_total=known_observation_total,
+                )
             ):
                 found_revision = candidate_revisions[best_idx]
                 undefined_reason = self._undefined_reason_for_found_revision(
@@ -1269,6 +1275,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
                 for decision in decisions
                 if decision.decision is not OracleDecision.UNKNOWN
             ]
+            known_observation_total += len(known_decisions)
             for decision in known_decisions:
                 posterior = self._updated_posterior(
                     posterior=posterior,
@@ -1301,6 +1308,11 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             found_revision = candidate_revisions[best_idx]
             if len(tied_indices) > 1:
                 undefined_reason = "ambiguous_posterior_tie"
+            elif not self._can_accept_posterior(
+                candidate_revisions=candidate_revisions,
+                known_observation_total=known_observation_total,
+            ):
+                undefined_reason = "posterior_confidence_without_observation"
             elif best_probability < self.pba_confidence_threshold:
                 undefined_reason = "posterior_confidence_below_threshold"
             else:
@@ -1352,7 +1364,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             revision_path=path,
             extra={
                 **self._settings_to_json(),
-                "pba_prior": "uniform",
+                "pba_prior": self.pba_prior,
                 "pba_query_strategy": "posterior_median",
                 "pba_found_revision_probability": round(best_probability, 12),
                 "pba_map_tie_count": len(tied_indices),
@@ -1364,6 +1376,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
                     posterior,
                 ),
                 "pba_posterior_trace": posterior_trace,
+                **self._prior_to_json(candidate_revisions, posterior),
             },
         )
 
@@ -1376,6 +1389,33 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
         }
+
+    @staticmethod
+    def _initial_posterior(candidate_revisions: Sequence[str]) -> list[float]:
+        """Return the initial culprit prior for one candidate interval."""
+
+        return [1.0 / len(candidate_revisions) for _ in candidate_revisions]
+
+    @staticmethod
+    def _can_accept_posterior(
+        *,
+        candidate_revisions: Sequence[str],
+        known_observation_total: int,
+    ) -> bool:
+        """Return whether the current posterior may be accepted as final."""
+
+        del candidate_revisions, known_observation_total
+        return True
+
+    def _prior_to_json(
+        self,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> dict[str, Any]:
+        """Return prior-specific result metadata."""
+
+        del candidate_revisions, posterior
+        return {}
 
     @staticmethod
     def _validate_accuracy(accuracy: float) -> None:
@@ -1489,9 +1529,128 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
         return None
 
 
+class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
+    ProbabilisticBisectionPosteriorMedianUniformPrior
+):
+    """Probabilistic bisection with risk scores as a softened culprit prior."""
+
+    name = "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior"
+    pba_prior = "risk_aware"
+
+    def __init__(
+        self,
+        *,
+        risk_scores: Mapping[str, float],
+        pba_confidence_threshold: float = 0.9,
+        pba_repeat_count: int = 1,
+        pba_max_test_runs: int = 100,
+        pba_risk_prior_uniform_weight: float = 0.05,
+    ) -> None:
+        """Configure PBA and the uniform mix used to soften risk-score priors."""
+
+        super().__init__(
+            pba_confidence_threshold=pba_confidence_threshold,
+            pba_repeat_count=pba_repeat_count,
+            pba_max_test_runs=pba_max_test_runs,
+        )
+        if not 0.0 <= pba_risk_prior_uniform_weight <= 1.0:
+            raise ValueError("pba_risk_prior_uniform_weight must be in [0, 1]")
+        if not risk_scores:
+            raise ValueError("risk_scores must not be empty")
+
+        validated_scores: dict[str, float] = {}
+        for revision, raw_risk_score in risk_scores.items():
+            try:
+                risk_score = float(raw_risk_score)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"risk score must be numeric for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                ) from exc
+            if not math.isfinite(risk_score):
+                raise ValueError(f"risk score must be finite for {revision!r}")
+            if not 0.0 <= risk_score <= 1.0:
+                raise ValueError(
+                    f"risk score must be between 0 and 1 for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                )
+            validated_scores[revision] = risk_score
+
+        self.risk_scores = validated_scores
+        self.pba_risk_prior_uniform_weight = pba_risk_prior_uniform_weight
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable risk-aware PBA settings."""
+
+        return {
+            **super()._settings_to_json(),
+            "pba_risk_prior_uniform_weight": self.pba_risk_prior_uniform_weight,
+        }
+
+    def _initial_posterior(self, candidate_revisions: Sequence[str]) -> list[float]:
+        """Return risk-score-normalized priors mixed with a uniform floor."""
+
+        risk_prior = self._risk_prior(candidate_revisions)
+        uniform_probability = 1.0 / len(candidate_revisions)
+        uniform_weight = self.pba_risk_prior_uniform_weight
+        posterior = [
+            (1.0 - uniform_weight) * probability
+            + uniform_weight * uniform_probability
+            for probability in risk_prior
+        ]
+        total_probability = sum(posterior)
+        if total_probability <= 0.0:
+            return [uniform_probability for _ in candidate_revisions]
+        return [probability / total_probability for probability in posterior]
+
+    @staticmethod
+    def _can_accept_posterior(
+        *,
+        candidate_revisions: Sequence[str],
+        known_observation_total: int,
+    ) -> bool:
+        """Require at least one known observation before trusting the risk prior."""
+
+        return len(candidate_revisions) == 1 or known_observation_total > 0
+
+    def _prior_to_json(
+        self,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> dict[str, Any]:
+        """Return risk-prior metadata for result inspection."""
+
+        del posterior
+        risk_scores = [self._risk_score(revision) for revision in candidate_revisions]
+        return {
+            "pba_risk_score_sum": round(sum(risk_scores), 12),
+        }
+
+    def _risk_prior(self, candidate_revisions: Sequence[str]) -> list[float]:
+        """Normalize risk scores over the current candidate interval."""
+
+        risk_scores = [self._risk_score(revision) for revision in candidate_revisions]
+        total_risk = sum(risk_scores)
+        if total_risk <= 0.0:
+            uniform_probability = 1.0 / len(candidate_revisions)
+            return [uniform_probability for _ in candidate_revisions]
+        return [risk_score / total_risk for risk_score in risk_scores]
+
+    def _risk_score(self, revision: str) -> float:
+        """Return the validated risk score for one candidate revision."""
+
+        try:
+            return self.risk_scores[revision]
+        except KeyError as exc:
+            raise ValueError(f"missing risk score for revision {revision!r}") from exc
+
+
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     Backfill.name: Backfill,
     BackfillWithRepeat.name: BackfillWithRepeat,
+    ProbabilisticBisectionPosteriorMedianRiskAwarePrior.name: (
+        ProbabilisticBisectionPosteriorMedianRiskAwarePrior
+    ),
     ProbabilisticBisectionPosteriorMedianUniformPrior.name: (
         ProbabilisticBisectionPosteriorMedianUniformPrior
     ),
