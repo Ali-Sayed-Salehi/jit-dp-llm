@@ -1297,6 +1297,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
     name = "ProbabilisticBisection_PosteriorMedian_UniformPrior"
     pba_prior = "uniform"
     pba_batch_size = 1
+    pba_query_strategy = "posterior_median"
     _POSTERIOR_TIE_EPSILON = 1e-12
 
     def __init__(
@@ -1384,30 +1385,44 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
                 )
                 break
 
-            probe_idx = self._posterior_median_index(posterior)
-            probe_revision = candidate_revisions[probe_idx]
             remaining_budget = self.pba_max_test_runs - len(all_decisions)
-            repeat_count = min(self.pba_repeat_count, remaining_budget)
+            distinct_probe_indices = self._probe_candidate_indices(
+                posterior=posterior,
+                remaining_budget=remaining_budget,
+            )
+            round_probe_indices = self._round_probe_indices(
+                distinct_probe_indices=distinct_probe_indices,
+                remaining_budget=remaining_budget,
+            )
+            if not round_probe_indices:
+                undefined_reason = "no_pba_probe_candidates"
+                break
+
+            probe_revisions = [
+                candidate_revisions[probe_idx] for probe_idx in round_probe_indices
+            ]
             decisions = oracle.classify_many(
-                [probe_revision] * repeat_count,
+                probe_revisions,
                 regression=regression,
                 revision_path=path,
             )
             all_decisions.extend(decisions)
 
-            probe_accuracy = oracle.accuracy_for(
-                probe_revision,
-                regression=regression,
-                revision_path=path,
-            )
-            self._validate_accuracy(probe_accuracy)
-            known_decisions = [
-                decision
-                for decision in decisions
-                if decision.decision is not OracleDecision.UNKNOWN
-            ]
-            known_observation_total += len(known_decisions)
-            for decision in known_decisions:
+            known_observation_count = 0
+            for probe_idx, decision in zip(
+                round_probe_indices,
+                decisions,
+                strict=True,
+            ):
+                if decision.decision is OracleDecision.UNKNOWN:
+                    continue
+                probe_accuracy = oracle.accuracy_for(
+                    decision.revision,
+                    regression=regression,
+                    revision_path=path,
+                )
+                self._validate_accuracy(probe_accuracy)
+                known_observation_count += 1
                 posterior = self._updated_posterior(
                     posterior=posterior,
                     probe_idx=probe_idx,
@@ -1419,19 +1434,17 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
                     break
             if undefined_reason is not None:
                 break
+            known_observation_total += known_observation_count
 
-            best_idx, best_probability, tied_indices = self._posterior_map(posterior)
             posterior_trace.append(
-                {
-                    "round": len(posterior_trace) + 1,
-                    "probed_revision": probe_revision,
-                    "probed_candidate_index": probe_idx,
-                    "observations": [decision.decision.value for decision in decisions],
-                    "known_observation_count": len(known_decisions),
-                    "map_revision": candidate_revisions[best_idx],
-                    "map_probability": round(best_probability, 12),
-                    "map_tie_count": len(tied_indices),
-                }
+                self._posterior_trace_entry(
+                    round_number=len(posterior_trace) + 1,
+                    candidate_revisions=candidate_revisions,
+                    submitted_probe_indices=round_probe_indices,
+                    decisions=decisions,
+                    posterior=posterior,
+                    known_observation_count=known_observation_count,
+                )
             )
 
         if found_revision is None and undefined_reason is None:
@@ -1496,7 +1509,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             extra={
                 **self._settings_to_json(),
                 "pba_prior": self.pba_prior,
-                "pba_query_strategy": "posterior_median",
+                "pba_query_strategy": self.pba_query_strategy,
                 "pba_found_revision_probability": round(best_probability, 12),
                 "pba_map_tie_count": len(tied_indices),
                 "pba_map_tied_revisions": [
@@ -1519,6 +1532,61 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             "pba_confidence_threshold": self.pba_confidence_threshold,
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
+        }
+
+    def _probe_candidate_indices(
+        self,
+        *,
+        posterior: Sequence[float],
+        remaining_budget: int,
+    ) -> list[int]:
+        """Return distinct candidate indices to probe in the next PBA round."""
+
+        del remaining_budget
+        return [self._posterior_median_index(posterior)]
+
+    def _round_probe_indices(
+        self,
+        *,
+        distinct_probe_indices: Sequence[int],
+        remaining_budget: int,
+    ) -> list[int]:
+        """Expand distinct probes by repeat count without skipping boundaries."""
+
+        if remaining_budget <= 0:
+            return []
+
+        submitted_probe_indices: list[int] = []
+        for _ in range(self.pba_repeat_count):
+            for probe_idx in distinct_probe_indices:
+                if len(submitted_probe_indices) >= remaining_budget:
+                    return submitted_probe_indices
+                submitted_probe_indices.append(probe_idx)
+        return submitted_probe_indices
+
+    def _posterior_trace_entry(
+        self,
+        *,
+        round_number: int,
+        candidate_revisions: Sequence[str],
+        submitted_probe_indices: Sequence[int],
+        decisions: Sequence[OracleResult],
+        posterior: Sequence[float],
+        known_observation_count: int,
+    ) -> dict[str, Any]:
+        """Return one single-probe PBA trace entry."""
+
+        best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+        probe_idx = submitted_probe_indices[0]
+        return {
+            "round": round_number,
+            "probed_revision": candidate_revisions[probe_idx],
+            "probed_candidate_index": probe_idx,
+            "observations": [decision.decision.value for decision in decisions],
+            "known_observation_count": known_observation_count,
+            "map_revision": candidate_revisions[best_idx],
+            "map_probability": round(best_probability, 12),
+            "map_tie_count": len(tied_indices),
         }
 
     @staticmethod
@@ -1660,6 +1728,150 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
         return None
 
 
+class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
+    ProbabilisticBisectionPosteriorMedianUniformPrior
+):
+    """Probabilistic multisection using posterior-quantile probes and a uniform prior."""
+
+    name = "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior"
+    pba_query_strategy = "posterior_quantile"
+
+    def __init__(
+        self,
+        *,
+        multisection_section_count: int = 4,
+        pba_confidence_threshold: float = 0.9,
+        pba_repeat_count: int = 1,
+        pba_max_test_runs: int = 100,
+    ) -> None:
+        """Configure posterior quantile fan-out, repeats, and test-run budget."""
+
+        super().__init__(
+            pba_confidence_threshold=pba_confidence_threshold,
+            pba_repeat_count=pba_repeat_count,
+            pba_max_test_runs=pba_max_test_runs,
+        )
+        if multisection_section_count < 2:
+            raise ValueError("multisection_section_count must be at least 2")
+        self.multisection_section_count = multisection_section_count
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable posterior-quantile multisection settings."""
+
+        return {
+            **super()._settings_to_json(),
+            "pba_batch_size": self.multisection_section_count - 1,
+            "multisection_section_count": self.multisection_section_count,
+        }
+
+    def _probe_candidate_indices(
+        self,
+        *,
+        posterior: Sequence[float],
+        remaining_budget: int,
+    ) -> list[int]:
+        """Return distinct posterior-quantile boundary indices for one round."""
+
+        del remaining_budget
+        return self._posterior_quantile_indices(
+            posterior=posterior,
+            section_count=self.multisection_section_count,
+        )
+
+    @classmethod
+    def _posterior_quantile_indices(
+        cls,
+        *,
+        posterior: Sequence[float],
+        section_count: int,
+    ) -> list[int]:
+        """Return unique informative boundaries that split posterior mass."""
+
+        candidate_count = len(posterior)
+        if candidate_count <= 1:
+            return []
+
+        effective_section_count = min(section_count, candidate_count)
+        max_probe_idx = candidate_count - 2
+        probe_indices: list[int] = []
+        for section_number in range(1, effective_section_count):
+            target_probability = section_number / effective_section_count
+            probe_idx = cls._posterior_quantile_index(
+                posterior=posterior,
+                target_probability=target_probability,
+            )
+            probe_idx = min(probe_idx, max_probe_idx)
+            if probe_idx not in probe_indices:
+                probe_indices.append(probe_idx)
+        return probe_indices
+
+    @staticmethod
+    def _posterior_quantile_index(
+        *,
+        posterior: Sequence[float],
+        target_probability: float,
+    ) -> int:
+        """Return the first candidate index whose posterior CDF reaches target."""
+
+        cumulative_probability = 0.0
+        for idx, probability in enumerate(posterior):
+            cumulative_probability += probability
+            if cumulative_probability >= target_probability:
+                return idx
+        return len(posterior) - 1
+
+    def _posterior_trace_entry(
+        self,
+        *,
+        round_number: int,
+        candidate_revisions: Sequence[str],
+        submitted_probe_indices: Sequence[int],
+        decisions: Sequence[OracleResult],
+        posterior: Sequence[float],
+        known_observation_count: int,
+    ) -> dict[str, Any]:
+        """Return one posterior-quantile multisection trace entry."""
+
+        best_idx, best_probability, tied_indices = self._posterior_map(posterior)
+        submitted_pairs = list(
+            zip(submitted_probe_indices, decisions, strict=True)
+        )
+        distinct_probe_indices: list[int] = []
+        for probe_idx in submitted_probe_indices:
+            if probe_idx not in distinct_probe_indices:
+                distinct_probe_indices.append(probe_idx)
+
+        return {
+            "round": round_number,
+            "probed_revisions": [
+                candidate_revisions[probe_idx] for probe_idx in distinct_probe_indices
+            ],
+            "probed_candidate_indices": distinct_probe_indices,
+            "submitted_revisions": [
+                candidate_revisions[probe_idx]
+                for probe_idx in submitted_probe_indices
+            ],
+            "submitted_candidate_indices": list(submitted_probe_indices),
+            "observations": [decision.decision.value for decision in decisions],
+            "observations_by_revision": [
+                {
+                    "revision": candidate_revisions[probe_idx],
+                    "candidate_index": probe_idx,
+                    "observations": [
+                        decision.decision.value
+                        for submitted_idx, decision in submitted_pairs
+                        if submitted_idx == probe_idx
+                    ],
+                }
+                for probe_idx in distinct_probe_indices
+            ],
+            "known_observation_count": known_observation_count,
+            "map_revision": candidate_revisions[best_idx],
+            "map_probability": round(best_probability, 12),
+            "map_tie_count": len(tied_indices),
+        }
+
+
 class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
     ProbabilisticBisectionPosteriorMedianUniformPrior
 ):
@@ -1784,6 +1996,9 @@ LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     ),
     ProbabilisticBisectionPosteriorMedianUniformPrior.name: (
         ProbabilisticBisectionPosteriorMedianUniformPrior
+    ),
+    ProbabilisticMultiSectionPosteriorQuantileUniformPrior.name: (
+        ProbabilisticMultiSectionPosteriorQuantileUniformPrior
     ),
     RiskWeightedBisection.name: RiskWeightedBisection,
     RiskWeightedMultisection.name: RiskWeightedMultisection,

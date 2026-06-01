@@ -88,6 +88,12 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_repeat_count",
         "pba_max_test_runs",
     ),
+    "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior": (
+        "multisection_section_count",
+        "pba_confidence_threshold",
+        "pba_repeat_count",
+        "pba_max_test_runs",
+    ),
     "RiskWeightedBisection": ("midpoint_retrigger_count",),
     "RiskWeightedMultisection": (
         "multisection_section_count",
@@ -1145,6 +1151,13 @@ def build_localizer(
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
         )
+    if localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
+        return localizer_cls(
+            multisection_section_count=parameters.multisection_section_count,
+            pba_confidence_threshold=parameters.pba_confidence_threshold,
+            pba_repeat_count=parameters.pba_repeat_count,
+            pba_max_test_runs=parameters.pba_max_test_runs,
+        )
     if localizer_name == "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior":
         return localizer_cls(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
@@ -1471,6 +1484,39 @@ def suggest_parameters(
         )
         pba_max_test_runs = trial.suggest_int(
             "ProbabilisticBisection_PosteriorMedian_UniformPrior_pba_max_test_runs",
+            int(pba_max_test_runs_min),
+            int(pba_max_test_runs_max),
+        )
+    elif localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
+        multisection_section_count = trial.suggest_int(
+            (
+                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
+                "multisection_section_count"
+            ),
+            int(multisection_section_count_min),
+            int(multisection_section_count_max),
+        )
+        pba_confidence_threshold = trial.suggest_float(
+            (
+                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
+                "pba_confidence_threshold"
+            ),
+            float(pba_confidence_threshold_min),
+            float(pba_confidence_threshold_max),
+        )
+        pba_repeat_count = trial.suggest_int(
+            (
+                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
+                "pba_repeat_count"
+            ),
+            int(pba_repeat_count_min),
+            int(pba_repeat_count_max),
+        )
+        pba_max_test_runs = trial.suggest_int(
+            (
+                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
+                "pba_max_test_runs"
+            ),
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )

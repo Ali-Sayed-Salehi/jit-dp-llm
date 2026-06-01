@@ -232,6 +232,31 @@ Optuna samples these from:
 - `--pba-risk-prior-uniform-weight-min` /
   `--pba-risk-prior-uniform-weight-max`
 
+## Probabilistic Multisection Localizer
+
+`ProbabilisticMultiSection_PosteriorQuantile_UniformPrior` uses the same
+uniform prior, posterior update, confidence threshold, repeat count, and
+test-run budget as the uniform probabilistic bisection localizer. Its query
+strategy differs: each round divides posterior mass into
+`--multisection-section-count` sections and probes the internal posterior
+quantile boundaries in one batch.
+
+If multiple quantile targets land on the same revision, the localizer probes
+that revision once in the distinct boundary set. Additional observations for
+that revision come from `--pba-repeat-count`, so section count controls fan-out
+and repeat count controls repeated evidence. The localizer also avoids using
+the known-bad endpoint as a quantile boundary because that probe cannot split
+the candidate culprit set.
+
+This localizer does not use `--multisection-retrigger-count`; noisy evidence is
+handled through Bayesian posterior updates and `--pba-repeat-count`. Optuna
+tunes:
+
+- `multisection_section_count`
+- `pba_confidence_threshold`
+- `pba_repeat_count`
+- `pba_max_test_runs`
+
 ## Metrics
 
 Each summary output reports:
