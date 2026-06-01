@@ -956,6 +956,7 @@ class StandardMidpointMultisection(StandardMidpointBisection):
 
         while high_idx - low_idx > 1:
             boundary_indices = self._section_boundary_indices(
+                path=path,
                 low_idx=low_idx,
                 high_idx=high_idx,
                 section_count=self.multisection_section_count,
@@ -1089,12 +1090,14 @@ class StandardMidpointMultisection(StandardMidpointBisection):
     @staticmethod
     def _section_boundary_indices(
         *,
+        path: list[str],
         low_idx: int,
         high_idx: int,
         section_count: int,
     ) -> list[int]:
         """Return internal right-boundary indices for equal interval sections."""
 
+        del path
         candidate_count = high_idx - low_idx
         effective_section_count = min(section_count, candidate_count)
         return [
@@ -1157,6 +1160,134 @@ class StandardMidpointMultisection(StandardMidpointBisection):
             return "culprit_not_in_search_range"
         if found_revision != culprit_revision:
             return "multisection_found_is_not_culprit"
+        return None
+
+
+class RiskWeightedMultisection(StandardMidpointMultisection):
+    """Find the first bad revision by testing equal risk-mass cuts in parallel."""
+
+    name = "RiskWeightedMultisection"
+
+    def __init__(
+        self,
+        *,
+        risk_scores: Mapping[str, float],
+        multisection_section_count: int = 4,
+        multisection_retrigger_count: int = 0,
+    ) -> None:
+        """Configure risk scores, interval fan-out, and boundary retriggers."""
+
+        super().__init__(
+            multisection_section_count=multisection_section_count,
+            multisection_retrigger_count=multisection_retrigger_count,
+        )
+        if not risk_scores:
+            raise ValueError("risk_scores must not be empty")
+
+        validated_scores: dict[str, float] = {}
+        for revision, raw_risk_score in risk_scores.items():
+            try:
+                risk_score = float(raw_risk_score)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"risk score must be numeric for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                ) from exc
+            if not math.isfinite(risk_score):
+                raise ValueError(f"risk score must be finite for {revision!r}")
+            if not 0.0 <= risk_score <= 1.0:
+                raise ValueError(
+                    f"risk score must be between 0 and 1 for {revision!r}: "
+                    f"{raw_risk_score!r}"
+                )
+            validated_scores[revision] = risk_score
+        self.risk_scores = validated_scores
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable risk-weighted multisection settings."""
+
+        return {
+            **super()._settings_to_json(),
+            "risk_weighting": "sum",
+        }
+
+    def _section_boundary_indices(
+        self,
+        *,
+        path: list[str],
+        low_idx: int,
+        high_idx: int,
+        section_count: int,
+    ) -> list[int]:
+        """Return internal boundaries that split candidate risk mass evenly."""
+
+        candidate_count = high_idx - low_idx
+        effective_section_count = min(section_count, candidate_count)
+        total_risk = sum(
+            self._risk_score(path[candidate_idx])
+            for candidate_idx in range(low_idx + 1, high_idx + 1)
+        )
+        if total_risk <= 0.0:
+            return super()._section_boundary_indices(
+                path=path,
+                low_idx=low_idx,
+                high_idx=high_idx,
+                section_count=section_count,
+            )
+
+        cumulative_risk_by_idx: dict[int, float] = {}
+        cumulative_risk = 0.0
+        for candidate_idx in range(low_idx + 1, high_idx + 1):
+            cumulative_risk += self._risk_score(path[candidate_idx])
+            cumulative_risk_by_idx[candidate_idx] = cumulative_risk
+
+        boundary_indices: list[int] = []
+        previous_boundary_idx = low_idx
+        for section_number in range(1, effective_section_count):
+            target_risk = total_risk * section_number / effective_section_count
+            standard_boundary_idx = (
+                low_idx + (candidate_count * section_number) // effective_section_count
+            )
+            remaining_sections = effective_section_count - section_number
+            min_idx = previous_boundary_idx + 1
+            max_idx = high_idx - remaining_sections
+
+            best_idx = min(
+                range(min_idx, max_idx + 1),
+                key=lambda candidate_idx: (
+                    abs(cumulative_risk_by_idx[candidate_idx] - target_risk),
+                    abs(candidate_idx - standard_boundary_idx),
+                    candidate_idx,
+                ),
+            )
+            boundary_indices.append(best_idx)
+            previous_boundary_idx = best_idx
+
+        return boundary_indices
+
+    def _risk_score(self, revision: str) -> float:
+        """Return the validated risk score for one candidate revision."""
+
+        try:
+            return float(self.risk_scores[revision])
+        except KeyError as exc:
+            raise ValueError(f"missing risk score for revision {revision!r}") from exc
+
+    @staticmethod
+    def _undefined_reason_for_found_revision(
+        *,
+        found_revision: str,
+        path: list[str],
+        culprit_revision: str | None,
+    ) -> str | None:
+        """Return why a completed risk-weighted multisection result failed."""
+
+        if culprit_revision is None:
+            return "missing_culprit_revision"
+        if culprit_revision not in path[1:]:
+            return "culprit_not_in_search_range"
+        if found_revision != culprit_revision:
+            return "risk_weighted_multisection_found_is_not_culprit"
         return None
 
 
@@ -1655,6 +1786,7 @@ LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
         ProbabilisticBisectionPosteriorMedianUniformPrior
     ),
     RiskWeightedBisection.name: RiskWeightedBisection,
+    RiskWeightedMultisection.name: RiskWeightedMultisection,
     StandardMidpointBisection.name: StandardMidpointBisection,
     StandardMidpointMultisection.name: StandardMidpointMultisection,
 }

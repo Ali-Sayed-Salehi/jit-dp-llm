@@ -89,6 +89,10 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_max_test_runs",
     ),
     "RiskWeightedBisection": ("midpoint_retrigger_count",),
+    "RiskWeightedMultisection": (
+        "multisection_section_count",
+        "multisection_retrigger_count",
+    ),
     "StandardMidpointBisection": ("midpoint_retrigger_count",),
     "StandardMidpointMultisection": (
         "multisection_section_count",
@@ -400,8 +404,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_RISK_SCORES,
         help=(
-            "Path to per_commit_risk_scores.jsonl. Risk-aware localizers use "
-            "risk_score values from this file."
+            "Path to per_commit_risk_scores.jsonl. Risk-aware and "
+            "risk-weighted localizers use risk_score values from this file."
         ),
     )
     parser.add_argument(
@@ -471,10 +475,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_MULTISECTION_SECTION_COUNT,
         help=(
-            "Number of equal sections for StandardMidpointMultisection. Each "
-            "round tests section cut boundaries in parallel. Used directly "
-            "when Optuna is disabled, and as a fallback default for combos "
-            "without tuned parameters."
+            "Number of sections for multisection localizers. Each round tests "
+            "section cut boundaries in parallel. Used directly when Optuna is "
+            "disabled, and as a fallback default for combos without tuned "
+            "parameters."
         ),
     )
     parser.add_argument(
@@ -483,9 +487,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_MULTISECTION_RETRIGGER_COUNT,
         help=(
             "Number of additional boundary-decision batches to retrigger for "
-            "StandardMidpointMultisection before selecting the next interval. "
-            "Used directly when Optuna is disabled, and as a fallback default "
-            "for combos without tuned parameters."
+            "multisection localizers before selecting the next interval. Used "
+            "directly when Optuna is disabled, and as a fallback default for "
+            "combos without tuned parameters."
         ),
     )
     parser.add_argument(
@@ -589,25 +593,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--multisection-section-count-min",
         type=int,
         default=DEFAULT_MULTISECTION_SECTION_COUNT_MIN,
-        help="Minimum StandardMidpointMultisection section count sampled by Optuna.",
+        help="Minimum multisection section count sampled by Optuna.",
     )
     parser.add_argument(
         "--multisection-section-count-max",
         type=int,
         default=DEFAULT_MULTISECTION_SECTION_COUNT_MAX,
-        help="Maximum StandardMidpointMultisection section count sampled by Optuna.",
+        help="Maximum multisection section count sampled by Optuna.",
     )
     parser.add_argument(
         "--multisection-retrigger-count-min",
         type=int,
         default=DEFAULT_MULTISECTION_RETRIGGER_COUNT_MIN,
-        help="Minimum StandardMidpointMultisection retrigger count sampled by Optuna.",
+        help="Minimum multisection retrigger count sampled by Optuna.",
     )
     parser.add_argument(
         "--multisection-retrigger-count-max",
         type=int,
         default=DEFAULT_MULTISECTION_RETRIGGER_COUNT_MAX,
-        help="Maximum StandardMidpointMultisection retrigger count sampled by Optuna.",
+        help="Maximum multisection retrigger count sampled by Optuna.",
     )
     parser.add_argument(
         "--pba-confidence-threshold-min",
@@ -1129,6 +1133,12 @@ def build_localizer(
             multisection_section_count=parameters.multisection_section_count,
             multisection_retrigger_count=parameters.multisection_retrigger_count,
         )
+    if localizer_name == "RiskWeightedMultisection":
+        return localizer_cls(
+            multisection_section_count=parameters.multisection_section_count,
+            multisection_retrigger_count=parameters.multisection_retrigger_count,
+            risk_scores=risk_scores,
+        )
     if localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
         return localizer_cls(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
@@ -1434,6 +1444,17 @@ def suggest_parameters(
             int(multisection_retrigger_count_min),
             int(multisection_retrigger_count_max),
         )
+    elif localizer_name == "RiskWeightedMultisection":
+        multisection_section_count = trial.suggest_int(
+            "RiskWeightedMultisection_multisection_section_count",
+            int(multisection_section_count_min),
+            int(multisection_section_count_max),
+        )
+        multisection_retrigger_count = trial.suggest_int(
+            "RiskWeightedMultisection_multisection_retrigger_count",
+            int(multisection_retrigger_count_min),
+            int(multisection_retrigger_count_max),
+        )
     elif localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
         pba_confidence_threshold = trial.suggest_float(
             (
@@ -1675,6 +1696,7 @@ def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
         in {
             "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
             "RiskWeightedBisection",
+            "RiskWeightedMultisection",
         }
         for localizer_name in localizer_names
     )

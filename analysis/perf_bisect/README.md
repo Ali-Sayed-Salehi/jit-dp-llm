@@ -154,6 +154,28 @@ are retriggered before voting on those boundaries. Optuna samples these from:
 - `--multisection-section-count-min` / `--multisection-section-count-max`
 - `--multisection-retrigger-count-min` / `--multisection-retrigger-count-max`
 
+## Risk-Weighted Multisection Localizer
+
+`RiskWeightedMultisection` uses the same multisection workflow and
+known-good/known-bad invariant, but chooses section boundaries by cumulative
+`risk_score` mass instead of equal revision counts. For the current candidate
+interval, it sums risk scores over `path[low_idx + 1 : high_idx + 1]`. If the
+effective section count is `m`, boundary `s` targets cumulative risk
+`total_risk * s / m`; the localizer tests the internal revision whose cumulative
+risk is closest to that target while keeping at least one revision in every
+section.
+
+If the current interval has no positive risk mass, it falls back to
+`StandardMidpointMultisection` equal-count boundaries. Risk scores are loaded
+from `--risk-scores`, which defaults to
+`datasets/mozilla_perf_bisect/per_commit_risk_scores.jsonl`.
+
+`RiskWeightedMultisection` uses the same Optuna parameters and ranges as
+`StandardMidpointMultisection`:
+
+- `--multisection-section-count-min` / `--multisection-section-count-max`
+- `--multisection-retrigger-count-min` / `--multisection-retrigger-count-max`
+
 ## Probabilistic Bisection Localizer
 
 `ProbabilisticBisection_PosteriorMedian_UniformPrior` keeps a posterior

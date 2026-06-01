@@ -132,6 +132,21 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
 
+# Flag ownership for this simulation command:
+# - --risk-scores is used by ProbabilisticBisection_PosteriorMedian_RiskAwarePrior,
+#   RiskWeightedBisection, and RiskWeightedMultisection.
+# - --midpoint-retrigger-count-* is tuned for StandardMidpointBisection and
+#   RiskWeightedBisection.
+# - --multisection-section-count-* and --multisection-retrigger-count-* are tuned
+#   for StandardMidpointMultisection and RiskWeightedMultisection.
+# - --backfill-retrigger-count-* is tuned for Backfill and BackfillWithRepeat.
+# - --probe-repeat-count-* is tuned for BackfillWithRepeat.
+# - --pba-confidence-threshold-*, --pba-repeat-count-*, and
+#   --pba-max-test-runs-* are tuned for both probabilistic bisection localizers.
+# - --pba-risk-prior-uniform-weight-* would tune only
+#   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior if provided.
+# - --optuna-trials/--optuna-seed control tuning for every selected tunable
+#   localizer/oracle combo; --random-seed controls noisy oracle draws.
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
 --dataset all \
 --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
@@ -142,7 +157,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
---localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior RiskWeightedBisection StandardMidpointBisection StandardMidpointMultisection \
+--localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
 --random-seed 42 \
 --optuna-seed 42 \
 --optuna-trials 50 \
