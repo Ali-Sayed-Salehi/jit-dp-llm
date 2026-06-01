@@ -256,6 +256,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "enabled": True,
             "tuning_dataset": "eval",
             "optuna_trials": args.optuna_trials,
+            "optuna_trials_scale_by_parameter_count": True,
             "optuna_seed": args.optuna_seed,
             "backfill_retrigger_count_min": args.backfill_retrigger_count_min,
             "backfill_retrigger_count_max": args.backfill_retrigger_count_max,
@@ -545,9 +546,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "Number of Optuna trials per localizer/oracle combo. When positive, "
-            "parameters are optimized on the eval split and replayed on the "
-            "requested split(s)."
+            "Base number of Optuna trials per localizer/oracle combo per "
+            "tunable parameter. When positive, parameters are optimized on the "
+            "eval split and replayed on the requested split(s)."
         ),
     )
     parser.add_argument(
@@ -1360,7 +1361,12 @@ def optimize_combo_on_eval(
         trial.set_user_attr("metrics", metrics)
         return objective_values(metrics)
 
-    study.optimize(objective, n_trials=int(optuna_trials), show_progress_bar=False)
+    effective_trials = effective_optuna_trials(
+        localizer_name=localizer_name,
+        oracle_name=oracle_name,
+        optuna_trials=optuna_trials,
+    )
+    study.optimize(objective, n_trials=effective_trials, show_progress_bar=False)
     if not study.best_trials:
         raise RuntimeError(
             f"Optuna produced no Pareto-optimal trials for {localizer_name}/{oracle_name}."
@@ -1374,8 +1380,34 @@ def optimize_combo_on_eval(
 def has_tunable_parameters(*, localizer_name: str, oracle_name: str) -> bool:
     """Return whether the selected combo currently exposes Optuna parameters."""
 
+    return (
+        tunable_parameter_count(
+            localizer_name=localizer_name,
+            oracle_name=oracle_name,
+        )
+        > 0
+    )
+
+
+def tunable_parameter_count(*, localizer_name: str, oracle_name: str) -> int:
+    """Return the number of Optuna-tunable parameters for one combo."""
+
     del oracle_name
-    return localizer_name in TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER
+    return len(TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER.get(localizer_name, ()))
+
+
+def effective_optuna_trials(
+    *,
+    localizer_name: str,
+    oracle_name: str,
+    optuna_trials: int,
+) -> int:
+    """Scale the configured base trial count by the combo's parameter count."""
+
+    return int(optuna_trials) * tunable_parameter_count(
+        localizer_name=localizer_name,
+        oracle_name=oracle_name,
+    )
 
 
 def suggest_parameters(
