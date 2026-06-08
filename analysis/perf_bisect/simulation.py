@@ -434,8 +434,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--draw-dist-plots",
         action="store_true",
         help=(
-            "Draw per-localizer distribution plots for test runs and elapsed "
-            "time."
+            "Draw per-localizer final-test distribution plots for test runs "
+            "and elapsed time."
         ),
     )
     parser.add_argument(
@@ -443,7 +443,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_DIST_PLOTS_DIR,
         help=(
-            "Directory for distribution plots written when "
+            "Directory for final-test distribution plots written when "
             "--draw-dist-plots is set."
         ),
     )
@@ -893,7 +893,11 @@ def run_dataset(
                     )
                 )
             detail_runs.append(detail_run)
-            if distribution_plots_dir is not None and plt is not None:
+            if (
+                distribution_plots_dir is not None
+                and plt is not None
+                and dataset_name == "final_test"
+            ):
                 write_distribution_plots(
                     dataset_name=dataset_name,
                     localizer_name=localizer_name,
@@ -1826,7 +1830,7 @@ def write_distribution_plots(
         xlabel="Elapsed time (hours)",
         color="#ff7f0e",
     )
-    fig.suptitle(f"{localizer_name} / {oracle_name} / {dataset_name}")
+    fig.suptitle(f"{localizer_name} / {dataset_name}")
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
 
     output_path = plots_dir / (
@@ -1847,7 +1851,7 @@ def plot_distribution_histogram(
     xlabel: str,
     color: str,
 ) -> None:
-    """Draw one histogram with stable bins and summary guide lines."""
+    """Draw one histogram with per-value bins and summary guide lines."""
 
     numeric_values = [float(value) for value in values if math.isfinite(float(value))]
     if not numeric_values:
@@ -1861,10 +1865,11 @@ def plot_distribution_histogram(
     value_median = median(numeric_values)
     ax.hist(
         numeric_values,
-        bins=histogram_bin_count(numeric_values),
+        bins=histogram_bins(numeric_values),
         color=color,
         edgecolor="white",
         alpha=0.85,
+        linewidth=0.35,
     )
     mean_line = ax.axvline(
         value_mean,
@@ -1889,12 +1894,31 @@ def plot_distribution_histogram(
     )
 
 
-def histogram_bin_count(values: Sequence[float]) -> int:
-    """Return a small, stable histogram bin count for per-regression metrics."""
+def histogram_bins(values: Sequence[float]) -> list[float]:
+    """Return narrow bins that isolate each distinct observed value."""
 
-    if len(values) <= 1 or min(values) == max(values):
-        return 1
-    return max(5, min(20, int(math.sqrt(len(values)))))
+    unique_values = sorted(set(values))
+    if len(unique_values) == 1:
+        value = unique_values[0]
+        padding = max(abs(value) * 0.01, 1e-6)
+        return [value - padding, value + padding]
+
+    half_widths: list[float] = []
+    for index, value in enumerate(unique_values):
+        neighbor_gaps = []
+        if index > 0:
+            neighbor_gaps.append(value - unique_values[index - 1])
+        if index + 1 < len(unique_values):
+            neighbor_gaps.append(unique_values[index + 1] - value)
+        half_widths.append(min(neighbor_gaps) / 4.0)
+
+    bin_edges = [
+        unique_values[0] - half_widths[0],
+        unique_values[0] + half_widths[0],
+    ]
+    for value, half_width in zip(unique_values[1:], half_widths[1:]):
+        bin_edges.extend([value - half_width, value + half_width])
+    return bin_edges
 
 
 def slugify_path_component(value: str) -> str:
