@@ -339,10 +339,23 @@ Generate the oracle accuracy dataset:
 python analysis/perf_bisect/calculate_oracle_metrics.py
 ```
 
+This also writes an oracle accuracy distribution plot beside the JSONL output.
+With the default output path, the plot is written to
+`analysis/perf_bisect/per_regression_oracle_metrics_distribution.png`.
+
 Change the smoothing strength:
 
 ```bash
 python analysis/perf_bisect/calculate_oracle_metrics.py --smoothing-alpha 1.0
+```
+
+Write the plot to a custom path, or skip plot generation:
+
+```bash
+python analysis/perf_bisect/calculate_oracle_metrics.py \
+  --plot-output analysis/perf_bisect/oracle_accuracy_distribution.png
+
+python analysis/perf_bisect/calculate_oracle_metrics.py --skip-plot
 ```
 
 ## Running

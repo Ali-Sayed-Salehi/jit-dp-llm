@@ -130,7 +130,7 @@ echo "Running script ..."
 # --final-only
 # # --dry-run
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py --plot-output /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/oracle_accuracies_dist.png
 
 # Flag ownership for this simulation command:
 # - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,

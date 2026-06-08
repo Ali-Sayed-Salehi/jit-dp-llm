@@ -8,6 +8,9 @@ perf-bisect datasets:
   - summary_oracle_accuracy
   - replicate_oracle_accuracy
 
+By default, the script also writes a histogram of the oracle accuracy
+distribution beside the JSONL output.
+
 Candidate revisions are found from the Mercurial parent graph in
 all_commits.jsonl. The known-good revision is excluded, and the known-bad
 revision is included because it can be the culprit revision.
@@ -19,7 +22,9 @@ import argparse
 from collections import Counter, deque
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
 
@@ -34,9 +39,16 @@ DEFAULT_REGRESSION_INPUTS = (
 DEFAULT_OUTPUT = (
     REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
 )
+DEFAULT_DISTRIBUTION_PLOT_DPI = 200
+DEFAULT_DISTRIBUTION_PLOT_FIGSIZE = (6.0, 3.6)
 DEFAULT_SMOOTHING_ALPHA = 0.5
 MINIMUM_ORACLE_ACCURACY = 0.51
 NULL_NODE = "0000000000000000000000000000000000000000"
+PLOT_ORACLE_ACCURACY_FIELD = "summary_oracle_accuracy"
+PLOT_TITLE_FONT_SIZE = 16
+PLOT_LABEL_FONT_SIZE = 13
+PLOT_TICK_FONT_SIZE = 11
+PLOT_STATS_FONT_SIZE = 12
 
 
 @dataclass(frozen=True)
@@ -116,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, calculate per-regression accuracies, and write JSONL."""
 
     args = parse_args(argv)
+    plt = None if args.skip_plot else load_matplotlib()
     regressions = load_regressions(args.regressions)
     commit_graph = load_commit_graph(args.commits)
     paths_by_regression_id, path_stats = build_candidate_paths(
@@ -150,6 +163,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
     )
     write_jsonl(args.output, output_rows)
+    if plt is not None:
+        plot_output = args.plot_output or default_distribution_plot_path(args.output)
+        write_accuracy_distribution_plot(plt=plt, path=plot_output, rows=output_rows)
 
     metric_stats = summarize_output_rows(output_rows)
     print(f"loaded_regressions={len(regressions)}")
@@ -214,6 +230,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Exclude the known-bad endpoint from candidate measurements. By "
             "default it is included because bad_revision can be the culprit."
         ),
+    )
+    parser.add_argument(
+        "--plot-output",
+        type=Path,
+        default=None,
+        help=(
+            "Output PNG path for the oracle accuracy distribution plot. "
+            "Defaults to '<output stem>_distribution.png' beside --output."
+        ),
+    )
+    parser.add_argument(
+        "--skip-plot",
+        action="store_true",
+        help="Write the JSONL output but do not generate a distribution plot.",
     )
     parser.add_argument(
         "--smoothing-alpha",
@@ -516,6 +546,106 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
         for row in rows:
             fh.write(json.dumps(row))
             fh.write("\n")
+
+
+def default_distribution_plot_path(output_path: Path) -> Path:
+    """Return the default distribution plot path for one metrics output path."""
+
+    return output_path.with_name(f"{output_path.stem}_distribution.png")
+
+
+def write_accuracy_distribution_plot(
+    *,
+    plt: Any,
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Write a histogram showing the available oracle accuracy distribution."""
+
+    values = oracle_accuracy_values(rows, PLOT_ORACLE_ACCURACY_FIELD)
+    if not values:
+        print("no oracle accuracy values available for distribution plot")
+        return
+
+    min_accuracy = min(values)
+    median_accuracy = median(values)
+    max_accuracy = max(values)
+    lower_bound = min(0.5, min_accuracy)
+    upper_bound = max(1.0, max_accuracy)
+    if math.isclose(lower_bound, upper_bound):
+        lower_bound = max(0.0, lower_bound - 0.05)
+        upper_bound = min(1.0, upper_bound + 0.05)
+
+    fig, ax = plt.subplots(figsize=DEFAULT_DISTRIBUTION_PLOT_FIGSIZE)
+    bins = [lower_bound + (upper_bound - lower_bound) * i / 20 for i in range(21)]
+    color = "#2563eb"
+    ax.hist(values, bins=bins, histtype="step", linewidth=2, color=color)
+    ax.hist(values, bins=bins, alpha=0.12, color=color)
+    ax.text(
+        0.03,
+        0.95,
+        (
+            f"Min: {min_accuracy:.3f}\n"
+            f"Median: {median_accuracy:.3f}\n"
+            f"Max: {max_accuracy:.3f}"
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=PLOT_STATS_FONT_SIZE,
+        bbox={
+            "boxstyle": "round,pad=0.35",
+            "facecolor": "white",
+            "edgecolor": "#d1d5db",
+            "alpha": 0.9,
+        },
+    )
+
+    ax.set_xlabel("Oracle accuracy", fontsize=PLOT_LABEL_FONT_SIZE)
+    ax.set_ylabel("Regression count", fontsize=PLOT_LABEL_FONT_SIZE)
+    ax.set_title("Oracle Accuracy Distribution", fontsize=PLOT_TITLE_FONT_SIZE)
+    ax.set_xlim(lower_bound, upper_bound)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_FONT_SIZE)
+    ax.grid(True, linestyle=":", linewidth=0.7)
+    fig.tight_layout()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=DEFAULT_DISTRIBUTION_PLOT_DPI, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
+def oracle_accuracy_values(
+    rows: Sequence[Mapping[str, Any]],
+    field: str,
+) -> list[float]:
+    """Return finite numeric oracle accuracy values for one output field."""
+
+    values = []
+    for row in rows:
+        value = row.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        value = float(value)
+        if math.isfinite(value):
+            values.append(value)
+    return values
+
+
+def load_matplotlib() -> Any:
+    """Import matplotlib for headless plot generation."""
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "matplotlib is required for plot generation. Install matplotlib "
+            "or rerun with --skip-plot."
+        ) from exc
+    return plt
 
 
 def summarize_output_rows(rows: Sequence[Mapping[str, Any]]) -> Counter[str]:
