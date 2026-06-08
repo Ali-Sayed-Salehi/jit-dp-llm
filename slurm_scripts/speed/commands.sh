@@ -171,6 +171,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --optuna-seed 42 \
 --optuna-trials 50 \
 --midpoint-retrigger-count-max 200 \
+--multisection-section-count-min 3 \
 --multisection-section-count-max 16 \
 --multisection-retrigger-count-max 200 \
 --backfill-retrigger-count-max 200 \
@@ -198,13 +199,14 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 # --optuna-seed 42 \
 # --optuna-trials 50 \
 # --midpoint-retrigger-count-max 200 \
+# --multisection-section-count-min 3 \
 # --multisection-section-count-max 16 \
 # --multisection-retrigger-count-max 200 \
 # --backfill-retrigger-count-max 200 \
 # --probe-repeat-count-max 200 \
 # --pba-confidence-threshold-min 0.6 \
 # --pba-confidence-threshold-max 0.99 \
-# --pba-repeat-count-max 5 \
+# --pba-repeat-count-max 200 \
 # --pba-max-test-runs-min 20 \
 # --pba-max-test-runs-max 200
 
