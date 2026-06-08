@@ -171,7 +171,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --multisection-section-count-min 3 \
 --multisection-section-count-max 20 \
 --multisection-retrigger-count-max 30 \
---backfill-retrigger-count-max 80 \
+--backfill-retrigger-count-max 30 \
 --probe-repeat-count-max 30 \
 --pba-confidence-threshold-min 0.6 \
 --pba-confidence-threshold-max 0.99 \
