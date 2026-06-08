@@ -1747,12 +1747,8 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         if elapsed_values
         else None,
         "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
-        "p50_test_runs": round(float(median(test_runs)), 1)
-        if test_runs
-        else None,
-        "p90_test_runs": round(percentile(test_runs, 90), 1)
-        if test_runs
-        else None,
+        "p50_test_runs": count_percentile(test_runs, 50) if test_runs else None,
+        "p90_test_runs": count_percentile(test_runs, 90) if test_runs else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }
 
@@ -1778,6 +1774,20 @@ def percentile(values: Sequence[float | int], percentile_value: float) -> float:
     lower_value = sorted_values[lower_index]
     upper_value = sorted_values[upper_index]
     return lower_value + (upper_value - lower_value) * (rank - lower_index)
+
+
+def count_percentile(values: Sequence[int], percentile_value: float) -> int:
+    """Return an observed nearest-rank percentile for integer count metrics."""
+
+    if not values:
+        raise ValueError("count_percentile requires at least one value")
+    if not 0.0 <= percentile_value <= 100.0:
+        raise ValueError("percentile_value must be in [0, 100]")
+
+    sorted_values = sorted(values)
+    rank = math.ceil(len(sorted_values) * percentile_value / 100.0)
+    index = max(0, rank - 1)
+    return sorted_values[index]
 
 
 def print_undefined_localizations(

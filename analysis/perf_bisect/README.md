@@ -284,9 +284,13 @@ Each summary output reports:
 
 - `mean_elapsed_hours`: mean wall-clock test elapsed time across all
   regressions, including undefined localizations.
+- `p50_elapsed_hours` / `p90_elapsed_hours`: median and interpolated 90th
+  percentile wall-clock test elapsed time.
 - `max_elapsed_hours`: max wall-clock test elapsed time across all regressions.
 - `mean_test_runs`: mean number of submitted test jobs across all regressions,
   including undefined localizations.
+- `p50_test_runs` / `p90_test_runs`: observed nearest-rank percentiles for
+  submitted test-job counts.
 - `max_test_runs`: max number of submitted test jobs across all regressions.
 - `success_rate_percent`: percentage of regressions where the exact culprit was
   found.
