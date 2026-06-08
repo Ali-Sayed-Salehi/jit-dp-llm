@@ -1862,6 +1862,143 @@ class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
         }
 
 
+class ProbabilisticMultiSectionCumulativeRiskQuantileUniformPrior(
+    ProbabilisticMultiSectionPosteriorQuantileUniformPrior
+):
+    """Probabilistic multisection with uniform prior and risk-guided probes."""
+
+    name = "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior"
+    pba_query_strategy = "cumulative_risk_quantile"
+
+    def __init__(
+        self,
+        *,
+        risk_scores: Mapping[str, float],
+        multisection_section_count: int = 4,
+        pba_confidence_threshold: float = 0.9,
+        pba_repeat_count: int = 1,
+        pba_max_test_runs: int = 100,
+    ) -> None:
+        """Configure cumulative-risk quantile fan-out and PBA settings."""
+
+        super().__init__(
+            multisection_section_count=multisection_section_count,
+            pba_confidence_threshold=pba_confidence_threshold,
+            pba_repeat_count=pba_repeat_count,
+            pba_max_test_runs=pba_max_test_runs,
+        )
+        self.risk_scores = _validate_risk_scores(risk_scores)
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable cumulative-risk multisection settings."""
+
+        return {
+            **super()._settings_to_json(),
+            "pba_query_weighting": "posterior_probability_x_risk_score",
+        }
+
+    def _probe_candidate_indices(
+        self,
+        *,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+        remaining_budget: int,
+    ) -> list[int]:
+        """Return posterior-weighted risk quantile boundary probes."""
+
+        del remaining_budget
+        return self._cumulative_risk_quantile_indices(
+            candidate_revisions=candidate_revisions,
+            posterior=posterior,
+            section_count=self.multisection_section_count,
+        )
+
+    def _cumulative_risk_quantile_indices(
+        self,
+        *,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+        section_count: int,
+    ) -> list[int]:
+        """Return unique probes nearest equal posterior-weighted risk cuts."""
+
+        candidate_count = len(candidate_revisions)
+        if candidate_count <= 1:
+            return []
+
+        fallback_indices = self._posterior_quantile_indices(
+            posterior=posterior,
+            section_count=section_count,
+        )
+        query_weights = [
+            probability * self._risk_score(revision)
+            for revision, probability in zip(
+                candidate_revisions,
+                posterior,
+                strict=True,
+            )
+        ]
+        total_weight = sum(query_weights)
+        if total_weight <= 0.0:
+            return fallback_indices
+
+        effective_section_count = min(section_count, candidate_count)
+        max_probe_idx = candidate_count - 2
+        cumulative_weight_by_idx: dict[int, float] = {}
+        cumulative_weight = 0.0
+        for candidate_idx in range(max_probe_idx + 1):
+            cumulative_weight += query_weights[candidate_idx]
+            cumulative_weight_by_idx[candidate_idx] = cumulative_weight
+
+        probe_indices: list[int] = []
+        for section_number in range(1, effective_section_count):
+            target_weight = total_weight * section_number / effective_section_count
+            fallback_idx = min(
+                self._posterior_quantile_index(
+                    posterior=posterior,
+                    target_probability=section_number / effective_section_count,
+                ),
+                max_probe_idx,
+            )
+            best_idx = min(
+                range(max_probe_idx + 1),
+                key=lambda candidate_idx: (
+                    abs(cumulative_weight_by_idx[candidate_idx] - target_weight),
+                    abs(candidate_idx - fallback_idx),
+                    candidate_idx,
+                ),
+            )
+            if best_idx not in probe_indices:
+                probe_indices.append(best_idx)
+
+        return probe_indices
+
+    def _prior_to_json(
+        self,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> dict[str, Any]:
+        """Return risk-query metadata for result inspection."""
+
+        risk_scores = [self._risk_score(revision) for revision in candidate_revisions]
+        query_weights = [
+            risk_score * probability
+            for risk_score, probability in zip(risk_scores, posterior, strict=True)
+        ]
+        return {
+            "pba_risk_score_sum": round(sum(risk_scores), 12),
+            "pba_query_weight_sum": round(sum(query_weights), 12),
+        }
+
+    def _risk_score(self, revision: str) -> float:
+        """Return the validated risk score for one candidate revision."""
+
+        try:
+            return self.risk_scores[revision]
+        except KeyError as exc:
+            raise ValueError(f"missing risk score for revision {revision!r}") from exc
+
+
 class ProbabilisticBisectionCumulativeRiskMedianUniformPrior(
     ProbabilisticBisectionPosteriorMedianUniformPrior
 ):
@@ -2087,6 +2224,9 @@ LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     ),
     ProbabilisticBisectionPosteriorMedianUniformPrior.name: (
         ProbabilisticBisectionPosteriorMedianUniformPrior
+    ),
+    ProbabilisticMultiSectionCumulativeRiskQuantileUniformPrior.name: (
+        ProbabilisticMultiSectionCumulativeRiskQuantileUniformPrior
     ),
     ProbabilisticMultiSectionPosteriorQuantileUniformPrior.name: (
         ProbabilisticMultiSectionPosteriorQuantileUniformPrior

@@ -93,6 +93,12 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_repeat_count",
         "pba_max_test_runs",
     ),
+    "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior": (
+        "multisection_section_count",
+        "pba_confidence_threshold",
+        "pba_repeat_count",
+        "pba_max_test_runs",
+    ),
     "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior": (
         "multisection_section_count",
         "pba_confidence_threshold",
@@ -510,7 +516,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_PBA_CONFIDENCE_THRESHOLD,
         help=(
             "Posterior probability required for "
-            "probabilistic bisection localizers to accept a single culprit. "
+            "probabilistic localizers to accept a single culprit. "
             "Used directly when Optuna is disabled, and as a fallback default "
             "for combos without tuned parameters."
         ),
@@ -1164,6 +1170,17 @@ def build_localizer(
             pba_max_test_runs=parameters.pba_max_test_runs,
             risk_scores=risk_scores,
         )
+    if (
+        localizer_name
+        == "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior"
+    ):
+        return localizer_cls(
+            multisection_section_count=parameters.multisection_section_count,
+            pba_confidence_threshold=parameters.pba_confidence_threshold,
+            pba_repeat_count=parameters.pba_repeat_count,
+            pba_max_test_runs=parameters.pba_max_test_runs,
+            risk_scores=risk_scores,
+        )
     if localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
         return localizer_cls(
             multisection_section_count=parameters.multisection_section_count,
@@ -1531,36 +1548,27 @@ def suggest_parameters(
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
-    elif localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
+    elif localizer_name in {
+        "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
+        "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior",
+    }:
         multisection_section_count = trial.suggest_int(
-            (
-                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
-                "multisection_section_count"
-            ),
+            f"{localizer_name}_multisection_section_count",
             int(multisection_section_count_min),
             int(multisection_section_count_max),
         )
         pba_confidence_threshold = trial.suggest_float(
-            (
-                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
-                "pba_confidence_threshold"
-            ),
+            f"{localizer_name}_pba_confidence_threshold",
             float(pba_confidence_threshold_min),
             float(pba_confidence_threshold_max),
         )
         pba_repeat_count = trial.suggest_int(
-            (
-                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
-                "pba_repeat_count"
-            ),
+            f"{localizer_name}_pba_repeat_count",
             int(pba_repeat_count_min),
             int(pba_repeat_count_max),
         )
         pba_max_test_runs = trial.suggest_int(
-            (
-                "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior_"
-                "pba_max_test_runs"
-            ),
+            f"{localizer_name}_pba_max_test_runs",
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
@@ -1821,6 +1829,7 @@ def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
         in {
             "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
             "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
+            "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
             "RiskWeightedBisection",
             "RiskWeightedMultisection",
         }

@@ -134,19 +134,22 @@ echo "Running script ..."
 
 # Flag ownership for this simulation command:
 # - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,
-#   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior, RiskWeightedBisection,
-#   and RiskWeightedMultisection.
+#   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior,
+#   ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior,
+#   RiskWeightedBisection, and RiskWeightedMultisection.
 # - --midpoint-retrigger-count-* is tuned for StandardMidpointBisection and
 #   RiskWeightedBisection.
 # - --multisection-section-count-* is tuned for StandardMidpointMultisection,
-#   RiskWeightedMultisection, and
+#   RiskWeightedMultisection,
+#   ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior, and
 #   ProbabilisticMultiSection_PosteriorQuantile_UniformPrior.
 # - --multisection-retrigger-count-* is tuned for StandardMidpointMultisection
 #   and RiskWeightedMultisection.
 # - --backfill-retrigger-count-* is tuned for Backfill and BackfillWithRepeat.
 # - --probe-repeat-count-* is tuned for BackfillWithRepeat.
 # - --pba-confidence-threshold-*, --pba-repeat-count-*, and
-#   --pba-max-test-runs-* are tuned for probabilistic bisection localizers and
+#   --pba-max-test-runs-* are tuned for probabilistic bisection localizers,
+#   ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior, and
 #   ProbabilisticMultiSection_PosteriorQuantile_UniformPrior.
 # - --pba-risk-prior-uniform-weight-* would tune only
 #   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior if provided.
@@ -163,7 +166,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
---localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+--localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
 --random-seed 42 \
 --optuna-seed 42 \
 --optuna-trials 50 \
@@ -191,7 +194,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 # --sweep-output-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/machine_count_sweep_final_test.json \
 # --plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/plots \
 # --oracles SummaryComparison \
-# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
 # --random-seed 42 \
 # --optuna-seed 42 \
 # --optuna-trials 50 \

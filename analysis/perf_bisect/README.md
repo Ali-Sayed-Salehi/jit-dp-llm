@@ -190,6 +190,13 @@ internal probe that most evenly balances that posterior-weighted risk mass on
 the clean side and bad side of the probe. If the current candidate path has no
 positive posterior-weighted risk mass, it falls back to the posterior median.
 
+`ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior` uses the same
+uniform prior and posterior update, but submits multiple risk-guided probes per
+round. It computes the same `posterior_probability * risk_score` query weights,
+then targets equal cumulative query-weight quantiles for the requested
+`--multisection-section-count`. If the current candidate path has no positive
+posterior-weighted risk mass, it falls back to posterior-quantile multisection.
+
 `ProbabilisticBisection_PosteriorMedian_RiskAwarePrior` uses the same posterior
 update and posterior-median query strategy, but initializes the posterior from
 `--risk-scores`. It normalizes `risk_score` values over the current candidate
@@ -242,12 +249,18 @@ Optuna samples these from:
 
 ## Probabilistic Multisection Localizer
 
-`ProbabilisticMultiSection_PosteriorQuantile_UniformPrior` uses the same
-uniform prior, posterior update, confidence threshold, repeat count, and
-test-run budget as the uniform probabilistic bisection localizer. Its query
-strategy differs: each round divides posterior mass into
-`--multisection-section-count` sections and probes the internal posterior
-quantile boundaries in one batch.
+Probabilistic multisection localizers use the same uniform prior, posterior
+update, confidence threshold, repeat count, and test-run budget as the uniform
+probabilistic bisection localizer. Their query strategy differs: each round
+divides a query distribution into `--multisection-section-count` sections and
+probes the internal boundaries in one batch.
+
+`ProbabilisticMultiSection_PosteriorQuantile_UniformPrior` uses posterior mass
+as its query distribution.
+`ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior` uses
+posterior-weighted risk mass from `--risk-scores` as its query distribution,
+falling back to posterior mass if the current interval has no positive query
+risk.
 
 If multiple quantile targets land on the same revision, the localizer probes
 that revision once in the distinct boundary set. Additional observations for
@@ -256,7 +269,7 @@ and repeat count controls repeated evidence. The localizer also avoids using
 the known-bad endpoint as a quantile boundary because that probe cannot split
 the candidate culprit set.
 
-This localizer does not use `--multisection-retrigger-count`; noisy evidence is
+These localizers do not use `--multisection-retrigger-count`; noisy evidence is
 handled through Bayesian posterior updates and `--pba-repeat-count`. Optuna
 tunes:
 
@@ -392,6 +405,14 @@ Run only the cumulative-risk-median PBA localizer:
 python analysis/perf_bisect/simulation.py \
   --dataset eval \
   --localizers ProbabilisticBisection_CumulativeRiskMedian_UniformPrior
+```
+
+Run only the cumulative-risk-quantile PBA multisection localizer:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --dataset eval \
+  --localizers ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior
 ```
 
 Run only the risk-aware posterior-median PBA localizer:
