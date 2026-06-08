@@ -78,6 +78,11 @@ OBJECTIVE_FAILURE_PENALTY = 1_000_000_000.0
 TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
     "Backfill": ("backfill_retrigger_count",),
     "BackfillWithRepeat": ("backfill_retrigger_count", "probe_repeat_count"),
+    "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior": (
+        "pba_confidence_threshold",
+        "pba_repeat_count",
+        "pba_max_test_runs",
+    ),
     "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior": (
         "pba_confidence_threshold",
         "pba_repeat_count",
@@ -417,8 +422,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_RISK_SCORES,
         help=(
-            "Path to per_commit_risk_scores.jsonl. Risk-aware and "
-            "risk-weighted localizers use risk_score values from this file."
+            "Path to per_commit_risk_scores.jsonl. Risk-aware, risk-guided, "
+            "and risk-weighted localizers use risk_score values from this file."
         ),
     )
     parser.add_argument(
@@ -528,9 +533,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_PBA_CONFIDENCE_THRESHOLD,
         help=(
             "Posterior probability required for "
-            "ProbabilisticBisection_PosteriorMedian_UniformPrior to accept a "
-            "single culprit. Used directly when Optuna is disabled, and as a "
-            "fallback default for combos without tuned parameters."
+            "probabilistic bisection localizers to accept a single culprit. "
+            "Used directly when Optuna is disabled, and as a fallback default "
+            "for combos without tuned parameters."
         ),
     )
     parser.add_argument(
@@ -538,9 +543,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_PBA_REPEAT_COUNT,
         help=(
-            "Number of repeated observations for each posterior-median PBA "
-            "probe. Used directly when Optuna is disabled, and as a fallback "
-            "default for combos without tuned parameters."
+            "Number of repeated observations for each PBA probe. Used "
+            "directly when Optuna is disabled, and as a fallback default for "
+            "combos without tuned parameters."
         ),
     )
     parser.add_argument(
@@ -1192,6 +1197,13 @@ def build_localizer(
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
         )
+    if localizer_name == "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior":
+        return localizer_cls(
+            pba_confidence_threshold=parameters.pba_confidence_threshold,
+            pba_repeat_count=parameters.pba_repeat_count,
+            pba_max_test_runs=parameters.pba_max_test_runs,
+            risk_scores=risk_scores,
+        )
     if localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
         return localizer_cls(
             multisection_section_count=parameters.multisection_section_count,
@@ -1540,22 +1552,22 @@ def suggest_parameters(
             int(multisection_retrigger_count_min),
             int(multisection_retrigger_count_max),
         )
-    elif localizer_name == "ProbabilisticBisection_PosteriorMedian_UniformPrior":
+    elif localizer_name in {
+        "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
+        "ProbabilisticBisection_PosteriorMedian_UniformPrior",
+    }:
         pba_confidence_threshold = trial.suggest_float(
-            (
-                "ProbabilisticBisection_PosteriorMedian_UniformPrior_"
-                "pba_confidence_threshold"
-            ),
+            f"{localizer_name}_pba_confidence_threshold",
             float(pba_confidence_threshold_min),
             float(pba_confidence_threshold_max),
         )
         pba_repeat_count = trial.suggest_int(
-            "ProbabilisticBisection_PosteriorMedian_UniformPrior_pba_repeat_count",
+            f"{localizer_name}_pba_repeat_count",
             int(pba_repeat_count_min),
             int(pba_repeat_count_max),
         )
         pba_max_test_runs = trial.suggest_int(
-            "ProbabilisticBisection_PosteriorMedian_UniformPrior_pba_max_test_runs",
+            f"{localizer_name}_pba_max_test_runs",
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
@@ -1960,6 +1972,7 @@ def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
     return any(
         localizer_name
         in {
+            "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
             "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
             "RiskWeightedBisection",
             "RiskWeightedMultisection",

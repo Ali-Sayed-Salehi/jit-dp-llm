@@ -133,8 +133,9 @@ echo "Running script ..."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
 
 # Flag ownership for this simulation command:
-# - --risk-scores is used by ProbabilisticBisection_PosteriorMedian_RiskAwarePrior,
-#   RiskWeightedBisection, and RiskWeightedMultisection.
+# - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,
+#   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior, RiskWeightedBisection,
+#   and RiskWeightedMultisection.
 # - --midpoint-retrigger-count-* is tuned for StandardMidpointBisection and
 #   RiskWeightedBisection.
 # - --multisection-section-count-* is tuned for StandardMidpointMultisection,
@@ -166,7 +167,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --dist-plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/dist_plots \
 --workers 1 \
 --oracles SummaryComparison \
---localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+--localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
 --random-seed 42 \
 --optuna-seed 42 \
 --optuna-trials 50 \
@@ -194,7 +195,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 # --sweep-output-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/machine_count_sweep_final_test.json \
 # --plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/plots \
 # --oracles SummaryComparison \
-# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
 # --random-seed 42 \
 # --optuna-seed 42 \
 # --optuna-trials 50 \

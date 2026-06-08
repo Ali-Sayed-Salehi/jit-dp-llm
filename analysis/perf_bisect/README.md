@@ -182,8 +182,16 @@ from `--risk-scores`, which defaults to
 distribution over every candidate culprit revision in the good-to-bad path. It
 uses a uniform prior, so every candidate starts with equal probability.
 
+`ProbabilisticBisection_CumulativeRiskMedian_UniformPrior` uses the same uniform
+prior, posterior update, confidence threshold, repeat count, and test-run budget,
+but chooses probes from `--risk-scores`. In each round it computes
+`posterior_probability * risk_score` for every candidate, then selects the
+internal probe that most evenly balances that posterior-weighted risk mass on
+the clean side and bad side of the probe. If the current candidate path has no
+positive posterior-weighted risk mass, it falls back to the posterior median.
+
 `ProbabilisticBisection_PosteriorMedian_RiskAwarePrior` uses the same posterior
-update and query strategy, but initializes the posterior from
+update and posterior-median query strategy, but initializes the posterior from
 `--risk-scores`. It normalizes `risk_score` values over the current candidate
 path, then mixes in a uniform prior controlled by
 `--pba-risk-prior-uniform-weight`. This keeps low-risk commits recoverable when
@@ -191,10 +199,10 @@ the risk model is overconfident. The risk-aware variant also requires at least
 one known oracle observation before accepting a posterior-MAP culprit, unless
 there is only one candidate revision.
 
-Each probing round chooses the posterior median: the first revision whose
-cumulative posterior probability reaches `0.5`. The localizer submits
-`--pba-repeat-count` observations for that one revision. `pba_batch_size` is
-fixed at `1`, so this variant is sequential rather than batched.
+Posterior-median PBA variants choose the first revision whose cumulative
+posterior probability reaches `0.5`. Bisection PBA localizers submit
+`--pba-repeat-count` observations for one revision per round. `pba_batch_size` is
+fixed at `1`, so these variants are sequential rather than batched.
 
 For each clean/bad observation, the localizer reads the oracle's accuracy for
 that probe. With `SummaryComparison`, this is the regression's
@@ -376,6 +384,14 @@ Run only the posterior-median PBA localizer:
 python analysis/perf_bisect/simulation.py \
   --dataset eval \
   --localizers ProbabilisticBisection_PosteriorMedian_UniformPrior
+```
+
+Run only the cumulative-risk-median PBA localizer:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --dataset eval \
+  --localizers ProbabilisticBisection_CumulativeRiskMedian_UniformPrior
 ```
 
 Run only the risk-aware posterior-median PBA localizer:

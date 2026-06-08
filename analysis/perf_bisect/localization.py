@@ -195,6 +195,33 @@ class CulpritLocalizer:
         return 0.0
 
 
+def _validate_risk_scores(risk_scores: Mapping[str, float]) -> dict[str, float]:
+    """Return finite [0, 1] risk scores keyed by revision."""
+
+    if not risk_scores:
+        raise ValueError("risk_scores must not be empty")
+
+    validated_scores: dict[str, float] = {}
+    for revision, raw_risk_score in risk_scores.items():
+        try:
+            risk_score = float(raw_risk_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"risk score must be numeric for {revision!r}: "
+                f"{raw_risk_score!r}"
+            ) from exc
+        if not math.isfinite(risk_score):
+            raise ValueError(f"risk score must be finite for {revision!r}")
+        if not 0.0 <= risk_score <= 1.0:
+            raise ValueError(
+                f"risk score must be between 0 and 1 for {revision!r}: "
+                f"{raw_risk_score!r}"
+            )
+        validated_scores[revision] = risk_score
+
+    return validated_scores
+
+
 class Backfill(CulpritLocalizer):
     """Probe every revision after the known-good revision and find the first bad one."""
 
@@ -798,27 +825,7 @@ class RiskWeightedBisection(StandardMidpointBisection):
         """Configure risk scores and midpoint-style repeated probes."""
 
         super().__init__(midpoint_retrigger_count=midpoint_retrigger_count)
-        if not risk_scores:
-            raise ValueError("risk_scores must not be empty")
-
-        validated_scores: dict[str, float] = {}
-        for revision, raw_risk_score in risk_scores.items():
-            try:
-                risk_score = float(raw_risk_score)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"risk score must be numeric for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                ) from exc
-            if not math.isfinite(risk_score):
-                raise ValueError(f"risk score must be finite for {revision!r}")
-            if not 0.0 <= risk_score <= 1.0:
-                raise ValueError(
-                    f"risk score must be between 0 and 1 for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                )
-            validated_scores[revision] = risk_score
-        self.risk_scores = validated_scores
+        self.risk_scores = _validate_risk_scores(risk_scores)
 
     def _settings_to_json(self) -> dict[str, Any]:
         """Return fixed and tunable risk-weighted bisection settings."""
@@ -1181,27 +1188,7 @@ class RiskWeightedMultisection(StandardMidpointMultisection):
             multisection_section_count=multisection_section_count,
             multisection_retrigger_count=multisection_retrigger_count,
         )
-        if not risk_scores:
-            raise ValueError("risk_scores must not be empty")
-
-        validated_scores: dict[str, float] = {}
-        for revision, raw_risk_score in risk_scores.items():
-            try:
-                risk_score = float(raw_risk_score)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"risk score must be numeric for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                ) from exc
-            if not math.isfinite(risk_score):
-                raise ValueError(f"risk score must be finite for {revision!r}")
-            if not 0.0 <= risk_score <= 1.0:
-                raise ValueError(
-                    f"risk score must be between 0 and 1 for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                )
-            validated_scores[revision] = risk_score
-        self.risk_scores = validated_scores
+        self.risk_scores = _validate_risk_scores(risk_scores)
 
     def _settings_to_json(self) -> dict[str, Any]:
         """Return fixed and tunable risk-weighted multisection settings."""
@@ -1387,6 +1374,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
 
             remaining_budget = self.pba_max_test_runs - len(all_decisions)
             distinct_probe_indices = self._probe_candidate_indices(
+                candidate_revisions=candidate_revisions,
                 posterior=posterior,
                 remaining_budget=remaining_budget,
             )
@@ -1537,12 +1525,13 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
     def _probe_candidate_indices(
         self,
         *,
+        candidate_revisions: Sequence[str],
         posterior: Sequence[float],
         remaining_budget: int,
     ) -> list[int]:
         """Return distinct candidate indices to probe in the next PBA round."""
 
-        del remaining_budget
+        del candidate_revisions, remaining_budget
         return [self._posterior_median_index(posterior)]
 
     def _round_probe_indices(
@@ -1767,12 +1756,13 @@ class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
     def _probe_candidate_indices(
         self,
         *,
+        candidate_revisions: Sequence[str],
         posterior: Sequence[float],
         remaining_budget: int,
     ) -> list[int]:
         """Return distinct posterior-quantile boundary indices for one round."""
 
-        del remaining_budget
+        del candidate_revisions, remaining_budget
         return self._posterior_quantile_indices(
             posterior=posterior,
             section_count=self.multisection_section_count,
@@ -1872,6 +1862,125 @@ class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
         }
 
 
+class ProbabilisticBisectionCumulativeRiskMedianUniformPrior(
+    ProbabilisticBisectionPosteriorMedianUniformPrior
+):
+    """Probabilistic bisection with uniform prior and risk-guided probes."""
+
+    name = "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior"
+    pba_query_strategy = "cumulative_risk_median"
+
+    def __init__(
+        self,
+        *,
+        risk_scores: Mapping[str, float],
+        pba_confidence_threshold: float = 0.9,
+        pba_repeat_count: int = 1,
+        pba_max_test_runs: int = 100,
+    ) -> None:
+        """Configure PBA and per-revision risk scores for probe selection."""
+
+        super().__init__(
+            pba_confidence_threshold=pba_confidence_threshold,
+            pba_repeat_count=pba_repeat_count,
+            pba_max_test_runs=pba_max_test_runs,
+        )
+        self.risk_scores = _validate_risk_scores(risk_scores)
+
+    def _settings_to_json(self) -> dict[str, Any]:
+        """Return fixed and tunable cumulative-risk PBA settings."""
+
+        return {
+            **super()._settings_to_json(),
+            "pba_query_weighting": "posterior_probability_x_risk_score",
+        }
+
+    def _probe_candidate_indices(
+        self,
+        *,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+        remaining_budget: int,
+    ) -> list[int]:
+        """Return the probe that best splits posterior-weighted risk mass."""
+
+        del remaining_budget
+        if len(candidate_revisions) <= 1:
+            return []
+
+        return [
+            self._cumulative_risk_median_index(
+                candidate_revisions=candidate_revisions,
+                posterior=posterior,
+            )
+        ]
+
+    def _cumulative_risk_median_index(
+        self,
+        *,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> int:
+        """Choose the internal probe nearest half of posterior-weighted risk."""
+
+        posterior_median_idx = self._posterior_median_index(posterior)
+        max_probe_idx = len(candidate_revisions) - 2
+        fallback_idx = min(posterior_median_idx, max_probe_idx)
+        query_weights = [
+            probability * self._risk_score(revision)
+            for revision, probability in zip(
+                candidate_revisions,
+                posterior,
+                strict=True,
+            )
+        ]
+        total_weight = sum(query_weights)
+        if total_weight <= 0.0:
+            return fallback_idx
+
+        best_idx = fallback_idx
+        best_key: tuple[float, int, int] | None = None
+        left_weight = 0.0
+        for candidate_idx in range(max_probe_idx + 1):
+            left_weight += query_weights[candidate_idx]
+            right_weight = total_weight - left_weight
+            key = (
+                abs(left_weight - right_weight),
+                abs(candidate_idx - fallback_idx),
+                candidate_idx,
+            )
+            if best_key is None or key < best_key:
+                best_key = key
+                best_idx = candidate_idx
+
+        return best_idx
+
+    def _prior_to_json(
+        self,
+        candidate_revisions: Sequence[str],
+        posterior: Sequence[float],
+    ) -> dict[str, Any]:
+        """Return risk-query metadata for result inspection."""
+
+        risk_scores = [self._risk_score(revision) for revision in candidate_revisions]
+        query_weights = [
+            risk_score * probability
+            for risk_score, probability in zip(risk_scores, posterior, strict=True)
+        ]
+        return {
+            "pba_risk_score_sum": round(sum(risk_scores), 12),
+            "pba_query_weight_sum": round(sum(query_weights), 12),
+        }
+
+    def _risk_score(self, revision: str) -> float:
+        """Return the validated risk score for one candidate revision."""
+
+        try:
+            return self.risk_scores[revision]
+        except KeyError as exc:
+            raise ValueError(f"missing risk score for revision {revision!r}") from exc
+
+
 class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
     ProbabilisticBisectionPosteriorMedianUniformPrior
 ):
@@ -1898,28 +2007,7 @@ class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
         )
         if not 0.0 <= pba_risk_prior_uniform_weight <= 1.0:
             raise ValueError("pba_risk_prior_uniform_weight must be in [0, 1]")
-        if not risk_scores:
-            raise ValueError("risk_scores must not be empty")
-
-        validated_scores: dict[str, float] = {}
-        for revision, raw_risk_score in risk_scores.items():
-            try:
-                risk_score = float(raw_risk_score)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"risk score must be numeric for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                ) from exc
-            if not math.isfinite(risk_score):
-                raise ValueError(f"risk score must be finite for {revision!r}")
-            if not 0.0 <= risk_score <= 1.0:
-                raise ValueError(
-                    f"risk score must be between 0 and 1 for {revision!r}: "
-                    f"{raw_risk_score!r}"
-                )
-            validated_scores[revision] = risk_score
-
-        self.risk_scores = validated_scores
+        self.risk_scores = _validate_risk_scores(risk_scores)
         self.pba_risk_prior_uniform_weight = pba_risk_prior_uniform_weight
 
     def _settings_to_json(self) -> dict[str, Any]:
@@ -1991,6 +2079,9 @@ class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
 LOCALIZERS: dict[str, type[CulpritLocalizer]] = {
     Backfill.name: Backfill,
     BackfillWithRepeat.name: BackfillWithRepeat,
+    ProbabilisticBisectionCumulativeRiskMedianUniformPrior.name: (
+        ProbabilisticBisectionCumulativeRiskMedianUniformPrior
+    ),
     ProbabilisticBisectionPosteriorMedianRiskAwarePrior.name: (
         ProbabilisticBisectionPosteriorMedianRiskAwarePrior
     ),
