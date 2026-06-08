@@ -1757,12 +1757,47 @@ def compute_metrics(results: Sequence[Any]) -> dict[str, Any]:
         "mean_elapsed_hours": round(mean(elapsed_values), 2)
         if elapsed_values
         else None,
+        "p50_elapsed_hours": round(median(elapsed_values), 2)
+        if elapsed_values
+        else None,
+        "p90_elapsed_hours": round(percentile(elapsed_values, 90), 2)
+        if elapsed_values
+        else None,
         "max_elapsed_hours": round(max(elapsed_values), 2)
         if elapsed_values
         else None,
         "mean_test_runs": round(mean(test_runs), 1) if test_runs else None,
+        "p50_test_runs": round(float(median(test_runs)), 1)
+        if test_runs
+        else None,
+        "p90_test_runs": round(percentile(test_runs, 90), 1)
+        if test_runs
+        else None,
         "max_test_runs": max(test_runs) if test_runs else None,
     }
+
+
+def percentile(values: Sequence[float | int], percentile_value: float) -> float:
+    """Return the percentile using linear interpolation between sorted values."""
+
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    if not 0.0 <= percentile_value <= 100.0:
+        raise ValueError("percentile_value must be in [0, 100]")
+
+    sorted_values = sorted(float(value) for value in values)
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+
+    rank = (len(sorted_values) - 1) * percentile_value / 100.0
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    if lower_index == upper_index:
+        return sorted_values[lower_index]
+
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    return lower_value + (upper_value - lower_value) * (rank - lower_index)
 
 
 def print_undefined_localizations(
