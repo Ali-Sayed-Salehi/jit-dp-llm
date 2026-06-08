@@ -1851,7 +1851,7 @@ def plot_distribution_histogram(
     xlabel: str,
     color: str,
 ) -> None:
-    """Draw one histogram with per-value bins and summary guide lines."""
+    """Draw one histogram with stable bins and summary guide lines."""
 
     numeric_values = [float(value) for value in values if math.isfinite(float(value))]
     if not numeric_values:
@@ -1865,7 +1865,7 @@ def plot_distribution_histogram(
     value_median = median(numeric_values)
     ax.hist(
         numeric_values,
-        bins=histogram_bins(numeric_values),
+        bins=histogram_bin_count(numeric_values),
         color=color,
         edgecolor="white",
         alpha=0.85,
@@ -1894,31 +1894,12 @@ def plot_distribution_histogram(
     )
 
 
-def histogram_bins(values: Sequence[float]) -> list[float]:
-    """Return narrow bins that isolate each distinct observed value."""
+def histogram_bin_count(values: Sequence[float]) -> int:
+    """Return a small, stable histogram bin count for per-regression metrics."""
 
-    unique_values = sorted(set(values))
-    if len(unique_values) == 1:
-        value = unique_values[0]
-        padding = max(abs(value) * 0.01, 1e-6)
-        return [value - padding, value + padding]
-
-    half_widths: list[float] = []
-    for index, value in enumerate(unique_values):
-        neighbor_gaps = []
-        if index > 0:
-            neighbor_gaps.append(value - unique_values[index - 1])
-        if index + 1 < len(unique_values):
-            neighbor_gaps.append(unique_values[index + 1] - value)
-        half_widths.append(min(neighbor_gaps) / 4.0)
-
-    bin_edges = [
-        unique_values[0] - half_widths[0],
-        unique_values[0] + half_widths[0],
-    ]
-    for value, half_width in zip(unique_values[1:], half_widths[1:]):
-        bin_edges.extend([value - half_width, value + half_width])
-    return bin_edges
+    if len(values) <= 1 or min(values) == max(values):
+        return 1
+    return max(5, min(20, int(math.sqrt(len(values)))))
 
 
 def slugify_path_component(value: str) -> str:
