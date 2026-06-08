@@ -149,6 +149,8 @@ echo "Running script ..."
 #   ProbabilisticMultiSection_PosteriorQuantile_UniformPrior.
 # - --pba-risk-prior-uniform-weight-* would tune only
 #   ProbabilisticBisection_PosteriorMedian_RiskAwarePrior if provided.
+# - --draw-dist-plots/--dist-plots-dir write per-localizer distribution plots
+#   for test runs and elapsed time.
 # - --optuna-trials/--optuna-seed control tuning for every selected tunable
 #   localizer/oracle combo; --random-seed controls noisy oracle draws.
 
@@ -160,6 +162,8 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/per_regression_oracle_metrics.jsonl \
 --risk-scores /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_commit_risk_scores.jsonl \
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
+--draw-dist-plots \
+--dist-plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/dist_plots \
 --workers 1 \
 --oracles SummaryComparison \
 --localizers Backfill BackfillWithRepeat ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \

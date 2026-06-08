@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Any, Mapping, Sequence
 
 try:
@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BISECT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
 PROMPT_REGRESSION_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
+DEFAULT_DIST_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "dist_plots"
 DEFAULT_ORACLE_METRICS = (
     REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
 )
@@ -214,6 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, run requested simulations, and write summary/detail outputs."""
 
     args = parse_args(argv)
+    plt = load_matplotlib() if args.draw_dist_plots else None
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
     default_parameters = SimulationParameters(
         backfill_retrigger_count=args.backfill_retrigger_count,
@@ -351,6 +353,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             combo_parameters=combo_parameters,
             optimization_settings=optimization_settings,
             random_seed=args.random_seed,
+            distribution_plots_dir=(
+                args.dist_plots_dir if args.draw_dist_plots else None
+            ),
+            plt=plt,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
         details_output_path = (
@@ -422,6 +428,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Directory for per_bisect_results_*.json outputs. Defaults to "
             "analysis/perf_bisect/results under the repo root."
+        ),
+    )
+    parser.add_argument(
+        "--draw-dist-plots",
+        action="store_true",
+        help=(
+            "Draw per-localizer distribution plots for test runs and elapsed "
+            "time."
+        ),
+    )
+    parser.add_argument(
+        "--dist-plots-dir",
+        type=Path,
+        default=DEFAULT_DIST_PLOTS_DIR,
+        help=(
+            "Directory for distribution plots written when "
+            "--draw-dist-plots is set."
         ),
     )
     parser.add_argument(
@@ -808,11 +831,15 @@ def run_dataset(
     combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
     optimization_settings: Mapping[str, Any] | None = None,
     random_seed: int | None,
+    distribution_plots_dir: Path | None = None,
+    plt: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
 
     summary_runs = []
     detail_runs = []
+    if distribution_plots_dir is not None:
+        distribution_plots_dir.mkdir(parents=True, exist_ok=True)
 
     for localizer_name in localizer_names:
         for oracle_name in oracle_names:
@@ -866,6 +893,15 @@ def run_dataset(
                     )
                 )
             detail_runs.append(detail_run)
+            if distribution_plots_dir is not None and plt is not None:
+                write_distribution_plots(
+                    dataset_name=dataset_name,
+                    localizer_name=localizer_name,
+                    oracle_name=oracle_name,
+                    results=results,
+                    plots_dir=distribution_plots_dir,
+                    plt=plt,
+                )
 
     base_output = {
         "dataset": dataset_name,
@@ -1759,6 +1795,118 @@ def print_undefined_localizations(
             print(f"    regression_id={formatted_id}")
 
 
+def write_distribution_plots(
+    *,
+    dataset_name: str,
+    localizer_name: str,
+    oracle_name: str,
+    results: Sequence[Any],
+    plots_dir: Path,
+    plt: Any,
+) -> None:
+    """Write histogram plots for elapsed-time and test-run distributions."""
+
+    elapsed_values = [result.elapsed_hours for result in results]
+    test_run_values = [result.test_runs for result in results]
+    if not elapsed_values and not test_run_values:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    plot_distribution_histogram(
+        ax=axes[0],
+        values=test_run_values,
+        title="Test Runs",
+        xlabel="Test runs",
+        color="#1f77b4",
+    )
+    plot_distribution_histogram(
+        ax=axes[1],
+        values=elapsed_values,
+        title="Elapsed Time",
+        xlabel="Elapsed time (hours)",
+        color="#ff7f0e",
+    )
+    fig.suptitle(f"{localizer_name} / {oracle_name} / {dataset_name}")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+
+    output_path = plots_dir / (
+        f"{slugify_path_component(dataset_name)}__"
+        f"{slugify_path_component(localizer_name)}__"
+        f"{slugify_path_component(oracle_name)}_distributions.png"
+    )
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {output_path}")
+
+
+def plot_distribution_histogram(
+    *,
+    ax: Any,
+    values: Sequence[float | int],
+    title: str,
+    xlabel: str,
+    color: str,
+) -> None:
+    """Draw one histogram with stable bins and summary guide lines."""
+
+    numeric_values = [float(value) for value in values if math.isfinite(float(value))]
+    if not numeric_values:
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Frequency")
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        return
+
+    value_mean = mean(numeric_values)
+    value_median = median(numeric_values)
+    ax.hist(
+        numeric_values,
+        bins=histogram_bin_count(numeric_values),
+        color=color,
+        edgecolor="white",
+        alpha=0.85,
+    )
+    mean_line = ax.axvline(
+        value_mean,
+        color="#222222",
+        linestyle="--",
+        linewidth=1.5,
+    )
+    median_line = ax.axvline(
+        value_median,
+        color="#666666",
+        linestyle=":",
+        linewidth=1.5,
+    )
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Frequency")
+    ax.grid(True, axis="y", linestyle=":", linewidth=0.7)
+    ax.legend(
+        [mean_line, median_line],
+        [f"mean={value_mean:.2f}", f"median={value_median:.2f}"],
+        frameon=False,
+    )
+
+
+def histogram_bin_count(values: Sequence[float]) -> int:
+    """Return a small, stable histogram bin count for per-regression metrics."""
+
+    if len(values) <= 1 or min(values) == max(values):
+        return 1
+    return max(5, min(20, int(math.sqrt(len(values)))))
+
+
+def slugify_path_component(value: str) -> str:
+    """Convert an identifier into a filesystem-safe lowercase file component."""
+
+    cleaned = "".join(
+        character.lower() if character.isalnum() else "_"
+        for character in value.strip()
+    )
+    return cleaned.strip("_") or "value"
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     """Load newline-delimited JSON records from disk."""
 
@@ -1910,6 +2058,22 @@ def load_revision_perf(path: Path) -> RevisionPerfIndex:
             )
         )
     return RevisionPerfIndex(records)
+
+
+def load_matplotlib() -> Any:
+    """Import matplotlib lazily and configure a non-interactive backend."""
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "matplotlib is required for distribution plot generation. "
+            "Install matplotlib or rerun without --draw-dist-plots."
+        ) from exc
+    return plt
 
 
 if __name__ == "__main__":
