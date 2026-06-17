@@ -116,6 +116,13 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "multisection_retrigger_count",
     ),
 }
+RISK_SCORE_LOCALIZERS = {
+    "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
+    "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
+    "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
+    "RiskWeightedBisection",
+    "RiskWeightedMultisection",
+}
 BEST_COMBO_METRIC_SPECS = (
     {
         "field": "best_combo_by_success_rate",
@@ -225,6 +232,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, run requested simulations, and write summary/detail outputs."""
 
     args = parse_args(argv)
+    if args.ignored_risk_localizers:
+        ignored = ", ".join(args.ignored_risk_localizers)
+        kept = ", ".join(args.localizers)
+        print(f"--ignore-risk enabled; ignoring risk localizers: {ignored}")
+        print(f"Running non-risk localizers: {kept}")
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
     default_parameters = SimulationParameters(
         backfill_retrigger_count=args.backfill_retrigger_count,
@@ -454,6 +466,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=sorted(LOCALIZERS),
         default=sorted(LOCALIZERS),
         help="Culprit localization algorithms to run.",
+    )
+    parser.add_argument(
+        "--ignore-risk",
+        action="store_true",
+        help=(
+            "Drop all localizers that require per-commit risk scores before "
+            "tuning or simulation. This also prevents --risk-scores from being "
+            "loaded."
+        ),
     )
     parser.add_argument(
         "--backfill-retrigger-count",
@@ -780,6 +801,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.optuna_seed = args.random_seed
     elif args.optuna_trials > 0 and args.optuna_seed != args.random_seed:
         parser.error("--optuna-seed must match --random-seed when Optuna is enabled")
+    if args.ignore_risk:
+        localizers_without_risk = [
+            localizer
+            for localizer in args.localizers
+            if localizer not in RISK_SCORE_LOCALIZERS
+        ]
+        ignored_localizers = [
+            localizer
+            for localizer in args.localizers
+            if localizer in RISK_SCORE_LOCALIZERS
+        ]
+        if not localizers_without_risk:
+            parser.error(
+                "--ignore-risk removed every selected localizer; choose at "
+                "least one non-risk localizer."
+            )
+        args.localizers = localizers_without_risk
+        args.ignored_risk_localizers = ignored_localizers
+    else:
+        args.ignored_risk_localizers = []
     return args
 
 
@@ -1835,14 +1876,7 @@ def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
     """Return whether the requested localizers need per-commit risk scores."""
 
     return any(
-        localizer_name
-        in {
-            "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
-            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
-            "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
-            "RiskWeightedBisection",
-            "RiskWeightedMultisection",
-        }
+        localizer_name in RISK_SCORE_LOCALIZERS
         for localizer_name in localizer_names
     )
 

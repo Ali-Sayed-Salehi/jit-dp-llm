@@ -78,18 +78,6 @@ echo "running the data extraction script . . ."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset.py
 
-# Build expanded perf-bisect v2 data without risk-score split boundaries.
-# By default this exports all_commits.jsonl from the existing local Autoland
-# checkout but does not run `hg pull -u`; add --pull-commits if you want that.
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset_v2.py \
-# --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
-# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
-# --autoland-repo /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/repos/autoland2 \
-# --eval-fraction 0.30 \
-# --job-duration-samples 3 \
-# --exclude-framework-ids 2,6,18
-
-
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_commit_risk_scores.py
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_all_drevs.py \
@@ -131,6 +119,18 @@ echo "running the data extraction script . . ."
 # --select-commit-diffs-jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_code_review/select_commit_diffs.jsonl \
 # --debug-count 20 \
 # --debug
+
+
+# Build expanded perf-bisect v2 data without risk-score split boundaries.
+# By default this exports all_commits.jsonl from the existing local Autoland
+# checkout but does not run `hg pull -u`; add --pull-commits if you want that.
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset_v2.py \
+# --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
+# --autoland-repo /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/repos/autoland2 \
+# --eval-fraction 0.30 \
+# --job-duration-samples 3 \
+# --exclude-framework-ids 2,6,18
 
 
 echo "extraction finished"
