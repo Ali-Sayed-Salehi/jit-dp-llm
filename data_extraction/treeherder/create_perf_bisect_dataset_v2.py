@@ -197,6 +197,14 @@ def parse_args() -> argparse.Namespace:
         help="If > 0, fetch fresh measurement data for only the first N signatures.",
     )
     parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help=(
+            "Refetch or regenerate v2 output files even when they already "
+            "exist. By default, existing v2 artifacts are reused."
+        ),
+    )
+    parser.add_argument(
         "--skip-fetch-alerts",
         action="store_true",
         help="Do not fetch fresh Treeherder alert summaries; only use source-dir data.",
@@ -387,6 +395,18 @@ def load_csv_by_id(path: Path, id_field: str) -> dict[str, dict[str, str]]:
     return rows
 
 
+def load_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+
+    with path.open("r", newline="", encoding="utf-8") as f:
+        return [dict(row) for row in csv.DictReader(f)]
+
+
+def use_existing(path: Path, *, overwrite_existing: bool) -> bool:
+    return path.exists() and not overwrite_existing
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], preferred_fields: list[str]) -> None:
     ensure_dir(path.parent)
     fields = list(preferred_fields)
@@ -412,10 +432,18 @@ def csv_cell(value: Any) -> Any:
     return value
 
 
-def copy_static_artifacts(source_dir: Path, output_dir: Path) -> None:
+def copy_static_artifacts(
+    source_dir: Path,
+    output_dir: Path,
+    *,
+    overwrite_existing: bool,
+) -> None:
     for name in STATIC_COPY_FILES:
         src = source_dir / name
         dst = output_dir / name
+        if use_existing(dst, overwrite_existing=overwrite_existing):
+            print(f"Using existing {dst}.")
+            continue
         if src.exists():
             shutil.copy2(src, dst)
             print(f"Copied {src} -> {dst}")
@@ -568,8 +596,13 @@ def maybe_export_commits(
     skip_export: bool,
     pull_first: bool,
     source_dir: Path,
+    overwrite_existing: bool,
 ) -> None:
     output_path = output_dir / "all_commits.jsonl"
+    if use_existing(output_path, overwrite_existing=overwrite_existing):
+        print(f"Using existing {output_path}; skipping commit export.")
+        return
+
     if skip_export:
         source_path = source_dir / "all_commits.jsonl"
         if not source_path.exists():
@@ -663,7 +696,23 @@ def derive_failing_signature_csvs(
     *,
     included_statuses: set[int] | None,
     excluded_framework_ids: set[int],
+    overwrite_existing: bool,
 ) -> tuple[set[int], dict[int, dict[str, Any]], set[int]]:
+    all_output = output_dir / "alert_summary_fail_perf_sigs.csv"
+    filtered_output = output_dir / "alert_summary_fail_perf_sigs_no_fw_2_6_18.csv"
+    if (
+        use_existing(all_output, overwrite_existing=overwrite_existing)
+        and use_existing(filtered_output, overwrite_existing=overwrite_existing)
+    ):
+        signature_ids = load_signature_ids_from_fail_sigs_csv(all_output)
+        signature_alert_metadata = collect_signature_alert_metadata(alert_rows)
+        print(
+            f"Using existing failing-signature CSVs: {all_output}, "
+            f"{filtered_output}."
+        )
+        print(f"  unique_failing_signatures={len(signature_ids)}")
+        return signature_ids, signature_alert_metadata, set()
+
     all_rows: list[dict[str, Any]] = []
     filtered_rows: list[dict[str, Any]] = []
     signature_alert_metadata: dict[int, dict[str, Any]] = {}
@@ -734,8 +783,8 @@ def derive_failing_signature_csvs(
         "fail_perf_sig_ids",
         "num_fail_perf_sig_ids",
     ]
-    write_csv(output_dir / "alert_summary_fail_perf_sigs.csv", all_rows, fields)
-    write_csv(output_dir / "alert_summary_fail_perf_sigs_no_fw_2_6_18.csv", filtered_rows, fields)
+    write_csv(all_output, all_rows, fields)
+    write_csv(filtered_output, filtered_rows, fields)
     print("Derived failing signature CSVs.")
     print(f"  all_rows={len(all_rows)}")
     print(f"  framework_filtered_rows={len(filtered_rows)}")
@@ -743,6 +792,53 @@ def derive_failing_signature_csvs(
     for key, value in sorted(stats.items()):
         print(f"  {key}={value}")
     return all_signature_ids, signature_alert_metadata, framework_filtered_ids
+
+
+def load_signature_ids_from_fail_sigs_csv(path: Path) -> set[int]:
+    signature_ids: set[int] = set()
+    for row_num, row in enumerate(load_csv_rows(path), start=2):
+        raw_sig_ids = (row.get("fail_perf_sig_ids") or "").strip()
+        if not raw_sig_ids:
+            continue
+        try:
+            parsed = json.loads(raw_sig_ids)
+        except json.JSONDecodeError as exc:
+            print(f"[WARN] Invalid fail_perf_sig_ids at {path}:{row_num}: {exc}")
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for value in parsed:
+            signature_id = parse_optional_int(value)
+            if signature_id is not None:
+                signature_ids.add(signature_id)
+    return signature_ids
+
+
+def collect_signature_alert_metadata(
+    alert_rows: list[dict[str, str]],
+) -> dict[int, dict[str, Any]]:
+    metadata_by_signature: dict[int, dict[str, Any]] = {}
+    for row in alert_rows:
+        for alert in parse_alerts(row.get("alerts")):
+            if not alert.get("is_regression"):
+                continue
+            series_signature = alert.get("series_signature") or {}
+            if not isinstance(series_signature, dict):
+                continue
+            signature_id = parse_optional_int(series_signature.get("id"))
+            if signature_id is None:
+                continue
+            metadata = metadata_by_signature.setdefault(signature_id, {})
+            if metadata.get("platform") is None:
+                metadata["platform"] = (
+                    alert.get("platform")
+                    or series_signature.get("machine_platform")
+                )
+            if metadata.get("alert_threshold") is None:
+                metadata["alert_threshold"] = alert.get("alert_threshold")
+            if metadata.get("lower_is_better") is None:
+                metadata["lower_is_better"] = alert.get("lower_is_better")
+    return metadata_by_signature
 
 
 def parse_optional_int(value: Any) -> int | None:
@@ -779,9 +875,14 @@ def fetch_measurements_for_signatures(
     *,
     lookback_days: int,
     limit_signatures: int,
+    fetch_summary: bool,
+    fetch_replicates: bool,
 ) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
     if limit_signatures > 0:
         signature_ids = signature_ids[:limit_signatures]
+    if not fetch_summary and not fetch_replicates:
+        return {}, {}
+
     client = fetch_treeherder_client()
     interval_seconds = max(1, lookback_days) * 24 * 60 * 60
     summary: dict[int, dict[str, Any]] = {}
@@ -789,18 +890,20 @@ def fetch_measurements_for_signatures(
 
     for idx, signature_id in enumerate(signature_ids, start=1):
         print(f"[{idx}/{len(signature_ids)}] Fetching measurements for signature {signature_id}.")
-        summary[signature_id] = fetch_one_signature_measurements(
-            client,
-            signature_id,
-            interval_seconds=interval_seconds,
-            replicates=False,
-        )
-        replicates[signature_id] = fetch_one_signature_measurements(
-            client,
-            signature_id,
-            interval_seconds=interval_seconds,
-            replicates=True,
-        )
+        if fetch_summary:
+            summary[signature_id] = fetch_one_signature_measurements(
+                client,
+                signature_id,
+                interval_seconds=interval_seconds,
+                replicates=False,
+            )
+        if fetch_replicates:
+            replicates[signature_id] = fetch_one_signature_measurements(
+                client,
+                signature_id,
+                interval_seconds=interval_seconds,
+                replicates=True,
+            )
     return summary, replicates
 
 
@@ -1569,6 +1672,7 @@ def write_regression_splits(
     output_dir: Path,
     *,
     eval_fraction: float,
+    overwrite_existing: bool,
 ) -> None:
     if not 0.0 < eval_fraction < 1.0:
         raise ValueError(f"--eval-fraction must be in (0, 1), got {eval_fraction}")
@@ -1582,15 +1686,22 @@ def write_regression_splits(
 
     eval_path = output_dir / "perf_bisect_regressions_eval.jsonl"
     final_path = output_dir / "perf_bisect_regressions_final_test.jsonl"
-    write_regression_file(eval_path, eval_rows, starting_regression_id=1)
-    write_regression_file(
-        final_path,
-        final_rows,
-        starting_regression_id=len(eval_rows) + 1,
-    )
+    if use_existing(eval_path, overwrite_existing=overwrite_existing):
+        print(f"Using existing {eval_path}; skipping eval split write.")
+    else:
+        write_regression_file(eval_path, eval_rows, starting_regression_id=1)
+
+    if use_existing(final_path, overwrite_existing=overwrite_existing):
+        print(f"Using existing {final_path}; skipping final-test split write.")
+    else:
+        write_regression_file(
+            final_path,
+            final_rows,
+            starting_regression_id=len(eval_rows) + 1,
+        )
     print(
-        f"Wrote split regression files: eval={len(eval_rows)} rows, "
-        f"final_test={len(final_rows)} rows."
+        f"Regression split rows: eval={len(eval_rows)}, "
+        f"final_test={len(final_rows)}."
     )
 
 
@@ -1637,23 +1748,40 @@ def main() -> int:
 
     print(f"Source dataset: {source_dir}")
     print(f"Output dataset: {output_dir}")
-    copy_static_artifacts(source_dir, output_dir)
+    copy_static_artifacts(
+        source_dir,
+        output_dir,
+        overwrite_existing=args.overwrite_existing,
+    )
 
-    fresh_alert_rows: list[dict[str, Any]] = []
-    if not args.skip_fetch_alerts:
-        fresh_alert_rows = fetch_alert_summaries(
-            output_dir / "alert_summaries_fresh.csv",
-            lookback_days=args.fresh_alert_lookback_days,
-            max_pages=args.max_alert_pages,
-        )
+    merged_alerts_path = output_dir / "alert_summaries.csv"
+    fresh_alerts_path = output_dir / "alert_summaries_fresh.csv"
+    if use_existing(merged_alerts_path, overwrite_existing=args.overwrite_existing):
+        alert_rows = load_csv_rows(merged_alerts_path)
+        print(f"Using existing {merged_alerts_path}; skipping alert fetch/merge.")
+    else:
+        fresh_alert_rows: list[dict[str, Any]] = []
+        if args.skip_fetch_alerts:
+            print("Skipping fresh alert fetch by request.")
+        elif use_existing(fresh_alerts_path, overwrite_existing=args.overwrite_existing):
+            fresh_alert_rows = load_csv_rows(fresh_alerts_path)
+            print(f"Using existing {fresh_alerts_path}; skipping alert fetch.")
+        else:
+            fresh_alert_rows = fetch_alert_summaries(
+                fresh_alerts_path,
+                lookback_days=args.fresh_alert_lookback_days,
+                max_pages=args.max_alert_pages,
+            )
 
-    alert_rows = merge_alert_summaries(source_dir, output_dir, fresh_alert_rows)
+        alert_rows = merge_alert_summaries(source_dir, output_dir, fresh_alert_rows)
+
     needed_signature_ids, alert_signature_metadata, _framework_filtered_ids = (
         derive_failing_signature_csvs(
             alert_rows,
             output_dir,
             included_statuses=args.included_statuses,
             excluded_framework_ids=set(args.exclude_framework_ids),
+            overwrite_existing=args.overwrite_existing,
         )
     )
 
@@ -1663,51 +1791,92 @@ def main() -> int:
         skip_export=args.skip_fetch_commits,
         pull_first=args.pull_commits,
         source_dir=source_dir,
+        overwrite_existing=args.overwrite_existing,
     )
     commit_graph = load_commit_graph(output_dir / "all_commits.jsonl")
 
-    old_summary = load_per_signature_jsonl(source_dir / "per_sig_perf_data_summary.jsonl")
-    old_replicates = load_per_signature_jsonl(source_dir / "per_sig_perf_data_replicates.jsonl")
-    fresh_summary: dict[int, dict[str, Any]] = {}
-    fresh_replicates: dict[int, dict[str, Any]] = {}
-    if not args.skip_fetch_measurements:
-        fresh_summary, fresh_replicates = fetch_measurements_for_signatures(
-            sorted(needed_signature_ids),
-            lookback_days=args.fresh_lookback_days,
-            limit_signatures=args.limit_signatures,
+    summary_output = output_dir / "per_sig_perf_data_summary.jsonl"
+    replicates_output = output_dir / "per_sig_perf_data_replicates.jsonl"
+    summary_exists = use_existing(
+        summary_output,
+        overwrite_existing=args.overwrite_existing,
+    )
+    replicates_exists = use_existing(
+        replicates_output,
+        overwrite_existing=args.overwrite_existing,
+    )
+    if summary_exists and replicates_exists:
+        merged_summary = load_per_signature_jsonl(summary_output)
+        merged_replicates = load_per_signature_jsonl(replicates_output)
+        print(
+            f"Using existing per-signature measurement caches: {summary_output}, "
+            f"{replicates_output}."
+        )
+    else:
+        old_summary = load_per_signature_jsonl(source_dir / "per_sig_perf_data_summary.jsonl")
+        old_replicates = load_per_signature_jsonl(source_dir / "per_sig_perf_data_replicates.jsonl")
+        fresh_summary: dict[int, dict[str, Any]] = {}
+        fresh_replicates: dict[int, dict[str, Any]] = {}
+        if args.skip_fetch_measurements:
+            print("Skipping fresh measurement fetch by request.")
+        else:
+            fresh_summary, fresh_replicates = fetch_measurements_for_signatures(
+                sorted(needed_signature_ids),
+                lookback_days=args.fresh_lookback_days,
+                limit_signatures=args.limit_signatures,
+                fetch_summary=not summary_exists,
+                fetch_replicates=not replicates_exists,
+            )
+
+        if summary_exists:
+            merged_summary = load_per_signature_jsonl(summary_output)
+            print(f"Using existing {summary_output}; skipping summary cache write.")
+        else:
+            merged_summary = merge_signature_measurements(
+                old_summary,
+                fresh_summary,
+                summary_output,
+            )
+
+        if replicates_exists:
+            merged_replicates = load_per_signature_jsonl(replicates_output)
+            print(f"Using existing {replicates_output}; skipping replicate cache write.")
+        else:
+            merged_replicates = merge_signature_measurements(
+                old_replicates,
+                fresh_replicates,
+                replicates_output,
+            )
+
+    sig_info_output = output_dir / "per_sig_perf_data_info.jsonl"
+    if use_existing(sig_info_output, overwrite_existing=args.overwrite_existing):
+        signature_info = load_existing_signature_info(sig_info_output)
+        print(f"Using existing {sig_info_output}; skipping signature metadata/runtime fetch.")
+    else:
+        signature_info = build_signature_info(
+            output_dir=output_dir,
+            source_dir=source_dir,
+            needed_signature_ids=needed_signature_ids,
+            summary_records=merged_summary,
+            replicate_records=merged_replicates,
+            alert_metadata=alert_signature_metadata,
+            skip_fetch_metadata=args.skip_fetch_signature_metadata,
+            skip_fetch_job_durations=args.skip_fetch_job_durations,
+            job_duration_samples=args.job_duration_samples,
+            job_duration_lookback_days=args.fresh_lookback_days,
         )
 
-    merged_summary = merge_signature_measurements(
-        old_summary,
-        fresh_summary,
-        output_dir / "per_sig_perf_data_summary.jsonl",
-    )
-    merged_replicates = merge_signature_measurements(
-        old_replicates,
-        fresh_replicates,
-        output_dir / "per_sig_perf_data_replicates.jsonl",
-    )
-
-    signature_info = build_signature_info(
-        output_dir=output_dir,
-        source_dir=source_dir,
-        needed_signature_ids=needed_signature_ids,
-        summary_records=merged_summary,
-        replicate_records=merged_replicates,
-        alert_metadata=alert_signature_metadata,
-        skip_fetch_metadata=args.skip_fetch_signature_metadata,
-        skip_fetch_job_durations=args.skip_fetch_job_durations,
-        job_duration_samples=args.job_duration_samples,
-        job_duration_lookback_days=args.fresh_lookback_days,
-    )
-
-    write_per_revision_perf_data(
-        output_dir=output_dir,
-        commit_graph=commit_graph,
-        summary_records=merged_summary,
-        replicate_records=merged_replicates,
-        keep_desc=args.keep_desc_in_revision_data,
-    )
+    per_revision_output = output_dir / "per_revision_perf_data.jsonl"
+    if use_existing(per_revision_output, overwrite_existing=args.overwrite_existing):
+        print(f"Using existing {per_revision_output}; skipping per-revision data write.")
+    else:
+        write_per_revision_perf_data(
+            output_dir=output_dir,
+            commit_graph=commit_graph,
+            summary_records=merged_summary,
+            replicate_records=merged_replicates,
+            keep_desc=args.keep_desc_in_revision_data,
+        )
 
     regression_rows = build_regression_rows(
         alert_rows=alert_rows,
@@ -1721,6 +1890,7 @@ def main() -> int:
         regression_rows,
         output_dir,
         eval_fraction=args.eval_fraction,
+        overwrite_existing=args.overwrite_existing,
     )
     summarize_v2_directory(output_dir)
     return 0
