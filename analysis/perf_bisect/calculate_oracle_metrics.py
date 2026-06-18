@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Calculate real-oracle measurement accuracy for perf-bisect regressions.
+"""Calculate real-oracle summary measurement accuracy for perf-bisect regressions.
 
 The output contains one row per regression from the eval and final-test
 perf-bisect datasets:
 
   - regression_id
   - summary_oracle_accuracy
-  - replicate_oracle_accuracy
 
 By default, the script also writes a histogram of the oracle accuracy
 distribution beside the JSONL output.
@@ -29,16 +28,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
+DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2"
 DEFAULT_REVISION_DATA = DEFAULT_DATA_DIR / "per_revision_perf_data.jsonl"
 DEFAULT_COMMITS = DEFAULT_DATA_DIR / "all_commits.jsonl"
 DEFAULT_REGRESSION_INPUTS = (
     DEFAULT_DATA_DIR / "perf_bisect_regressions_eval.jsonl",
     DEFAULT_DATA_DIR / "perf_bisect_regressions_final_test.jsonl",
 )
-DEFAULT_OUTPUT = (
-    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
-)
+DEFAULT_OUTPUT = DEFAULT_DATA_DIR / "per_regression_oracle_metrics_v2.jsonl"
 DEFAULT_DISTRIBUTION_PLOT_DPI = 200
 DEFAULT_DISTRIBUTION_PLOT_FIGSIZE = (6.0, 3.6)
 DEFAULT_SMOOTHING_ALPHA = 0.5
@@ -73,10 +70,9 @@ class Regression:
 
 @dataclass
 class MeasurementValues:
-    """Summary and replicate values for one revision/signature pair."""
+    """Summary values for one revision/signature pair."""
 
     summary: list[float] = field(default_factory=list)
-    replicate: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -395,7 +391,7 @@ def load_measurements(
     needed_revisions: set[str],
     needed_signatures: set[int],
 ) -> dict[tuple[str, int], MeasurementValues]:
-    """Load summary and replicate values for needed revision/signature pairs."""
+    """Load summary values for needed revision/signature pairs."""
 
     measurements: dict[tuple[str, int], MeasurementValues] = {}
     if not needed_revisions or not needed_signatures:
@@ -408,6 +404,8 @@ def load_measurements(
 
         for measurement in raw.get("perf_measurement_data", []):
             if not isinstance(measurement, Mapping):
+                continue
+            if measurement.get("replicate") is not False:
                 continue
             try:
                 signature_id = int(measurement["signature_id"])
@@ -422,10 +420,7 @@ def load_measurements(
                 continue
 
             values = measurements.setdefault((str(node), signature_id), MeasurementValues())
-            if measurement.get("replicate") is True:
-                values.replicate.append(value)
-            elif measurement.get("replicate") is False:
-                values.summary.append(value)
+            values.summary.append(value)
 
     return measurements
 
@@ -437,12 +432,10 @@ def calculate_regression_metrics(
     measurements: Mapping[tuple[str, int], MeasurementValues],
     smoothing_alpha: float,
 ) -> dict[str, int | float | None]:
-    """Calculate summary and replicate oracle accuracies for one regression."""
+    """Calculate summary oracle accuracy for one regression."""
 
     summary_correct = 0
     summary_total = 0
-    replicate_correct = 0
-    replicate_total = 0
 
     if candidate_path is not None:
         for revision in candidate_path.candidate_revisions:
@@ -455,26 +448,14 @@ def calculate_regression_metrics(
                 baseline=regression.baseline,
                 expected_bad=expected_bad,
             )
-            correct_replicate, total_replicate = score_values(
-                values.replicate,
-                baseline=regression.baseline,
-                expected_bad=expected_bad,
-            )
             summary_correct += correct_summary
             summary_total += total_summary
-            replicate_correct += correct_replicate
-            replicate_total += total_replicate
 
     return {
         "regression_id": regression.regression_id,
         "summary_oracle_accuracy": accuracy(
             summary_correct,
             summary_total,
-            smoothing_alpha=smoothing_alpha,
-        ),
-        "replicate_oracle_accuracy": accuracy(
-            replicate_correct,
-            replicate_total,
             smoothing_alpha=smoothing_alpha,
         ),
     }
@@ -510,19 +491,14 @@ def exclude_low_accuracy_rows(
     *,
     minimum_accuracy: float,
 ) -> tuple[list[dict[str, int | float | None]], list[dict[str, int | float | None]]]:
-    """Drop rows where either available oracle accuracy is below the threshold."""
+    """Drop rows where summary oracle accuracy is below the threshold."""
 
     kept_rows: list[dict[str, int | float | None]] = []
     excluded_rows: list[dict[str, int | float | None]] = []
     for row in rows:
         summary_accuracy = row["summary_oracle_accuracy"]
-        replicate_accuracy = row["replicate_oracle_accuracy"]
         should_exclude = (
-            (summary_accuracy is not None and summary_accuracy < minimum_accuracy)
-            or (
-                replicate_accuracy is not None
-                and replicate_accuracy < minimum_accuracy
-            )
+            summary_accuracy is not None and summary_accuracy < minimum_accuracy
         )
         if should_exclude:
             excluded_rows.append(row)
@@ -530,7 +506,6 @@ def exclude_low_accuracy_rows(
                 "[WARN] Excluding oracle metric row for "
                 f"regression_id={row['regression_id']}: "
                 f"summary_oracle_accuracy={summary_accuracy}, "
-                f"replicate_oracle_accuracy={replicate_accuracy}, "
                 f"minimum_accuracy={minimum_accuracy}."
             )
         else:
@@ -657,10 +632,6 @@ def summarize_output_rows(rows: Sequence[Mapping[str, Any]]) -> Counter[str]:
             stats["summary_accuracy_null"] += 1
         else:
             stats["summary_accuracy_present"] += 1
-        if row["replicate_oracle_accuracy"] is None:
-            stats["replicate_accuracy_null"] += 1
-        else:
-            stats["replicate_accuracy_present"] += 1
     return stats
 
 

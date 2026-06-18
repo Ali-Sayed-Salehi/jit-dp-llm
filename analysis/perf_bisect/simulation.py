@@ -264,13 +264,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     regressions_by_dataset: dict[str, list[dict[str, Any]]] = {}
     regressions_path_by_dataset: dict[str, Path] = {}
+    dataset_stats_by_dataset: dict[str, dict[str, Any]] = {}
     for dataset_name in sorted(required_dataset_names):
         regressions_path = resolve_regression_path(
             args.regression_dir,
             DATASETS[dataset_name],
         )
         regressions_path_by_dataset[dataset_name] = regressions_path
-        regressions_by_dataset[dataset_name] = load_jsonl(regressions_path)
+        loaded_regressions = load_jsonl(regressions_path)
+        filtered_regressions, removed_regression_ids = (
+            filter_regressions_by_oracle_metrics(
+                loaded_regressions,
+                oracle_metrics=oracle_metrics,
+                dataset_name=dataset_name,
+            )
+        )
+        regressions_by_dataset[dataset_name] = filtered_regressions
+        dataset_stats = summarize_regression_dataset(
+            filtered_regressions=filtered_regressions,
+            revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
+        )
+        dataset_stats_by_dataset[dataset_name] = dataset_stats
+        if removed_regression_ids:
+            print(
+                f"filtered {dataset_name}: "
+                f"removed_missing_oracle_metrics={len(removed_regression_ids)}"
+            )
+        print_dataset_stats(dataset_name, dataset_stats)
 
     combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
     optimization_settings = None
@@ -363,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             revision_data_path=args.revision_data,
             oracle_metrics_path=args.oracle_metrics,
             risk_scores_path=risk_scores_path,
+            dataset_stats=dataset_stats_by_dataset[dataset_name],
             signature_info=signature_info,
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
@@ -840,6 +862,233 @@ def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
     )
 
 
+def filter_regressions_by_oracle_metrics(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    oracle_metrics: Mapping[int, OracleMetrics],
+    dataset_name: str,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Keep only regression rows with a loaded oracle metric."""
+
+    filtered_regressions: list[dict[str, Any]] = []
+    removed_regression_ids: list[int] = []
+    for regression_index, regression in enumerate(regressions):
+        regression_id = require_regression_id(
+            regression,
+            context=f"{dataset_name} split row index {regression_index}",
+        )
+        if regression_id not in oracle_metrics:
+            removed_regression_ids.append(regression_id)
+            continue
+        filtered_regressions.append(dict(regression))
+    return filtered_regressions, removed_regression_ids
+
+
+def summarize_regression_dataset(
+    *,
+    filtered_regressions: Sequence[Mapping[str, Any]],
+    revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
+) -> dict[str, Any]:
+    """Return descriptive stats for a filtered regression split."""
+
+    candidate_counts, missing_candidate_count_rows = collect_candidate_counts(
+        filtered_regressions
+    )
+    oracle_accuracy_values = collect_oracle_accuracy_values(
+        filtered_regressions,
+        oracle_metrics=oracle_metrics,
+    )
+    return {
+        "total_rows": len(filtered_regressions),
+        "candidate_commits": {
+            "source": "num_candidate_revisions",
+            **numeric_distribution(candidate_counts),
+            "missing_or_invalid_rows": missing_candidate_count_rows,
+        },
+        "timeframe_boundaries": dataset_timeframe_boundaries(
+            filtered_regressions,
+            revision_perf=revision_perf,
+            revision_field="bad_revision",
+        ),
+        "oracle_accuracy": {
+            "field": "summary_oracle_accuracy",
+            **numeric_distribution(oracle_accuracy_values),
+        },
+    }
+
+
+def collect_candidate_counts(
+    regressions: Sequence[Mapping[str, Any]],
+) -> tuple[list[int], int]:
+    """Return candidate-count values and the number of rows without one."""
+
+    candidate_counts = []
+    missing_rows = 0
+    for regression in regressions:
+        raw_count = regression.get("num_candidate_revisions")
+        try:
+            candidate_count = int(raw_count)
+        except (TypeError, ValueError):
+            missing_rows += 1
+            continue
+        candidate_counts.append(candidate_count)
+    return candidate_counts, missing_rows
+
+
+def collect_oracle_accuracy_values(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    oracle_metrics: Mapping[int, OracleMetrics],
+) -> list[float]:
+    """Return summary-oracle accuracies for the filtered regression rows."""
+
+    values = []
+    for regression_index, regression in enumerate(regressions):
+        regression_id = require_regression_id(
+            regression,
+            context=f"filtered split row index {regression_index}",
+        )
+        metrics = oracle_metrics[regression_id]
+        values.append(metrics.summary_oracle_accuracy)
+    return values
+
+
+def numeric_distribution(values: Sequence[float | int]) -> dict[str, Any]:
+    """Return count, total, min, median, and max for numeric values."""
+
+    if not values:
+        return {
+            "count": 0,
+            "total": 0,
+            "min": None,
+            "median": None,
+            "max": None,
+        }
+    return {
+        "count": len(values),
+        "total": sum(values),
+        "min": min(values),
+        "median": median(values),
+        "max": max(values),
+    }
+
+
+def dataset_timeframe_boundaries(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    revision_perf: RevisionPerfIndex,
+    revision_field: str,
+) -> dict[str, Any]:
+    """Return revision dates for the first and last rows in a split."""
+
+    if not regressions:
+        return {
+            "source": f"{revision_field} date for first and last split rows",
+            "start": None,
+            "end": None,
+        }
+
+    return {
+        "source": f"{revision_field} date for first and last split rows",
+        "start": regression_revision_boundary(
+            regressions[0],
+            revision_perf=revision_perf,
+            revision_field=revision_field,
+            context="first split row",
+        ),
+        "end": regression_revision_boundary(
+            regressions[-1],
+            revision_perf=revision_perf,
+            revision_field=revision_field,
+            context="last split row",
+        ),
+    }
+
+
+def regression_revision_boundary(
+    regression: Mapping[str, Any],
+    *,
+    revision_perf: RevisionPerfIndex,
+    revision_field: str,
+    context: str,
+) -> dict[str, Any]:
+    """Return one boundary row's regression id, revision, and date."""
+
+    regression_id = require_regression_id(regression, context=context)
+    revision = regression.get(revision_field)
+    record = revision_perf.records.get(revision) if isinstance(revision, str) else None
+    timestamp = revision_timestamp(record.date if record is not None else None)
+    return {
+        "regression_id": regression_id,
+        "revision_field": revision_field,
+        "revision": revision if isinstance(revision, str) else None,
+        "date": format_timestamp(timestamp) if timestamp is not None else None,
+    }
+
+
+def revision_timestamp(raw_date: Any) -> float | None:
+    """Parse the Mercurial revision timestamp from a revision record date."""
+
+    if isinstance(raw_date, (list, tuple)):
+        if not raw_date:
+            return None
+        raw_date = raw_date[0]
+    try:
+        timestamp = float(raw_date)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(timestamp):
+        return None
+    return timestamp
+
+
+def format_timestamp(timestamp: float) -> str:
+    """Return a stable UTC ISO-8601 timestamp string."""
+
+    return datetime.fromtimestamp(timestamp, UTC).isoformat()
+
+
+def print_dataset_stats(dataset_name: str, stats: Mapping[str, Any]) -> None:
+    """Print filtered split stats for the Slurm log."""
+
+    candidate_stats = stats["candidate_commits"]
+    timeframe_stats = stats["timeframe_boundaries"]
+    oracle_stats = stats["oracle_accuracy"]
+    print(
+        f"dataset_stats[{dataset_name}]: "
+        f"total_rows={stats['total_rows']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].candidate_commits: "
+        f"total={candidate_stats['total']}, "
+        f"median={candidate_stats['median']}, "
+        f"min={candidate_stats['min']}, "
+        f"max={candidate_stats['max']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].timeframe_boundaries: "
+        f"start={boundary_date(timeframe_stats['start'])}, "
+        f"end={boundary_date(timeframe_stats['end'])}, "
+        f"source={timeframe_stats['source']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].oracle_accuracy: "
+        f"median={oracle_stats['median']}, "
+        f"min={oracle_stats['min']}, "
+        f"max={oracle_stats['max']}"
+    )
+
+
+def boundary_date(boundary: Any) -> str | None:
+    """Return one boundary date from a printed stats object."""
+
+    if not isinstance(boundary, Mapping):
+        return None
+    date = boundary.get("date")
+    return str(date) if date is not None else None
+
+
 def run_dataset(
     *,
     dataset_name: str,
@@ -849,6 +1098,7 @@ def run_dataset(
     revision_data_path: Path,
     oracle_metrics_path: Path,
     risk_scores_path: Path | None,
+    dataset_stats: Mapping[str, Any],
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
@@ -928,6 +1178,7 @@ def run_dataset(
             "revision_data": str(revision_data_path),
             "oracle_metrics": str(oracle_metrics_path),
         },
+        "dataset_stats": dict(dataset_stats),
         "settings": {
             "workers": workers,
             "job_duration_source": "per-signature job_duration minutes",
