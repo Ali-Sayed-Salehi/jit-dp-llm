@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,6 +46,7 @@ from requests.exceptions import RequestException, Timeout
 
 
 csv.field_size_limit(sys.maxsize)
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
@@ -265,7 +267,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep commit descriptions in per_revision_perf_data.jsonl.",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Python logging level.",
+    )
     return parser.parse_args()
+
+
+def configure_logging(log_level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        stream=sys.stdout,
+    )
+
+
+def log_counter(title: str, stats: Counter[str]) -> None:
+    if not stats:
+        logger.info("%s: no counters recorded.", title)
+        return
+    logger.info("%s:", title)
+    for key, value in sorted(stats.items()):
+        logger.info("  %s=%s", key, value)
 
 
 def parse_int_csv(value: str | Iterable[int]) -> list[int]:
@@ -316,7 +342,7 @@ def iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
-                print(f"[WARN] Skipping invalid JSON at {path}:{line_num}: {exc}")
+                logger.warning("Skipping invalid JSON at %s:%d: %s", path, line_num, exc)
                 continue
             if isinstance(value, dict):
                 yield value
@@ -442,11 +468,13 @@ def copy_static_artifacts(
         src = source_dir / name
         dst = output_dir / name
         if use_existing(dst, overwrite_existing=overwrite_existing):
-            print(f"Using existing {dst}.")
+            logger.info("Using existing static artifact: %s", dst)
             continue
         if src.exists():
             shutil.copy2(src, dst)
-            print(f"Copied {src} -> {dst}")
+            logger.info("Copied static artifact: %s -> %s", src, dst)
+        else:
+            logger.warning("Static artifact missing in source dataset: %s", src)
 
 
 def fetch_treeherder_client() -> Any:
@@ -476,6 +504,12 @@ def fetch_alert_summaries(
     lookback_days: int,
     max_pages: int,
 ) -> list[dict[str, Any]]:
+    logger.info(
+        "Fetching Treeherder alert summaries: lookback_days=%d, max_pages=%d, output=%s",
+        lookback_days,
+        max_pages,
+        output_path,
+    )
     client = fetch_treeherder_client()
     params: dict[str, Any] = {
         "page": 1,
@@ -492,25 +526,45 @@ def fetch_alert_summaries(
     while True:
         pages += 1
         if max_pages > 0 and pages > max_pages:
+            logger.info("Reached alert-summary page limit (%d); stopping fetch.", max_pages)
             break
         payload = client._get_json("performance/alertsummary", **params)
         page_rows = payload.get("results", []) if isinstance(payload, dict) else []
         page_rows = [row for row in page_rows if isinstance(row, dict)]
         if not page_rows:
+            logger.info("Alert-summary page %s returned no rows; stopping fetch.", params["page"])
             break
         rows.extend(page_rows)
-        print(f"Fetched alert-summary page {params['page']} ({len(page_rows)} rows).")
+        logger.info(
+            "Fetched alert-summary page %s: page_rows=%d, total_rows=%d",
+            params["page"],
+            len(page_rows),
+            len(rows),
+        )
 
         if threshold is not None:
             last_push_timestamp = page_rows[-1].get("push_timestamp")
             try:
                 if float(last_push_timestamp) < threshold:
+                    logger.info(
+                        "Alert-summary lookback reached on page %s: oldest_push_timestamp=%s, "
+                        "threshold=%s; stopping fetch.",
+                        params["page"],
+                        last_push_timestamp,
+                        threshold,
+                    )
                     break
             except Exception:
+                logger.debug(
+                    "Could not parse last alert-summary push_timestamp=%r on page %s.",
+                    last_push_timestamp,
+                    params["page"],
+                )
                 pass
 
         next_page = next_page_from_url(payload.get("next"))
         if next_page is None:
+            logger.info("Treeherder returned no next alert-summary page; stopping fetch.")
             break
         params["page"] = next_page
 
@@ -531,7 +585,12 @@ def fetch_alert_summaries(
         "bug_number",
     ]
     write_csv(output_path, rows, preferred_fields)
-    print(f"Fetched {len(rows)} fresh alert summaries into {output_path}.")
+    logger.info(
+        "Finished alert-summary fetch: pages=%d, rows=%d, output=%s",
+        min(pages, max_pages) if max_pages > 0 else pages,
+        len(rows),
+        output_path,
+    )
     return rows
 
 
@@ -564,9 +623,12 @@ def merge_alert_summaries(source_dir: Path, output_dir: Path, fresh_rows: list[d
         "push_timestamp",
     ]
     write_csv(output_dir / "alert_summaries.csv", rows, preferred_fields)
-    print(
-        f"Merged alert summaries: old={len(source_rows)}, fresh={len(fresh_rows)}, "
-        f"merged={len(rows)}."
+    logger.info(
+        "Merged alert summaries: source_rows=%d, fresh_rows=%d, merged_rows=%d, output=%s",
+        len(source_rows),
+        len(fresh_rows),
+        len(rows),
+        output_dir / "alert_summaries.csv",
     )
     return [stringify_csv_row(row) for row in rows]
 
@@ -600,7 +662,7 @@ def maybe_export_commits(
 ) -> None:
     output_path = output_dir / "all_commits.jsonl"
     if use_existing(output_path, overwrite_existing=overwrite_existing):
-        print(f"Using existing {output_path}; skipping commit export.")
+        logger.info("Using existing commit export: %s; skipping commit export.", output_path)
         return
 
     if skip_export:
@@ -608,7 +670,7 @@ def maybe_export_commits(
         if not source_path.exists():
             raise FileNotFoundError(f"Cannot skip commit export; missing {source_path}")
         shutil.copy2(source_path, output_path)
-        print(f"Copied {source_path} -> {output_path}")
+        logger.info("Copied commit export from source dataset: %s -> %s", source_path, output_path)
         return
 
     ensure_dir(autoland_repo.parent)
@@ -619,8 +681,10 @@ def maybe_export_commits(
             "pass --skip-fetch-commits to copy source-dir all_commits.jsonl."
         )
     if pull_first:
+        logger.info("Pulling Autoland checkout before commit export: %s", autoland_repo)
         run(["hg", "pull", "-u"], cwd=autoland_repo)
 
+    logger.info("Exporting Autoland commits from local checkout: %s", autoland_repo)
     result = subprocess.run(
         ["hg", "log", "-Tjson", "-r", "all()"],
         cwd=autoland_repo,
@@ -643,11 +707,12 @@ def maybe_export_commits(
                 )
             )
             f.write("\n")
-    print(f"Exported {len(changesets)} Autoland commits to {output_path}.")
+    logger.info("Exported Autoland commits: count=%d, output=%s", len(changesets), output_path)
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
     try:
+        logger.info("Running command: %s%s", " ".join(cmd), f" (cwd={cwd})" if cwd else "")
         subprocess.run(cmd, cwd=cwd, check=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError("Missing required executable: hg") from exc
@@ -686,7 +751,7 @@ def load_commit_graph(path: Path) -> CommitGraph:
         parents_by_node[node] = parents
         records.append(record)
 
-    print(f"Loaded {len(records)} commits from {path}.")
+    logger.info("Loaded commit graph: commits=%d, source=%s", len(records), path)
     return CommitGraph(records=records, node_to_index=node_to_index, parents_by_node=parents_by_node)
 
 
@@ -700,17 +765,26 @@ def derive_failing_signature_csvs(
 ) -> tuple[set[int], dict[int, dict[str, Any]], set[int]]:
     all_output = output_dir / "alert_summary_fail_perf_sigs.csv"
     filtered_output = output_dir / "alert_summary_fail_perf_sigs_no_fw_2_6_18.csv"
+    logger.info(
+        "Deriving failing-signature CSVs: alert_rows=%d, included_statuses=%s, "
+        "excluded_framework_ids=%s",
+        len(alert_rows),
+        sorted(included_statuses) if included_statuses is not None else "any",
+        sorted(excluded_framework_ids),
+    )
     if (
         use_existing(all_output, overwrite_existing=overwrite_existing)
         and use_existing(filtered_output, overwrite_existing=overwrite_existing)
     ):
         signature_ids = load_signature_ids_from_fail_sigs_csv(all_output)
         signature_alert_metadata = collect_signature_alert_metadata(alert_rows)
-        print(
-            f"Using existing failing-signature CSVs: {all_output}, "
-            f"{filtered_output}."
+        logger.info(
+            "Using existing failing-signature CSVs: all=%s, filtered=%s, "
+            "unique_failing_signatures=%d",
+            all_output,
+            filtered_output,
+            len(signature_ids),
         )
-        print(f"  unique_failing_signatures={len(signature_ids)}")
         return signature_ids, signature_alert_metadata, set()
 
     all_rows: list[dict[str, Any]] = []
@@ -785,12 +859,16 @@ def derive_failing_signature_csvs(
     ]
     write_csv(all_output, all_rows, fields)
     write_csv(filtered_output, filtered_rows, fields)
-    print("Derived failing signature CSVs.")
-    print(f"  all_rows={len(all_rows)}")
-    print(f"  framework_filtered_rows={len(filtered_rows)}")
-    print(f"  unique_failing_signatures={len(all_signature_ids)}")
-    for key, value in sorted(stats.items()):
-        print(f"  {key}={value}")
+    logger.info(
+        "Derived failing-signature CSVs: all_rows=%d, framework_filtered_rows=%d, "
+        "unique_failing_signatures=%d, all_output=%s, filtered_output=%s",
+        len(all_rows),
+        len(filtered_rows),
+        len(all_signature_ids),
+        all_output,
+        filtered_output,
+    )
+    log_counter("Failing-signature derivation counters", stats)
     return all_signature_ids, signature_alert_metadata, framework_filtered_ids
 
 
@@ -803,7 +881,7 @@ def load_signature_ids_from_fail_sigs_csv(path: Path) -> set[int]:
         try:
             parsed = json.loads(raw_sig_ids)
         except json.JSONDecodeError as exc:
-            print(f"[WARN] Invalid fail_perf_sig_ids at {path}:{row_num}: {exc}")
+            logger.warning("Invalid fail_perf_sig_ids at %s:%d: %s", path, row_num, exc)
             continue
         if not isinstance(parsed, list):
             continue
@@ -879,17 +957,36 @@ def fetch_measurements_for_signatures(
     fetch_replicates: bool,
 ) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
     if limit_signatures > 0:
+        logger.info(
+            "Limiting fresh measurement fetch: requested_signatures=%d, limit_signatures=%d",
+            len(signature_ids),
+            limit_signatures,
+        )
         signature_ids = signature_ids[:limit_signatures]
     if not fetch_summary and not fetch_replicates:
+        logger.info("Fresh measurement fetch not needed; both output caches already exist.")
         return {}, {}
 
+    logger.info(
+        "Fetching fresh Treeherder measurements: signatures=%d, lookback_days=%d, "
+        "fetch_summary=%s, fetch_replicates=%s",
+        len(signature_ids),
+        lookback_days,
+        fetch_summary,
+        fetch_replicates,
+    )
     client = fetch_treeherder_client()
     interval_seconds = max(1, lookback_days) * 24 * 60 * 60
     summary: dict[int, dict[str, Any]] = {}
     replicates: dict[int, dict[str, Any]] = {}
 
     for idx, signature_id in enumerate(signature_ids, start=1):
-        print(f"[{idx}/{len(signature_ids)}] Fetching measurements for signature {signature_id}.")
+        logger.info(
+            "Fetching measurements for signature %d (%d/%d).",
+            signature_id,
+            idx,
+            len(signature_ids),
+        )
         if fetch_summary:
             summary[signature_id] = fetch_one_signature_measurements(
                 client,
@@ -904,7 +1001,22 @@ def fetch_measurements_for_signatures(
                 interval_seconds=interval_seconds,
                 replicates=True,
             )
+    logger.info(
+        "Finished fresh measurement fetch: summary_signatures=%d, summary_measurements=%d, "
+        "replicate_signatures=%d, replicate_measurements=%d",
+        len(summary),
+        count_measurements(summary),
+        len(replicates),
+        count_measurements(replicates),
+    )
     return summary, replicates
+
+
+def count_measurements(records: Mapping[int, Mapping[str, Any]]) -> int:
+    return sum(
+        len(record.get("perf_measurement_data", []))
+        for record in records.values()
+    )
 
 
 def fetch_one_signature_measurements(
@@ -924,15 +1036,19 @@ def fetch_one_signature_measurements(
     try:
         payload = client._get_json("performance/summary", **params)
     except (Timeout, RequestException) as exc:
-        print(
-            f"[WARN] Request failed for signature {signature_id} "
-            f"(replicates={replicates}): {exc}"
+        logger.warning(
+            "Request failed for signature %d (replicates=%s): %s",
+            signature_id,
+            replicates,
+            exc,
         )
         payload = []
     except Exception as exc:
-        print(
-            f"[WARN] Unexpected failure for signature {signature_id} "
-            f"(replicates={replicates}): {exc}"
+        logger.warning(
+            "Unexpected failure for signature %d (replicates=%s): %s",
+            signature_id,
+            replicates,
+            exc,
         )
         payload = []
 
@@ -960,6 +1076,14 @@ def merge_signature_measurements(
 ) -> dict[int, dict[str, Any]]:
     all_signature_ids = sorted(set(old_records) | set(fresh_records))
     merged: dict[int, dict[str, Any]] = {}
+    logger.info(
+        "Merging per-signature measurements: old_signatures=%d, fresh_signatures=%d, "
+        "merged_signatures=%d, output=%s",
+        len(old_records),
+        len(fresh_records),
+        len(all_signature_ids),
+        output_path,
+    )
 
     for signature_id in all_signature_ids:
         measurements: list[dict[str, Any]] = []
@@ -988,7 +1112,12 @@ def merge_signature_measurements(
         }
 
     write_jsonl(output_path, (merged[sig] for sig in all_signature_ids))
-    print(f"Wrote merged per-signature measurements to {output_path}.")
+    logger.info(
+        "Wrote merged per-signature measurements: signatures=%d, measurements=%d, output=%s",
+        len(merged),
+        count_measurements(merged),
+        output_path,
+    )
     return merged
 
 
@@ -1075,18 +1204,32 @@ def fetch_signature_metadata(
     *,
     skip_fetch: bool,
 ) -> dict[int, dict[str, Any]]:
-    if skip_fetch or not signature_ids:
+    if skip_fetch:
+        logger.info(
+            "Skipping missing signature metadata fetch by request: signatures=%d",
+            len(signature_ids),
+        )
         return {}
+    if not signature_ids:
+        logger.info("No missing signature metadata to fetch.")
+        return {}
+    logger.info("Fetching missing signature metadata: signatures=%d", len(signature_ids))
     client = fetch_treeherder_client()
     metadata: dict[int, dict[str, Any]] = {}
     interval_seconds = 30 * 24 * 60 * 60
     for idx, signature_id in enumerate(signature_ids, start=1):
-        print(f"[{idx}/{len(signature_ids)}] Fetching metadata for signature {signature_id}.")
+        logger.info(
+            "Fetching metadata for signature %d (%d/%d).",
+            signature_id,
+            idx,
+            len(signature_ids),
+        )
         metadata[signature_id] = fetch_one_signature_metadata(
             client,
             signature_id,
             interval_seconds=interval_seconds,
         )
+    logger.info("Finished missing signature metadata fetch: signatures=%d", len(metadata))
     return metadata
 
 
@@ -1111,7 +1254,7 @@ def fetch_one_signature_metadata(
     try:
         payload = client._get_json("performance/summary", **params)
     except (Timeout, RequestException, Exception) as exc:
-        print(f"[WARN] Failed to fetch metadata for signature {signature_id}: {exc}")
+        logger.warning("Failed to fetch metadata for signature %d: %s", signature_id, exc)
         return dict(empty)
     if not payload or not isinstance(payload, list) or not isinstance(payload[0], dict):
         return dict(empty)
@@ -1168,10 +1311,10 @@ def fetch_recent_job_ids_for_signature(
     try:
         payload = client._get_json("performance/summary", **params)
     except (Timeout, RequestException) as exc:
-        print(f"[WARN] Failed to fetch jobs for signature {signature_id}: {exc}")
+        logger.warning("Failed to fetch jobs for signature %d: %s", signature_id, exc)
         return []
     except Exception as exc:
-        print(f"[WARN] Unexpected job fetch failure for signature {signature_id}: {exc}")
+        logger.warning("Unexpected job fetch failure for signature %d: %s", signature_id, exc)
         return []
 
     if not payload or not isinstance(payload, list) or not isinstance(payload[0], dict):
@@ -1200,7 +1343,7 @@ def fetch_job_duration_minutes(client: Any, job_id: int) -> float | None:
     try:
         jobs = client.get_jobs(REPOSITORY, id=job_id)
     except Exception as exc:
-        print(f"[WARN] Failed to fetch job details for job_id={job_id}: {exc}")
+        logger.warning("Failed to fetch job details for job_id=%d: %s", job_id, exc)
         return None
 
     if not jobs or not isinstance(jobs, list) or not isinstance(jobs[0], dict):
@@ -1228,18 +1371,33 @@ def fetch_missing_job_durations(
     sample_count: int,
     skip_fetch: bool,
 ) -> dict[int, float]:
-    if skip_fetch or not signature_ids:
+    if skip_fetch:
+        logger.info(
+            "Skipping missing job duration fetch by request: signatures=%d",
+            len(signature_ids),
+        )
+        return {}
+    if not signature_ids:
+        logger.info("No missing job durations to fetch.")
         return {}
 
+    logger.info(
+        "Fetching missing job durations: signatures=%d, lookback_days=%d, samples_per_signature=%d",
+        len(signature_ids),
+        lookback_days,
+        sample_count,
+    )
     client = fetch_treeherder_client()
     interval_seconds = max(1, lookback_days) * 24 * 60 * 60
     sample_count = max(1, sample_count)
     durations: dict[int, float] = {}
 
     for idx, signature_id in enumerate(signature_ids, start=1):
-        print(
-            f"[{idx}/{len(signature_ids)}] Fetching job runtime for "
-            f"signature {signature_id}."
+        logger.info(
+            "Fetching job runtime for signature %d (%d/%d).",
+            signature_id,
+            idx,
+            len(signature_ids),
         )
         job_ids = load_candidate_job_ids(
             signature_id,
@@ -1263,11 +1421,16 @@ def fetch_missing_job_durations(
         if sampled_durations:
             durations[signature_id] = statistics.mean(sampled_durations)
         else:
-            print(
-                f"[WARN] Could not compute job runtime for signature {signature_id}; "
-                "will use fallback duration."
+            logger.warning(
+                "Could not compute job runtime for signature %d; will use fallback duration.",
+                signature_id,
             )
 
+    logger.info(
+        "Finished missing job duration fetch: fetched_durations=%d, requested_signatures=%d",
+        len(durations),
+        len(signature_ids),
+    )
     return durations
 
 
@@ -1284,6 +1447,13 @@ def build_signature_info(
     job_duration_samples: int,
     job_duration_lookback_days: int,
 ) -> dict[int, dict[str, Any]]:
+    logger.info(
+        "Building per-signature info: needed_signatures=%d, summary_records=%d, "
+        "replicate_records=%d",
+        len(needed_signature_ids),
+        len(summary_records),
+        len(replicate_records),
+    )
     existing = load_existing_signature_info(source_dir / "per_sig_perf_data_info.jsonl")
     signature_to_group = load_signature_to_group_id(output_dir / "sig_groups.jsonl")
     group_durations = load_group_durations(output_dir / "sig_group_job_durations.csv")
@@ -1299,10 +1469,19 @@ def build_signature_info(
         if duration_values
         else DEFAULT_JOB_DURATION_MINUTES
     )
+    logger.info(
+        "Loaded signature info inputs: existing_info=%d, signature_group_mappings=%d, "
+        "group_durations=%d, default_job_duration=%.3f",
+        len(existing),
+        len(signature_to_group),
+        len(group_durations),
+        default_duration,
+    )
 
     metadata_missing_ids = sorted(
         sig for sig in needed_signature_ids if sig not in existing
     )
+    logger.info("Signature metadata missing count: %d", len(metadata_missing_ids))
     fetched_metadata = fetch_signature_metadata(
         metadata_missing_ids,
         skip_fetch=skip_fetch_metadata,
@@ -1319,6 +1498,7 @@ def build_signature_info(
             and group_id in group_durations
         )
     )
+    logger.info("Signature job duration missing count: %d", len(duration_missing_ids))
     fetched_job_durations = fetch_missing_job_durations(
         duration_missing_ids,
         summary_records=summary_records,
@@ -1399,9 +1579,12 @@ def build_signature_info(
 
     output_path = output_dir / "per_sig_perf_data_info.jsonl"
     write_jsonl(output_path, output_records)
-    print(f"Wrote signature info for {len(output_records)} signatures to {output_path}.")
-    for key, value in sorted(stats.items()):
-        print(f"  {key}={value}")
+    logger.info(
+        "Wrote per-signature info: signatures=%d, output=%s",
+        len(output_records),
+        output_path,
+    )
+    log_counter("Per-signature info counters", stats)
     return result
 
 
@@ -1431,6 +1614,14 @@ def write_per_revision_perf_data(
     replicate_records: dict[int, dict[str, Any]],
     keep_desc: bool,
 ) -> None:
+    logger.info(
+        "Building per-revision performance data: commits=%d, summary_signatures=%d, "
+        "replicate_signatures=%d, keep_desc=%s",
+        len(commit_graph.records),
+        len(summary_records),
+        len(replicate_records),
+        keep_desc,
+    )
     samples_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for replicate, records in ((False, summary_records), (True, replicate_records)):
         for signature_id, record in records.items():
@@ -1463,9 +1654,13 @@ def write_per_revision_perf_data(
             output_record["perf_measurement_data"] = samples
             f.write(json.dumps(output_record))
             f.write("\n")
-    print(
-        f"Wrote {len(commit_graph.records)} revision rows to {output_path}; "
-        f"commits_with_samples={commits_with_samples}, samples={total_samples}."
+    logger.info(
+        "Wrote per-revision performance data: revision_rows=%d, commits_with_samples=%d, "
+        "samples=%d, output=%s",
+        len(commit_graph.records),
+        commits_with_samples,
+        total_samples,
+        output_path,
     )
 
 
@@ -1501,6 +1696,14 @@ def build_regression_rows(
     excluded_framework_ids: set[int],
     excluded_alert_summary_ids: set[int],
 ) -> list[dict[str, Any]]:
+    logger.info(
+        "Building regression rows: alert_rows=%d, included_statuses=%s, "
+        "excluded_framework_ids=%s, excluded_alert_summary_ids=%s",
+        len(alert_rows),
+        sorted(included_statuses) if included_statuses is not None else "any",
+        sorted(excluded_framework_ids),
+        sorted(excluded_alert_summary_ids),
+    )
     rows: list[dict[str, Any]] = []
     stats: Counter[str] = Counter()
     seen_summary_ids: set[int] = set()
@@ -1593,9 +1796,8 @@ def build_regression_rows(
         row.pop("_bad_index_sort", None)
         row.pop("_summary_id_sort", None)
 
-    print(f"Built {len(rows)} regression rows before split.")
-    for key, value in sorted(stats.items()):
-        print(f"  {key}={value}")
+    logger.info("Built regression rows before split: rows=%d", len(rows))
+    log_counter("Regression row build counters", stats)
     return rows
 
 
@@ -1687,21 +1889,35 @@ def write_regression_splits(
     eval_path = output_dir / "perf_bisect_regressions_eval.jsonl"
     final_path = output_dir / "perf_bisect_regressions_final_test.jsonl"
     if use_existing(eval_path, overwrite_existing=overwrite_existing):
-        print(f"Using existing {eval_path}; skipping eval split write.")
+        logger.info("Using existing eval regression split: %s; skipping write.", eval_path)
     else:
         write_regression_file(eval_path, eval_rows, starting_regression_id=1)
+        logger.info(
+            "Wrote eval regression split: rows=%d, output=%s",
+            len(eval_rows),
+            eval_path,
+        )
 
     if use_existing(final_path, overwrite_existing=overwrite_existing):
-        print(f"Using existing {final_path}; skipping final-test split write.")
+        logger.info("Using existing final-test regression split: %s; skipping write.", final_path)
     else:
         write_regression_file(
             final_path,
             final_rows,
             starting_regression_id=len(eval_rows) + 1,
         )
-    print(
-        f"Regression split rows: eval={len(eval_rows)}, "
-        f"final_test={len(final_rows)}."
+        logger.info(
+            "Wrote final-test regression split: rows=%d, output=%s",
+            len(final_rows),
+            final_path,
+        )
+    logger.info(
+        "Regression split result: total_rows=%d, eval_rows=%d, final_test_rows=%d, "
+        "eval_fraction=%.4f",
+        len(rows),
+        len(eval_rows),
+        len(final_rows),
+        eval_fraction,
     )
 
 
@@ -1722,7 +1938,7 @@ def write_regression_file(
 
 
 def summarize_v2_directory(output_dir: Path) -> None:
-    print("\nCreated v2 dataset files:")
+    logger.info("Created v2 dataset files:")
     for name in (
         "alert_summaries.csv",
         "alert_summary_fail_perf_sigs.csv",
@@ -1737,35 +1953,60 @@ def summarize_v2_directory(output_dir: Path) -> None:
     ):
         path = output_dir / name
         if path.exists():
-            print(f"  {path} ({path.stat().st_size:,} bytes)")
+            logger.info("  %s (%s bytes)", path, f"{path.stat().st_size:,}")
 
 
 def main() -> int:
     args = parse_args()
+    configure_logging(args.log_level)
     source_dir = args.source_dir.resolve()
     output_dir = args.output_dir.resolve()
     ensure_dir(output_dir)
 
-    print(f"Source dataset: {source_dir}")
-    print(f"Output dataset: {output_dir}")
+    logger.info("Starting Mozilla perf-bisect v2 dataset build.")
+    logger.info("Source dataset: %s", source_dir)
+    logger.info("Output dataset: %s", output_dir)
+    logger.info(
+        "Run options: overwrite_existing=%s, skip_fetch_alerts=%s, skip_fetch_commits=%s, "
+        "pull_commits=%s, skip_fetch_measurements=%s, skip_fetch_signature_metadata=%s, "
+        "skip_fetch_job_durations=%s",
+        args.overwrite_existing,
+        args.skip_fetch_alerts,
+        args.skip_fetch_commits,
+        args.pull_commits,
+        args.skip_fetch_measurements,
+        args.skip_fetch_signature_metadata,
+        args.skip_fetch_job_durations,
+    )
+
+    logger.info("Step 1/8: Copying reusable static artifacts.")
     copy_static_artifacts(
         source_dir,
         output_dir,
         overwrite_existing=args.overwrite_existing,
     )
 
+    logger.info("Step 2/8: Fetching and merging alert summaries.")
     merged_alerts_path = output_dir / "alert_summaries.csv"
     fresh_alerts_path = output_dir / "alert_summaries_fresh.csv"
     if use_existing(merged_alerts_path, overwrite_existing=args.overwrite_existing):
         alert_rows = load_csv_rows(merged_alerts_path)
-        print(f"Using existing {merged_alerts_path}; skipping alert fetch/merge.")
+        logger.info(
+            "Using existing merged alert summaries: rows=%d, path=%s; skipping alert fetch/merge.",
+            len(alert_rows),
+            merged_alerts_path,
+        )
     else:
         fresh_alert_rows: list[dict[str, Any]] = []
         if args.skip_fetch_alerts:
-            print("Skipping fresh alert fetch by request.")
+            logger.info("Skipping fresh alert fetch by request.")
         elif use_existing(fresh_alerts_path, overwrite_existing=args.overwrite_existing):
             fresh_alert_rows = load_csv_rows(fresh_alerts_path)
-            print(f"Using existing {fresh_alerts_path}; skipping alert fetch.")
+            logger.info(
+                "Using existing fresh alert summaries: rows=%d, path=%s; skipping alert fetch.",
+                len(fresh_alert_rows),
+                fresh_alerts_path,
+            )
         else:
             fresh_alert_rows = fetch_alert_summaries(
                 fresh_alerts_path,
@@ -1775,6 +2016,7 @@ def main() -> int:
 
         alert_rows = merge_alert_summaries(source_dir, output_dir, fresh_alert_rows)
 
+    logger.info("Step 3/8: Deriving failing performance signatures.")
     needed_signature_ids, alert_signature_metadata, _framework_filtered_ids = (
         derive_failing_signature_csvs(
             alert_rows,
@@ -1784,7 +2026,13 @@ def main() -> int:
             overwrite_existing=args.overwrite_existing,
         )
     )
+    logger.info(
+        "Needed failing signatures for downstream data: signatures=%d, metadata_signatures=%d",
+        len(needed_signature_ids),
+        len(alert_signature_metadata),
+    )
 
+    logger.info("Step 4/8: Preparing commit graph.")
     maybe_export_commits(
         output_dir,
         args.autoland_repo.resolve(),
@@ -1795,6 +2043,7 @@ def main() -> int:
     )
     commit_graph = load_commit_graph(output_dir / "all_commits.jsonl")
 
+    logger.info("Step 5/8: Fetching and merging per-signature performance measurements.")
     summary_output = output_dir / "per_sig_perf_data_summary.jsonl"
     replicates_output = output_dir / "per_sig_perf_data_replicates.jsonl"
     summary_exists = use_existing(
@@ -1808,17 +2057,32 @@ def main() -> int:
     if summary_exists and replicates_exists:
         merged_summary = load_per_signature_jsonl(summary_output)
         merged_replicates = load_per_signature_jsonl(replicates_output)
-        print(
-            f"Using existing per-signature measurement caches: {summary_output}, "
-            f"{replicates_output}."
+        logger.info(
+            "Using existing per-signature measurement caches: summary_signatures=%d, "
+            "summary_measurements=%d, replicate_signatures=%d, replicate_measurements=%d, "
+            "summary_path=%s, replicate_path=%s",
+            len(merged_summary),
+            count_measurements(merged_summary),
+            len(merged_replicates),
+            count_measurements(merged_replicates),
+            summary_output,
+            replicates_output,
         )
     else:
         old_summary = load_per_signature_jsonl(source_dir / "per_sig_perf_data_summary.jsonl")
         old_replicates = load_per_signature_jsonl(source_dir / "per_sig_perf_data_replicates.jsonl")
+        logger.info(
+            "Loaded source measurement caches: old_summary_signatures=%d, old_summary_measurements=%d, "
+            "old_replicate_signatures=%d, old_replicate_measurements=%d",
+            len(old_summary),
+            count_measurements(old_summary),
+            len(old_replicates),
+            count_measurements(old_replicates),
+        )
         fresh_summary: dict[int, dict[str, Any]] = {}
         fresh_replicates: dict[int, dict[str, Any]] = {}
         if args.skip_fetch_measurements:
-            print("Skipping fresh measurement fetch by request.")
+            logger.info("Skipping fresh measurement fetch by request.")
         else:
             fresh_summary, fresh_replicates = fetch_measurements_for_signatures(
                 sorted(needed_signature_ids),
@@ -1830,7 +2094,13 @@ def main() -> int:
 
         if summary_exists:
             merged_summary = load_per_signature_jsonl(summary_output)
-            print(f"Using existing {summary_output}; skipping summary cache write.")
+            logger.info(
+                "Using existing summary measurement cache: signatures=%d, measurements=%d, path=%s; "
+                "skipping summary cache write.",
+                len(merged_summary),
+                count_measurements(merged_summary),
+                summary_output,
+            )
         else:
             merged_summary = merge_signature_measurements(
                 old_summary,
@@ -1840,7 +2110,13 @@ def main() -> int:
 
         if replicates_exists:
             merged_replicates = load_per_signature_jsonl(replicates_output)
-            print(f"Using existing {replicates_output}; skipping replicate cache write.")
+            logger.info(
+                "Using existing replicate measurement cache: signatures=%d, measurements=%d, path=%s; "
+                "skipping replicate cache write.",
+                len(merged_replicates),
+                count_measurements(merged_replicates),
+                replicates_output,
+            )
         else:
             merged_replicates = merge_signature_measurements(
                 old_replicates,
@@ -1848,10 +2124,16 @@ def main() -> int:
                 replicates_output,
             )
 
+    logger.info("Step 6/8: Building per-signature metadata and runtime info.")
     sig_info_output = output_dir / "per_sig_perf_data_info.jsonl"
     if use_existing(sig_info_output, overwrite_existing=args.overwrite_existing):
         signature_info = load_existing_signature_info(sig_info_output)
-        print(f"Using existing {sig_info_output}; skipping signature metadata/runtime fetch.")
+        logger.info(
+            "Using existing per-signature info: signatures=%d, path=%s; "
+            "skipping signature metadata/runtime fetch.",
+            len(signature_info),
+            sig_info_output,
+        )
     else:
         signature_info = build_signature_info(
             output_dir=output_dir,
@@ -1866,9 +2148,13 @@ def main() -> int:
             job_duration_lookback_days=args.fresh_lookback_days,
         )
 
+    logger.info("Step 7/8: Writing per-revision performance data.")
     per_revision_output = output_dir / "per_revision_perf_data.jsonl"
     if use_existing(per_revision_output, overwrite_existing=args.overwrite_existing):
-        print(f"Using existing {per_revision_output}; skipping per-revision data write.")
+        logger.info(
+            "Using existing per-revision performance data: %s; skipping write.",
+            per_revision_output,
+        )
     else:
         write_per_revision_perf_data(
             output_dir=output_dir,
@@ -1878,6 +2164,7 @@ def main() -> int:
             keep_desc=args.keep_desc_in_revision_data,
         )
 
+    logger.info("Step 8/8: Building regression rows and split files.")
     regression_rows = build_regression_rows(
         alert_rows=alert_rows,
         commit_graph=commit_graph,
@@ -1893,6 +2180,7 @@ def main() -> int:
         overwrite_existing=args.overwrite_existing,
     )
     summarize_v2_directory(output_dir)
+    logger.info("Finished Mozilla perf-bisect v2 dataset build.")
     return 0
 
 
