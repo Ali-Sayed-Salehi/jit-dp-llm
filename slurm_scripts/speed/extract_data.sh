@@ -127,10 +127,11 @@ echo "running the data extraction script . . ."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/create_perf_bisect_dataset_v2.py \
 # --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
 # --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
-# --autoland-repo /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/repos/autoland2 \
+# --autoland-repo /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/repos/autoland \
 # --eval-fraction 0.30 \
 # --job-duration-samples 3 \
-# --exclude-framework-ids 2,6,18
+# --exclude-framework-ids 2,6,18 \
+# --log-level INFO
 
 
 echo "extraction finished"
