@@ -134,7 +134,7 @@ echo "Running script ..."
 # --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_revision_perf_data.jsonl \
 # --commits /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/all_commits.jsonl \
 # --regressions /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/perf_bisect_regressions_eval.jsonl /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/perf_bisect_regressions_final_test.jsonl \
-# --output analysis/perf_bisect/per_regression_oracle_metrics_v2.jsonl
+# --output /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_regression_oracle_metrics_v2.jsonl
 
 # Flag ownership for this simulation command:
 # - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,
@@ -167,7 +167,7 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
 --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_sig_perf_data_info.jsonl \
 --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_revision_perf_data.jsonl \
---oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/per_regression_oracle_metrics_v2.jsonl \
+--oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_regression_oracle_metrics_v2.jsonl \
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
