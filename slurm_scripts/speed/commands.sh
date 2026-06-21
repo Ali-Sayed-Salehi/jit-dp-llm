@@ -156,6 +156,9 @@ echo "Running script ..."
 #   localizer/oracle combo; --random-seed controls noisy oracle draws.
 # - --ignore-risk drops all risk-score localizers from the active list, so the
 #   v2 run below does not load or require --risk-scores.
+# - Existing 1_worker/3_workers results hit the old 30 retry/repeat cap and
+#   selected PBA budgets near the old 200 cap; the ranges below keep the same
+#   lower bounds but widen those constrained dimensions.
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
 # --dataset all \
@@ -171,17 +174,17 @@ echo "Running script ..."
 # --random-seed 42 \
 # --optuna-seed 42 \
 # --optuna-trials 50 \
-# --midpoint-retrigger-count-max 30 \
+# --midpoint-retrigger-count-max 100 \
 # --multisection-section-count-min 3 \
-# --multisection-section-count-max 20 \
-# --multisection-retrigger-count-max 30 \
-# --backfill-retrigger-count-max 30 \
-# --probe-repeat-count-max 30 \
+# --multisection-section-count-max 32 \
+# --multisection-retrigger-count-max 100 \
+# --backfill-retrigger-count-max 100 \
+# --probe-repeat-count-max 80 \
 # --pba-confidence-threshold-min 0.6 \
 # --pba-confidence-threshold-max 0.99 \
-# --pba-repeat-count-max 30 \
+# --pba-repeat-count-max 80 \
 # --pba-max-test-runs-min 20 \
-# --pba-max-test-runs-max 200
+# --pba-max-test-runs-max 320
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \
