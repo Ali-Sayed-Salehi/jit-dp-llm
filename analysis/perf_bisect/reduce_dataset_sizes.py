@@ -21,11 +21,13 @@ import argparse
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
+logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2"
 DEFAULT_OUTPUT_DIR = DEFAULT_SOURCE_DIR / "reduced"
@@ -108,9 +110,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Write the reduced dataset."""
 
     args = parse_args(argv)
+    configure_logging(args.log_level)
     source_dir = args.source_dir.resolve()
     output_dir = args.output_dir.resolve()
 
+    logger.info("Starting reduced Mozilla perf-bisect v2 dataset build.")
+    logger.info("Source dataset: %s", source_dir)
+    logger.info("Reduced output: %s", output_dir)
+
+    logger.info("Step 1/7: Loading and reducing regression splits.")
     regression_rows_by_filename = load_reduced_regression_splits(source_dir)
     all_regressions = [
         regression
@@ -118,13 +126,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         for regression in rows
     ]
     needed_signature_ids = collect_needed_signature_ids(all_regressions)
+
+    logger.info("Step 2/7: Loading source revision graph.")
     graph_input = choose_graph_input(source_dir)
     commit_graph = load_commit_graph(graph_input)
+
+    logger.info("Step 3/7: Reconstructing regression candidate paths.")
     path_nodes, candidate_nodes, path_stats = collect_path_nodes(
         all_regressions,
         commit_graph=commit_graph,
     )
 
+    logger.info("Step 4/7: Checking reduced output directory.")
     output_paths = [
         output_dir / filename
         for filename in (
@@ -144,9 +157,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ensure_can_write(output_paths, overwrite=args.overwrite)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Step 5/7: Writing reduced regression splits.")
     for filename, rows in regression_rows_by_filename.items():
         write_jsonl(output_dir / filename, rows)
 
+    logger.info("Step 6/7: Writing reduced signature and revision data.")
     write_reduced_signature_info(
         source_dir / SIGNATURE_INFO_FILENAME,
         output_dir / SIGNATURE_INFO_FILENAME,
@@ -160,6 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidate_nodes=candidate_nodes,
         needed_signature_ids=needed_signature_ids,
     )
+
+    logger.info("Step 7/7: Writing optional compact metrics and risk scores.")
     maybe_write_reduced_oracle_metrics(
         source_dir / ORACLE_METRICS_FILENAME,
         output_dir / ORACLE_METRICS_FILENAME,
@@ -181,6 +198,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for key, value in sorted(path_stats.items()):
         print(f"{key}={value}")
     print("wrote reduced dataset")
+    logger.info("Finished reduced Mozilla perf-bisect v2 dataset build.")
     return 0
 
 
@@ -205,7 +223,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Overwrite existing reduced dataset files.",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Python logging level.",
+    )
     return parser.parse_args(argv)
+
+
+def configure_logging(log_level: str) -> None:
+    """Configure script logging."""
+
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
 
 def ensure_can_write(paths: Sequence[Path], *, overwrite: bool) -> None:
@@ -215,6 +249,7 @@ def ensure_can_write(paths: Sequence[Path], *, overwrite: bool) -> None:
         return
     existing = [path for path in paths if path.exists()]
     if existing:
+        logger.info("Found existing managed outputs and overwrite is disabled.")
         formatted = "\n".join(f"  {path}" for path in existing)
         raise FileExistsError(
             "Refusing to overwrite existing reduced dataset files. "
@@ -231,6 +266,7 @@ def ensure_no_unmanaged_outputs(
     """Refuse to mix reduced outputs with files this script does not manage."""
 
     if not output_dir.exists():
+        logger.info("Reduced output directory does not exist yet.")
         return
     managed = {path.resolve() for path in managed_paths}
     unmanaged = [
@@ -239,6 +275,7 @@ def ensure_no_unmanaged_outputs(
         if path.is_file() and path.resolve() not in managed
     ]
     if unmanaged:
+        logger.info("Found unmanaged files in reduced output directory.")
         formatted = "\n".join(f"  {path}" for path in unmanaged)
         raise FileExistsError(
             "The reduced dataset directory contains files that are not managed "
@@ -274,6 +311,7 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> int:
             fh.write(json.dumps(row, separators=(",", ":"), sort_keys=True))
             fh.write("\n")
             count += 1
+    logger.info("Wrote JSONL: rows=%d, path=%s", count, path)
     return count
 
 
@@ -295,6 +333,7 @@ def load_reduced_regression_splits(
             seen_regression_ids.add(regression_id)
             rows.append(row)
         rows_by_filename[filename] = rows
+        logger.info("Loaded regression split: rows=%d, path=%s", len(rows), path)
     return rows_by_filename
 
 
@@ -416,9 +455,11 @@ def choose_graph_input(source_dir: Path) -> Path:
 
     per_revision = source_dir / REVISION_DATA_FILENAME
     if per_revision.exists():
+        logger.info("Using source per-revision graph: %s", per_revision)
         return per_revision
     commits = source_dir / COMMITS_FILENAME
     if commits.exists():
+        logger.info("Using source full commit graph: %s", commits)
         return commits
     raise FileNotFoundError(
         f"expected either {per_revision} or {commits} to build revision paths"
@@ -442,6 +483,7 @@ def load_commit_graph(path: Path) -> CommitGraph:
         index_by_node[node] = len(records)
         parents_by_node[node] = parents
         records.append(record)
+    logger.info("Loaded commit graph: revisions=%d, source=%s", len(records), path)
     return CommitGraph(
         records=records,
         index_by_node=index_by_node,
@@ -493,6 +535,15 @@ def collect_path_nodes(
             "cannot build a reproducible reduced dataset because candidate paths "
             f"are missing for {len(missing_paths)} regressions. First ids: {preview}"
         )
+    logger.info(
+        "Collected path nodes: regressions=%d, path_nodes=%d, "
+        "candidate_nodes=%d",
+        len(regressions),
+        len(path_nodes),
+        len(candidate_nodes),
+    )
+    if stats:
+        logger.info("Path collection counters: %s", dict(sorted(stats.items())))
     return path_nodes, candidate_nodes, stats
 
 
@@ -542,6 +593,11 @@ def write_reduced_signature_info(
         output_path,
         (info_by_signature[signature_id] for signature_id in sorted(info_by_signature)),
     )
+    logger.info(
+        "Wrote reduced signature info: signatures=%d, path=%s",
+        len(info_by_signature),
+        output_path,
+    )
 
 
 def write_reduced_revision_data(
@@ -557,12 +613,20 @@ def write_reduced_revision_data(
 
     source_revision_data = source_dir / REVISION_DATA_FILENAME
     if source_revision_data.exists():
+        logger.info(
+            "Loading summary measurements from source per-revision data: %s",
+            source_revision_data,
+        )
         samples_by_revision = load_summary_samples_from_revision_data(
             source_revision_data,
             candidate_nodes=candidate_nodes,
             needed_signature_ids=needed_signature_ids,
         )
     else:
+        logger.info(
+            "Source per-revision data missing; loading summary measurements "
+            "from per-signature cache."
+        )
         samples_by_revision = load_summary_samples_from_signature_data(
             source_dir / SUMMARY_DATA_FILENAME,
             candidate_nodes=candidate_nodes,
@@ -575,6 +639,14 @@ def write_reduced_revision_data(
         if record.node in path_nodes
     )
     write_jsonl(output_path, rows)
+    logger.info(
+        "Wrote reduced revision data: path_nodes=%d, revisions_with_samples=%d, "
+        "summary_samples=%d, path=%s",
+        len(path_nodes),
+        len(samples_by_revision),
+        sum(len(samples) for samples in samples_by_revision.values()),
+        output_path,
+    )
 
 
 def load_summary_samples_from_revision_data(
@@ -586,11 +658,15 @@ def load_summary_samples_from_revision_data(
     """Read summary measurements from a full per-revision dataset."""
 
     samples_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    stats: Counter[str] = Counter()
     for _, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
         node = raw.get("node")
         if not isinstance(node, str) or node not in candidate_nodes:
             continue
+        stats["candidate_revision_rows"] += 1
         for measurement in raw.get("perf_measurement_data", []):
+            stats["measurements_seen"] += 1
             sample = reduce_measurement_sample(
                 measurement,
                 needed_signature_ids=needed_signature_ids,
@@ -598,6 +674,8 @@ def load_summary_samples_from_revision_data(
             )
             if sample is not None:
                 samples_by_revision[node].append(sample)
+                stats["summary_samples_kept"] += 1
+    logger.info("Loaded summary samples from revision data: %s", dict(stats))
     return dict(samples_by_revision)
 
 
@@ -615,14 +693,18 @@ def load_summary_samples_from_signature_data(
         )
 
     samples_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    stats: Counter[str] = Counter()
     for line_num, raw in iter_jsonl(path):
+        stats["signature_rows_scanned"] += 1
         signature_id = parse_positive_int(
             raw.get("signature_id"),
             context=f"{path}:{line_num} signature_id",
         )
         if signature_id not in needed_signature_ids:
             continue
+        stats["needed_signature_rows"] += 1
         for measurement in raw.get("perf_measurement_data", []):
+            stats["measurements_seen"] += 1
             if not isinstance(measurement, Mapping):
                 continue
             revision = measurement.get("revision")
@@ -635,6 +717,8 @@ def load_summary_samples_from_signature_data(
             )
             if sample is not None:
                 samples_by_revision[revision].append(sample)
+                stats["summary_samples_kept"] += 1
+    logger.info("Loaded summary samples from signature data: %s", dict(stats))
     return dict(samples_by_revision)
 
 
@@ -693,9 +777,10 @@ def maybe_write_reduced_oracle_metrics(
     """Copy compact oracle metrics if they already exist in the source dataset."""
 
     if not source_path.exists():
-        print(
-            f"oracle_metrics_source_missing={source_path}; "
-            "run calculate_oracle_metrics.py after reduction to create it"
+        logger.warning(
+            "Oracle metrics source is missing: %s. Run "
+            "calculate_oracle_metrics.py after reduction to create it.",
+            source_path,
         )
         return
 
@@ -717,6 +802,12 @@ def maybe_write_reduced_oracle_metrics(
             }
         )
     write_jsonl(output_path, rows)
+    logger.info(
+        "Wrote reduced oracle metrics: rows=%d, source=%s, path=%s",
+        len(rows),
+        source_path,
+        output_path,
+    )
 
 
 def parse_probability(value: Any, *, context: str) -> float:
@@ -737,9 +828,10 @@ def maybe_write_reduced_risk_scores(
     """Copy candidate-only risk scores if source risk scores exist."""
 
     if not source_path.exists():
-        print(
-            f"risk_scores_source_missing={source_path}; "
-            "risk localizers will still require --ignore-risk or a risk-score file"
+        logger.warning(
+            "Risk-score source is missing: %s. Risk localizers will still "
+            "require --ignore-risk or a risk-score file.",
+            source_path,
         )
         return
 
@@ -760,12 +852,19 @@ def maybe_write_reduced_risk_scores(
         )
         scored_nodes.add(commit_id)
     write_jsonl(output_path, rows)
+    logger.info(
+        "Wrote reduced risk scores: rows=%d, source=%s, path=%s",
+        len(rows),
+        source_path,
+        output_path,
+    )
 
     missing = candidate_nodes - scored_nodes
     if missing:
-        print(
-            "risk_score_missing_candidate_nodes="
-            f"{len(missing)}; use --ignore-risk unless these scores are supplied"
+        logger.warning(
+            "Risk scores are missing for %d candidate revisions; use "
+            "--ignore-risk unless these scores are supplied.",
+            len(missing),
         )
 
 

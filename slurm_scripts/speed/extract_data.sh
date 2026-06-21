@@ -134,4 +134,16 @@ echo "running the data extraction script . . ."
 # --log-level INFO
 
 
+# Prepare the reduced v2 dataset once before running the simulation below:
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/reduce_dataset_sizes.py \
+# --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
+# --overwrite
+
+
+# Recompute oracle accuracies from the reduced summary-only revision data:
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py \
+# --skip-plot
+
+
 echo "extraction finished"

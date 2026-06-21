@@ -21,12 +21,14 @@ import argparse
 from collections import Counter, deque
 from dataclasses import dataclass, field
 import json
+import logging
 import math
 from pathlib import Path
 from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
 
+logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2" / "reduced"
 DEFAULT_REVISION_DATA = DEFAULT_DATA_DIR / "per_revision_perf_data.jsonl"
@@ -124,9 +126,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, calculate per-regression accuracies, and write JSONL."""
 
     args = parse_args(argv)
-    plt = None if args.skip_plot else load_matplotlib()
+    configure_logging(args.log_level)
+    logger.info("Starting perf-bisect oracle metric calculation.")
+    logger.info("Regression inputs: %s", ", ".join(str(p) for p in args.regressions))
+    logger.info("Revision data: %s", args.revision_data)
+    logger.info("Commit graph: %s", args.commits)
+    logger.info("Output: %s", args.output)
+
+    if args.skip_plot:
+        logger.info("Step 1/7: Plot generation disabled.")
+        plt = None
+    else:
+        logger.info("Step 1/7: Loading matplotlib for distribution plot.")
+        plt = load_matplotlib()
+
+    logger.info("Step 2/7: Loading regression rows.")
     regressions = load_regressions(args.regressions)
+
+    logger.info("Step 3/7: Loading commit graph.")
     commit_graph = load_commit_graph(args.commits)
+
+    logger.info("Step 4/7: Building candidate revision paths.")
     paths_by_regression_id, path_stats = build_candidate_paths(
         regressions,
         commit_graph,
@@ -139,12 +159,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         for revision in path.candidate_revisions
     }
     needed_signatures = {regression.signature_id for regression in regressions}
+    logger.info(
+        "Candidate path result: regressions=%d, paths=%d, "
+        "candidate_revisions=%d, signatures=%d",
+        len(regressions),
+        len(paths_by_regression_id),
+        len(needed_revisions),
+        len(needed_signatures),
+    )
+    if path_stats:
+        logger.info("Candidate path counters: %s", dict(sorted(path_stats.items())))
+
+    logger.info("Step 5/7: Loading summary measurements for candidate paths.")
     measurements = load_measurements(
         args.revision_data,
         needed_revisions=needed_revisions,
         needed_signatures=needed_signatures,
     )
 
+    logger.info("Step 6/7: Calculating and filtering oracle metrics.")
     output_rows = [
         calculate_regression_metrics(
             regression,
@@ -158,9 +191,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_rows,
         minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
     )
+    logger.info(
+        "Oracle metrics calculated: kept_rows=%d, excluded_low_accuracy=%d",
+        len(output_rows),
+        len(excluded_rows),
+    )
+
+    logger.info("Step 7/7: Writing oracle metric outputs.")
     write_jsonl(args.output, output_rows)
     if plt is not None:
         plot_output = args.plot_output or default_distribution_plot_path(args.output)
+        logger.info("Writing oracle accuracy distribution plot: %s", plot_output)
         write_accuracy_distribution_plot(plt=plt, path=plot_output, rows=output_rows)
 
     metric_stats = summarize_output_rows(output_rows)
@@ -173,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for key, value in sorted(metric_stats.items()):
         print(f"{key}={value}")
     print(f"wrote {len(output_rows)} rows to {args.output}")
+    logger.info("Finished perf-bisect oracle metric calculation.")
     return 0
 
 
@@ -254,10 +296,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "(correct + alpha) / (total + 2 * alpha)."
         ),
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Python logging level.",
+    )
     args = parser.parse_args(argv)
     if args.smoothing_alpha <= 0:
         parser.error("--smoothing-alpha must be positive")
     return args
+
+
+def configure_logging(log_level: str) -> None:
+    """Configure script logging."""
+
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
 
 def iter_jsonl(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
@@ -286,6 +344,7 @@ def load_regressions(paths: Sequence[Path]) -> list[Regression]:
     regressions = []
     seen_ids: set[int] = set()
     for path in paths:
+        before_count = len(regressions)
         for line_num, raw in iter_jsonl(path):
             regression = parse_regression(raw, path=path, line_num=line_num)
             if regression.regression_id in seen_ids:
@@ -295,6 +354,12 @@ def load_regressions(paths: Sequence[Path]) -> list[Regression]:
                 )
             seen_ids.add(regression.regression_id)
             regressions.append(regression)
+        logger.info(
+            "Loaded regressions: rows=%d, path=%s",
+            len(regressions) - before_count,
+            path,
+        )
+    logger.info("Loaded total regression rows: %d", len(regressions))
     return regressions
 
 
@@ -349,6 +414,12 @@ def load_commit_graph(path: Path) -> CommitGraph:
             if isinstance(parent, str) and parent and parent != NULL_NODE
         ]
         parents_by_node[node] = parents
+    logger.info(
+        "Loaded commit graph: revisions=%d, parent_entries=%d, source=%s",
+        len(index_by_node),
+        sum(len(parents) for parents in parents_by_node.values()),
+        path,
+    )
     return CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node)
 
 
@@ -385,6 +456,12 @@ def build_candidate_paths(
             candidate_revisions=candidates,
             culprit_index=full_path.index(regression.culprit_revision),
         )
+    logger.info(
+        "Built candidate paths: paths=%d, missing=%d, culprit_not_in_path=%d",
+        len(paths),
+        stats["path_missing"],
+        stats["culprit_not_in_path"],
+    )
     return paths, stats
 
 
@@ -398,33 +475,49 @@ def load_measurements(
 
     measurements: dict[tuple[str, int], MeasurementValues] = {}
     if not needed_revisions or not needed_signatures:
+        logger.info("No revisions or signatures requested; skipping measurement load.")
         return measurements
 
+    stats: Counter[str] = Counter()
     for _, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
         node = raw.get("node")
         if node not in needed_revisions:
             continue
+        stats["candidate_revision_rows"] += 1
 
         for measurement in raw.get("perf_measurement_data", []):
+            stats["measurements_seen"] += 1
             if not isinstance(measurement, Mapping):
+                stats["measurement_not_object"] += 1
                 continue
             if measurement.get("replicate") is not False:
+                stats["measurement_not_summary"] += 1
                 continue
             try:
                 signature_id = int(measurement["signature_id"])
             except (KeyError, TypeError, ValueError):
+                stats["measurement_bad_signature"] += 1
                 continue
             if signature_id not in needed_signatures:
+                stats["measurement_unneeded_signature"] += 1
                 continue
 
             try:
                 value = float(measurement["value"])
             except (KeyError, TypeError, ValueError):
+                stats["measurement_bad_value"] += 1
                 continue
 
             values = measurements.setdefault((str(node), signature_id), MeasurementValues())
             values.summary.append(value)
+            stats["summary_values_loaded"] += 1
 
+    logger.info(
+        "Loaded measurements: keys=%d, stats=%s",
+        len(measurements),
+        dict(sorted(stats.items())),
+    )
     return measurements
 
 
@@ -505,11 +598,12 @@ def exclude_low_accuracy_rows(
         )
         if should_exclude:
             excluded_rows.append(row)
-            print(
-                "[WARN] Excluding oracle metric row for "
-                f"regression_id={row['regression_id']}: "
-                f"summary_oracle_accuracy={summary_accuracy}, "
-                f"minimum_accuracy={minimum_accuracy}."
+            logger.warning(
+                "Excluding oracle metric row for regression_id=%s: "
+                "summary_oracle_accuracy=%s, minimum_accuracy=%s.",
+                row["regression_id"],
+                summary_accuracy,
+                minimum_accuracy,
             )
         else:
             kept_rows.append(row)
@@ -524,6 +618,7 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
         for row in rows:
             fh.write(json.dumps(row))
             fh.write("\n")
+    logger.info("Wrote oracle metrics JSONL: path=%s", path)
 
 
 def default_distribution_plot_path(output_path: Path) -> Path:
@@ -590,6 +685,7 @@ def write_accuracy_distribution_plot(
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=DEFAULT_DISTRIBUTION_PLOT_DPI, bbox_inches="tight")
     plt.close(fig)
+    logger.info("Wrote oracle accuracy distribution plot: %s", path)
     print(f"wrote {path}")
 
 

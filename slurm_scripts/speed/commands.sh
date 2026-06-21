@@ -130,15 +130,6 @@ echo "Running script ..."
 # --final-only
 # # --dry-run
 
-# Prepare the reduced v2 dataset once before running the simulation below:
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/reduce_dataset_sizes.py \
-# --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
-# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
-# --overwrite
-#
-# Recompute oracle accuracies from the reduced summary-only revision data:
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py \
-# --skip-plot
 
 # Flag ownership for this simulation command:
 # - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,
@@ -166,31 +157,31 @@ echo "Running script ..."
 # - --ignore-risk drops all risk-score localizers from the active list, so the
 #   v2 run below does not load or require --risk-scores.
 
-python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
---dataset all \
---regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
---signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_sig_perf_data_info.jsonl \
---revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_revision_perf_data.jsonl \
---oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
---output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
---workers 1 \
---oracles SummaryComparison \
---localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
---ignore-risk \
---random-seed 42 \
---optuna-seed 42 \
---optuna-trials 50 \
---midpoint-retrigger-count-max 30 \
---multisection-section-count-min 3 \
---multisection-section-count-max 20 \
---multisection-retrigger-count-max 30 \
---backfill-retrigger-count-max 30 \
---probe-repeat-count-max 30 \
---pba-confidence-threshold-min 0.6 \
---pba-confidence-threshold-max 0.99 \
---pba-repeat-count-max 30 \
---pba-max-test-runs-min 20 \
---pba-max-test-runs-max 200
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
+# --dataset all \
+# --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
+# --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_sig_perf_data_info.jsonl \
+# --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_revision_perf_data.jsonl \
+# --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
+# --workers 1 \
+# --oracles SummaryComparison \
+# --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+# --ignore-risk \
+# --random-seed 42 \
+# --optuna-seed 42 \
+# --optuna-trials 50 \
+# --midpoint-retrigger-count-max 30 \
+# --multisection-section-count-min 3 \
+# --multisection-section-count-max 20 \
+# --multisection-retrigger-count-max 30 \
+# --backfill-retrigger-count-max 30 \
+# --probe-repeat-count-max 30 \
+# --pba-confidence-threshold-min 0.6 \
+# --pba-confidence-threshold-max 0.99 \
+# --pba-repeat-count-max 30 \
+# --pba-max-test-runs-min 20 \
+# --pba-max-test-runs-max 200
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \
