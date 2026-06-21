@@ -37,11 +37,13 @@ except ImportError:  # pragma: no cover - supports direct script execution.
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BISECT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
+DEFAULT_BISECT_DATA_DIR = (
+    REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2" / "reduced"
+)
 PROMPT_REGRESSION_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
 DEFAULT_ORACLE_METRICS = (
-    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
+    DEFAULT_BISECT_DATA_DIR / "per_regression_oracle_metrics_v2.jsonl"
 )
 DEFAULT_RISK_SCORES = DEFAULT_BISECT_DATA_DIR / "per_commit_risk_scores.jsonl"
 
@@ -447,8 +449,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_ORACLE_METRICS,
         help=(
-            "Path to per_regression_oracle_metrics.jsonl. SummaryComparison "
-            "uses summary_oracle_accuracy as its noisy-oracle accuracy."
+            "Path to per_regression_oracle_metrics*.jsonl. SummaryComparison "
+            "uses summary_oracle_accuracy as its noisy-oracle accuracy. "
+            "Defaults to the reduced v2 metrics file."
         ),
     )
     parser.add_argument(

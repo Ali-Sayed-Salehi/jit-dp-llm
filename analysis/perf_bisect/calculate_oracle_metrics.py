@@ -10,9 +10,9 @@ perf-bisect datasets:
 By default, the script also writes a histogram of the oracle accuracy
 distribution beside the JSONL output.
 
-Candidate revisions are found from the Mercurial parent graph in
-all_commits.jsonl. The known-good revision is excluded, and the known-bad
-revision is included because it can be the culprit revision.
+Candidate revisions are found from the Mercurial parent graph in the reduced
+per_revision_perf_data.jsonl by default. The known-good revision is excluded,
+and the known-bad revision is included because it can be the culprit revision.
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2"
+DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2" / "reduced"
 DEFAULT_REVISION_DATA = DEFAULT_DATA_DIR / "per_revision_perf_data.jsonl"
-DEFAULT_COMMITS = DEFAULT_DATA_DIR / "all_commits.jsonl"
+DEFAULT_COMMITS = DEFAULT_REVISION_DATA
 DEFAULT_REGRESSION_INPUTS = (
     DEFAULT_DATA_DIR / "perf_bisect_regressions_eval.jsonl",
     DEFAULT_DATA_DIR / "perf_bisect_regressions_final_test.jsonl",
@@ -204,7 +204,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--commits",
         type=Path,
         default=DEFAULT_COMMITS,
-        help="Path to all_commits.jsonl.",
+        help=(
+            "Path to a JSONL parent graph. Defaults to the reduced "
+            "per_revision_perf_data.jsonl."
+        ),
     )
     parser.add_argument(
         "--regressions",
@@ -328,7 +331,7 @@ def optional_int(value: Any) -> int | None:
 
 
 def load_commit_graph(path: Path) -> CommitGraph:
-    """Load Mercurial commit parent links from all_commits.jsonl."""
+    """Load Mercurial commit parent links from a graph JSONL file."""
 
     index_by_node: dict[str, int] = {}
     parents_by_node: dict[str, list[str]] = {}

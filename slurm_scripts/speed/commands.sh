@@ -130,7 +130,15 @@ echo "Running script ..."
 # --final-only
 # # --dry-run
 
-# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py
+# Prepare the reduced v2 dataset once before running the simulation below:
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/reduce_dataset_sizes.py \
+# --source-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
+# --overwrite
+#
+# Recompute oracle accuracies from the reduced summary-only revision data:
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/calculate_oracle_metrics.py \
+# --skip-plot
 
 # Flag ownership for this simulation command:
 # - --risk-scores is used by ProbabilisticBisection_CumulativeRiskMedian_UniformPrior,
@@ -160,10 +168,10 @@ echo "Running script ..."
 
 python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.py \
 --dataset all \
---regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2 \
---signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_sig_perf_data_info.jsonl \
---revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_revision_perf_data.jsonl \
---oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/per_regression_oracle_metrics_v2.jsonl \
+--regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
+--signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_sig_perf_data_info.jsonl \
+--revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_revision_perf_data.jsonl \
+--oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
 --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 --workers 1 \
 --oracles SummaryComparison \
@@ -187,16 +195,16 @@ python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/simulation.
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \
 # --worker-counts 1 2 4 8 16 \
-# --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect \
-# --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_sig_perf_data_info.jsonl \
-# --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_revision_perf_data.jsonl \
-# --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/per_regression_oracle_metrics.jsonl \
-# --risk-scores /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect/per_commit_risk_scores.jsonl \
+# --regression-dir /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced \
+# --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_sig_perf_data_info.jsonl \
+# --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_revision_perf_data.jsonl \
+# --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
 # --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
 # --sweep-output-json /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/machine_count_sweep_final_test.json \
 # --plots-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/plots \
 # --oracles SummaryComparison \
 # --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
+# --ignore-risk \
 # --random-seed 42 \
 # --optuna-seed 42 \
 # --optuna-trials 50 \
