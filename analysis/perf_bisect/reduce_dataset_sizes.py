@@ -129,7 +129,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logger.info("Step 2/7: Loading source revision graph.")
     graph_input = choose_graph_input(source_dir)
-    commit_graph = load_commit_graph(graph_input)
+    preloaded_summary_samples = None
+    if graph_input == source_dir / REVISION_DATA_FILENAME:
+        logger.info(
+            "Source per-revision data is also the graph input; scanning it "
+            "once for graph fields and needed summary measurements."
+        )
+        commit_graph, preloaded_summary_samples = (
+            load_commit_graph_and_summary_samples_from_revision_data(
+                graph_input,
+                needed_signature_ids=needed_signature_ids,
+            )
+        )
+    else:
+        commit_graph = load_commit_graph(graph_input)
 
     logger.info("Step 3/7: Reconstructing regression candidate paths.")
     path_nodes, candidate_nodes, path_stats = collect_path_nodes(
@@ -174,6 +187,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         path_nodes=path_nodes,
         candidate_nodes=candidate_nodes,
         needed_signature_ids=needed_signature_ids,
+        preloaded_summary_samples=preloaded_summary_samples,
     )
 
     logger.info("Step 7/7: Writing optional compact metrics and risk scores.")
@@ -491,6 +505,62 @@ def load_commit_graph(path: Path) -> CommitGraph:
     )
 
 
+def load_commit_graph_and_summary_samples_from_revision_data(
+    path: Path,
+    *,
+    needed_signature_ids: set[int],
+) -> tuple[CommitGraph, dict[str, list[dict[str, Any]]]]:
+    """Load graph fields and summary samples from per-revision data in one pass."""
+
+    records: list[CommitRecord] = []
+    index_by_node: dict[str, int] = {}
+    parents_by_node: dict[str, list[str]] = {}
+    samples_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    stats: Counter[str] = Counter()
+
+    for line_num, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
+        node = raw.get("node")
+        if not isinstance(node, str) or not node:
+            raise ValueError(f"missing node at {path}:{line_num}")
+        if node in index_by_node:
+            raise ValueError(f"duplicate node {node!r} at {path}:{line_num}")
+
+        parents = normalized_parents(raw.get("parents"))
+        record = CommitRecord(node=node, parents=parents, date=raw.get("date"))
+        index_by_node[node] = len(records)
+        parents_by_node[node] = parents
+        records.append(record)
+
+        for measurement in raw.get("perf_measurement_data", []):
+            stats["measurements_seen"] += 1
+            sample = reduce_measurement_sample(
+                measurement,
+                needed_signature_ids=needed_signature_ids,
+                require_summary_flag=True,
+            )
+            if sample is not None:
+                samples_by_revision[node].append(sample)
+                stats["summary_samples_preloaded"] += 1
+
+    logger.info(
+        "Loaded commit graph and summary samples: revisions=%d, "
+        "revisions_with_samples=%d, source=%s",
+        len(records),
+        len(samples_by_revision),
+        path,
+    )
+    logger.info("Combined per-revision scan counters: %s", dict(stats))
+    return (
+        CommitGraph(
+            records=records,
+            index_by_node=index_by_node,
+            parents_by_node=parents_by_node,
+        ),
+        dict(samples_by_revision),
+    )
+
+
 def normalized_parents(raw_parents: Any) -> list[str]:
     """Return non-null parent revisions."""
 
@@ -608,11 +678,21 @@ def write_reduced_revision_data(
     path_nodes: set[str],
     candidate_nodes: set[str],
     needed_signature_ids: set[int],
+    preloaded_summary_samples: Mapping[str, list[dict[str, Any]]] | None,
 ) -> None:
     """Write path-subset graph rows with summary measurements only."""
 
     source_revision_data = source_dir / REVISION_DATA_FILENAME
-    if source_revision_data.exists():
+    if preloaded_summary_samples is not None:
+        logger.info(
+            "Using summary measurements preloaded during the graph scan; "
+            "not rescanning source per-revision data."
+        )
+        samples_by_revision = filter_samples_to_candidate_nodes(
+            preloaded_summary_samples,
+            candidate_nodes=candidate_nodes,
+        )
+    elif source_revision_data.exists():
         logger.info(
             "Loading summary measurements from source per-revision data: %s",
             source_revision_data,
@@ -647,6 +727,28 @@ def write_reduced_revision_data(
         sum(len(samples) for samples in samples_by_revision.values()),
         output_path,
     )
+
+
+def filter_samples_to_candidate_nodes(
+    samples_by_revision: Mapping[str, list[dict[str, Any]]],
+    *,
+    candidate_nodes: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Keep preloaded samples only for candidate revisions."""
+
+    filtered = {
+        revision: samples
+        for revision, samples in samples_by_revision.items()
+        if revision in candidate_nodes
+    }
+    logger.info(
+        "Filtered preloaded summary samples to candidates: before_revisions=%d, "
+        "after_revisions=%d, after_samples=%d",
+        len(samples_by_revision),
+        len(filtered),
+        sum(len(samples) for samples in filtered.values()),
+    )
+    return filtered
 
 
 def load_summary_samples_from_revision_data(

@@ -142,9 +142,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logger.info("Step 2/7: Loading regression rows.")
     regressions = load_regressions(args.regressions)
+    needed_signatures = {regression.signature_id for regression in regressions}
 
     logger.info("Step 3/7: Loading commit graph.")
-    commit_graph = load_commit_graph(args.commits)
+    preloaded_measurements = None
+    if same_path(args.commits, args.revision_data):
+        logger.info(
+            "Revision data is also the commit graph input; scanning it once "
+            "for graph fields and needed summary measurements."
+        )
+        commit_graph, preloaded_measurements = (
+            load_commit_graph_and_measurements(
+                args.revision_data,
+                needed_signatures=needed_signatures,
+            )
+        )
+    else:
+        commit_graph = load_commit_graph(args.commits)
 
     logger.info("Step 4/7: Building candidate revision paths.")
     paths_by_regression_id, path_stats = build_candidate_paths(
@@ -158,7 +172,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path in paths_by_regression_id.values()
         for revision in path.candidate_revisions
     }
-    needed_signatures = {regression.signature_id for regression in regressions}
     logger.info(
         "Candidate path result: regressions=%d, paths=%d, "
         "candidate_revisions=%d, signatures=%d",
@@ -171,11 +184,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info("Candidate path counters: %s", dict(sorted(path_stats.items())))
 
     logger.info("Step 5/7: Loading summary measurements for candidate paths.")
-    measurements = load_measurements(
-        args.revision_data,
-        needed_revisions=needed_revisions,
-        needed_signatures=needed_signatures,
-    )
+    if preloaded_measurements is not None:
+        logger.info(
+            "Using summary measurements preloaded during the graph scan; "
+            "not rescanning revision data."
+        )
+        measurements = filter_measurements_by_revisions(
+            preloaded_measurements,
+            needed_revisions=needed_revisions,
+        )
+    else:
+        measurements = load_measurements(
+            args.revision_data,
+            needed_revisions=needed_revisions,
+            needed_signatures=needed_signatures,
+        )
 
     logger.info("Step 6/7: Calculating and filtering oracle metrics.")
     output_rows = [
@@ -318,6 +341,12 @@ def configure_logging(log_level: str) -> None:
     )
 
 
+def same_path(left: Path, right: Path) -> bool:
+    """Return whether two path arguments refer to the same filesystem path."""
+
+    return left.resolve() == right.resolve()
+
+
 def iter_jsonl(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
     """Yield JSON objects from a JSONL file with line numbers."""
 
@@ -423,6 +452,58 @@ def load_commit_graph(path: Path) -> CommitGraph:
     return CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node)
 
 
+def load_commit_graph_and_measurements(
+    path: Path,
+    *,
+    needed_signatures: set[int],
+) -> tuple[CommitGraph, dict[tuple[str, int], MeasurementValues]]:
+    """Load graph fields and needed summary measurements in one file pass."""
+
+    index_by_node: dict[str, int] = {}
+    parents_by_node: dict[str, list[str]] = {}
+    measurements: dict[tuple[str, int], MeasurementValues] = {}
+    stats: Counter[str] = Counter()
+
+    for _, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
+        node = raw.get("node")
+        if not isinstance(node, str) or not node:
+            continue
+        if node in index_by_node:
+            raise ValueError(f"duplicate commit node in {path}: {node}")
+
+        index_by_node[node] = len(index_by_node)
+        parents = [
+            parent
+            for parent in raw.get("parents", [])
+            if isinstance(parent, str) and parent and parent != NULL_NODE
+        ]
+        parents_by_node[node] = parents
+
+        for measurement in raw.get("perf_measurement_data", []):
+            add_summary_measurement(
+                measurements,
+                node=str(node),
+                measurement=measurement,
+                needed_signatures=needed_signatures,
+                stats=stats,
+            )
+
+    logger.info(
+        "Loaded commit graph and summary measurements: revisions=%d, "
+        "parent_entries=%d, measurement_keys=%d, source=%s",
+        len(index_by_node),
+        sum(len(parents) for parents in parents_by_node.values()),
+        len(measurements),
+        path,
+    )
+    logger.info("Combined graph/measurement scan counters: %s", dict(stats))
+    return (
+        CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node),
+        measurements,
+    )
+
+
 def build_candidate_paths(
     regressions: Sequence[Regression],
     commit_graph: CommitGraph,
@@ -465,6 +546,28 @@ def build_candidate_paths(
     return paths, stats
 
 
+def filter_measurements_by_revisions(
+    measurements: Mapping[tuple[str, int], MeasurementValues],
+    *,
+    needed_revisions: set[str],
+) -> dict[tuple[str, int], MeasurementValues]:
+    """Keep preloaded measurements only for candidate revisions."""
+
+    filtered = {
+        key: values
+        for key, values in measurements.items()
+        if key[0] in needed_revisions
+    }
+    logger.info(
+        "Filtered preloaded measurements to candidate revisions: "
+        "before_keys=%d, after_keys=%d, after_values=%d",
+        len(measurements),
+        len(filtered),
+        sum(len(values.summary) for values in filtered.values()),
+    )
+    return filtered
+
+
 def load_measurements(
     path: Path,
     *,
@@ -487,31 +590,13 @@ def load_measurements(
         stats["candidate_revision_rows"] += 1
 
         for measurement in raw.get("perf_measurement_data", []):
-            stats["measurements_seen"] += 1
-            if not isinstance(measurement, Mapping):
-                stats["measurement_not_object"] += 1
-                continue
-            if measurement.get("replicate") is not False:
-                stats["measurement_not_summary"] += 1
-                continue
-            try:
-                signature_id = int(measurement["signature_id"])
-            except (KeyError, TypeError, ValueError):
-                stats["measurement_bad_signature"] += 1
-                continue
-            if signature_id not in needed_signatures:
-                stats["measurement_unneeded_signature"] += 1
-                continue
-
-            try:
-                value = float(measurement["value"])
-            except (KeyError, TypeError, ValueError):
-                stats["measurement_bad_value"] += 1
-                continue
-
-            values = measurements.setdefault((str(node), signature_id), MeasurementValues())
-            values.summary.append(value)
-            stats["summary_values_loaded"] += 1
+            add_summary_measurement(
+                measurements,
+                node=str(node),
+                measurement=measurement,
+                needed_signatures=needed_signatures,
+                stats=stats,
+            )
 
     logger.info(
         "Loaded measurements: keys=%d, stats=%s",
@@ -519,6 +604,43 @@ def load_measurements(
         dict(sorted(stats.items())),
     )
     return measurements
+
+
+def add_summary_measurement(
+    measurements: dict[tuple[str, int], MeasurementValues],
+    *,
+    node: str,
+    measurement: Any,
+    needed_signatures: set[int],
+    stats: Counter[str],
+) -> None:
+    """Add one summary measurement if it belongs to a needed signature."""
+
+    stats["measurements_seen"] += 1
+    if not isinstance(measurement, Mapping):
+        stats["measurement_not_object"] += 1
+        return
+    if measurement.get("replicate") is not False:
+        stats["measurement_not_summary"] += 1
+        return
+    try:
+        signature_id = int(measurement["signature_id"])
+    except (KeyError, TypeError, ValueError):
+        stats["measurement_bad_signature"] += 1
+        return
+    if signature_id not in needed_signatures:
+        stats["measurement_unneeded_signature"] += 1
+        return
+
+    try:
+        value = float(measurement["value"])
+    except (KeyError, TypeError, ValueError):
+        stats["measurement_bad_value"] += 1
+        return
+
+    values = measurements.setdefault((node, signature_id), MeasurementValues())
+    values.summary.append(value)
+    stats["summary_values_loaded"] += 1
 
 
 def calculate_regression_metrics(
