@@ -2164,22 +2164,33 @@ def load_risk_scores(path: Path) -> dict[str, float]:
 
 
 def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:
-    """Load per-regression summary oracle accuracies."""
+    """Load per-regression summary oracle accuracies.
+
+    Rows with null/missing accuracy are intentionally skipped so the regression
+    split filter treats them as not runnable.
+    """
 
     metrics_by_regression_id: dict[int, OracleMetrics] = {}
+    seen_regression_ids: set[int] = set()
+    skipped_missing_accuracy = 0
     for raw in load_jsonl(path):
         regression_id = int(raw["regression_id"])
         if regression_id < 1:
             raise ValueError(
                 f"oracle metrics regression_id must be positive: {regression_id!r}"
             )
-        if regression_id in metrics_by_regression_id:
+        if regression_id in seen_regression_ids:
             raise ValueError(
                 f"duplicate oracle metrics for regression_id {regression_id}"
             )
+        seen_regression_ids.add(regression_id)
 
+        raw_accuracy = raw.get("summary_oracle_accuracy")
+        if raw_accuracy is None:
+            skipped_missing_accuracy += 1
+            continue
         summary_accuracy = parse_oracle_accuracy(
-            raw.get("summary_oracle_accuracy"),
+            raw_accuracy,
             context=f"regression_id {regression_id} summary_oracle_accuracy",
         )
         metrics_by_regression_id[regression_id] = OracleMetrics(
@@ -2187,6 +2198,11 @@ def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:
             summary_oracle_accuracy=summary_accuracy,
         )
 
+    if skipped_missing_accuracy:
+        print(
+            "oracle_metrics: "
+            f"skipped_missing_accuracy={skipped_missing_accuracy}"
+        )
     return metrics_by_regression_id
 
 

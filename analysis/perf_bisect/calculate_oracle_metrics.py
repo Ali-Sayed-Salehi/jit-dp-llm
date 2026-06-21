@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Calculate real-oracle summary measurement accuracy for perf-bisect regressions.
 
-The output contains one row per regression from the eval and final-test
-perf-bisect datasets:
+The output contains one row per scorable regression from the eval and
+final-test perf-bisect datasets:
 
   - regression_id
   - summary_oracle_accuracy
+
+Rows with no available summary measurements are excluded instead of being
+written with a null accuracy.
 
 By default, the script also writes a histogram of the oracle accuracy
 distribution beside the JSONL output.
@@ -210,14 +213,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for regression in regressions
     ]
-    output_rows, excluded_rows = exclude_low_accuracy_rows(
-        output_rows,
-        minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
+    output_rows, excluded_missing_rows, excluded_low_accuracy_rows = (
+        exclude_unusable_or_low_accuracy_rows(
+            output_rows,
+            minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
+        )
     )
     logger.info(
-        "Oracle metrics calculated: kept_rows=%d, excluded_low_accuracy=%d",
+        "Oracle metrics calculated: kept_rows=%d, "
+        "excluded_missing_accuracy=%d, excluded_low_accuracy=%d",
         len(output_rows),
-        len(excluded_rows),
+        len(excluded_missing_rows),
+        len(excluded_low_accuracy_rows),
     )
 
     logger.info("Step 7/7: Writing oracle metric outputs.")
@@ -233,7 +240,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"measurement_keys={len(measurements)}")
     for key, value in sorted(path_stats.items()):
         print(f"{key}={value}")
-    print(f"oracle_metric_rows_excluded_low_accuracy={len(excluded_rows)}")
+    print(
+        "oracle_metric_rows_excluded_missing_accuracy="
+        f"{len(excluded_missing_rows)}"
+    )
+    print(
+        "oracle_metric_rows_excluded_low_accuracy="
+        f"{len(excluded_low_accuracy_rows)}"
+    )
     for key, value in sorted(metric_stats.items()):
         print(f"{key}={value}")
     print(f"wrote {len(output_rows)} rows to {args.output}")
@@ -704,22 +718,31 @@ def accuracy(correct: int, total: int, *, smoothing_alpha: float) -> float | Non
     return (correct + smoothing_alpha) / (total + 2 * smoothing_alpha)
 
 
-def exclude_low_accuracy_rows(
+def exclude_unusable_or_low_accuracy_rows(
     rows: Sequence[dict[str, int | float | None]],
     *,
     minimum_accuracy: float,
-) -> tuple[list[dict[str, int | float | None]], list[dict[str, int | float | None]]]:
-    """Drop rows where summary oracle accuracy is below the threshold."""
+) -> tuple[
+    list[dict[str, int | float | None]],
+    list[dict[str, int | float | None]],
+    list[dict[str, int | float | None]],
+]:
+    """Drop rows without accuracy or below the accuracy threshold."""
 
     kept_rows: list[dict[str, int | float | None]] = []
-    excluded_rows: list[dict[str, int | float | None]] = []
+    excluded_missing_rows: list[dict[str, int | float | None]] = []
+    excluded_low_accuracy_rows: list[dict[str, int | float | None]] = []
     for row in rows:
         summary_accuracy = row["summary_oracle_accuracy"]
-        should_exclude = (
-            summary_accuracy is not None and summary_accuracy < minimum_accuracy
-        )
-        if should_exclude:
-            excluded_rows.append(row)
+        if summary_accuracy is None:
+            excluded_missing_rows.append(row)
+            logger.warning(
+                "Excluding oracle metric row for regression_id=%s: "
+                "no summary measurements available.",
+                row["regression_id"],
+            )
+        elif summary_accuracy < minimum_accuracy:
+            excluded_low_accuracy_rows.append(row)
             logger.warning(
                 "Excluding oracle metric row for regression_id=%s: "
                 "summary_oracle_accuracy=%s, minimum_accuracy=%s.",
@@ -729,7 +752,7 @@ def exclude_low_accuracy_rows(
             )
         else:
             kept_rows.append(row)
-    return kept_rows, excluded_rows
+    return kept_rows, excluded_missing_rows, excluded_low_accuracy_rows
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
@@ -845,14 +868,14 @@ def load_matplotlib() -> Any:
 
 
 def summarize_output_rows(rows: Sequence[Mapping[str, Any]]) -> Counter[str]:
-    """Summarize nullable metric counts for logging."""
+    """Summarize metric counts for logging."""
 
     stats: Counter[str] = Counter()
     for row in rows:
         if row["summary_oracle_accuracy"] is None:
             stats["summary_accuracy_null"] += 1
-        else:
-            stats["summary_accuracy_present"] += 1
+            continue
+        stats["summary_accuracy_present"] += 1
     return stats
 
 
