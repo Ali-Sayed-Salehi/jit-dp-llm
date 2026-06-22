@@ -166,7 +166,7 @@ echo "Running script ..."
 # --signature-info /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_sig_perf_data_info.jsonl \
 # --revision-data /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_revision_perf_data.jsonl \
 # --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
-# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results \
+# --output-dir /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/results/1w_50t_332211 \
 # --workers 1 \
 # --oracles SummaryComparison \
 # --localizers Backfill BackfillWithRepeat ProbabilisticBisection_CumulativeRiskMedian_UniformPrior ProbabilisticBisection_PosteriorMedian_RiskAwarePrior ProbabilisticBisection_PosteriorMedian_UniformPrior ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior ProbabilisticMultiSection_PosteriorQuantile_UniformPrior RiskWeightedBisection RiskWeightedMultisection StandardMidpointBisection StandardMidpointMultisection \
@@ -175,17 +175,12 @@ echo "Running script ..."
 # --optuna-seed 42 \
 # --optuna-trials 50 \
 # --pareto-selection formula \
-# --pareto-success-tolerance 1.0 \
-# --success-rate-vote-weight 4 \
-# --mean-elapsed-vote-weight 2 \
-# --mean-test-runs-vote-weight 1 \
-# --max-elapsed-vote-weight 1 \
-# --max-test-runs-vote-weight 0 \
-# --formula-success-weight 4 \
+# --pareto-success-tolerance 3.0 \
+# --formula-success-weight 3 \
 # --formula-mean-elapsed-weight 2 \
-# --formula-mean-test-runs-weight 1 \
+# --formula-mean-test-runs-weight 2 \
 # --formula-max-elapsed-weight 1 \
-# --formula-max-test-runs-weight 0 \
+# --formula-max-test-runs-weight 1 \
 # --midpoint-retrigger-count-max 100 \
 # --multisection-section-count-min 3 \
 # --multisection-section-count-max 32 \
@@ -196,7 +191,7 @@ echo "Running script ..."
 # --pba-confidence-threshold-max 0.99 \
 # --pba-repeat-count-max 80 \
 # --pba-max-test-runs-min 20 \
-# --pba-max-test-runs-max 320
+# --pba-max-test-runs-max 400
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \
