@@ -125,6 +125,13 @@ RISK_SCORE_LOCALIZERS = {
     "RiskWeightedBisection",
     "RiskWeightedMultisection",
 }
+METRIC_VOTE_WEIGHT_ARGS = {
+    "success_rate_percent": "success_rate_vote_weight",
+    "mean_elapsed_hours": "mean_elapsed_vote_weight",
+    "mean_test_runs": "mean_test_runs_vote_weight",
+    "max_elapsed_hours": "max_elapsed_vote_weight",
+    "max_test_runs": "max_test_runs_vote_weight",
+}
 BEST_COMBO_METRIC_SPECS = (
     {
         "field": "best_combo_by_success_rate",
@@ -251,6 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pba_max_test_runs=args.pba_max_test_runs,
         pba_risk_prior_uniform_weight=args.pba_risk_prior_uniform_weight,
     )
+    metric_vote_specs = metric_vote_specs_from_args(args)
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
@@ -335,9 +343,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {"metric": "mean_test_runs", "direction": "minimize"},
                 {"metric": "success_rate_percent", "direction": "maximize"},
             ],
+            "pareto_trial_vote_weights": metric_vote_weights_to_json(
+                metric_vote_specs,
+            ),
             "selection": (
-                "highest success_rate_percent on the Pareto frontier; ties "
-                "minimize mean_test_runs, then mean_elapsed_hours"
+                "weighted metric voting on the Pareto frontier; ties use "
+                "success_rate_percent, mean_elapsed_hours, mean_test_runs, "
+                "max_elapsed_hours, max_test_runs, then Optuna trial number"
             ),
         }
         combo_parameters = optimize_parameters_on_eval(
@@ -375,6 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             optuna_trials=args.optuna_trials,
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
+            metric_vote_specs=metric_vote_specs,
         )
 
     for dataset_name in dataset_names:
@@ -398,6 +411,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             combo_parameters=combo_parameters,
             optimization_settings=optimization_settings,
             random_seed=args.random_seed,
+            metric_vote_specs=metric_vote_specs,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
         details_output_path = (
@@ -618,6 +632,51 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--success-rate-vote-weight",
+        type=int,
+        default=4,
+        help=(
+            "Vote weight for success_rate_percent when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--mean-elapsed-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for mean_elapsed_hours when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--mean-test-runs-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for mean_test_runs when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--max-elapsed-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for max_elapsed_hours when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--max-test-runs-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for max_test_runs when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
         "--backfill-retrigger-count-min",
         type=int,
         default=DEFAULT_BACKFILL_RETRIGGER_COUNT_MIN,
@@ -826,6 +885,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.optuna_seed = args.random_seed
     elif args.optuna_trials > 0 and args.optuna_seed != args.random_seed:
         parser.error("--optuna-seed must match --random-seed when Optuna is enabled")
+    validate_metric_vote_weights(args, parser)
     if args.ignore_risk:
         localizers_without_risk = [
             localizer
@@ -847,6 +907,50 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     else:
         args.ignored_risk_localizers = []
     return args
+
+
+def validate_metric_vote_weights(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Validate metric vote weights used by Optuna and summary selection."""
+
+    total_weight = 0
+    for arg_name in METRIC_VOTE_WEIGHT_ARGS.values():
+        weight = int(getattr(args, arg_name))
+        if weight < 0:
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be non-negative")
+        total_weight += weight
+    if total_weight <= 0:
+        parser.error("at least one metric vote weight must be positive")
+
+
+def metric_vote_specs_from_args(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], ...]:
+    """Return metric voting specs with CLI-configured vote weights."""
+
+    return tuple(
+        {
+            **spec,
+            "vote_weight": int(
+                getattr(args, METRIC_VOTE_WEIGHT_ARGS[str(spec["metric"])])
+            ),
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def metric_vote_weights_to_json(
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Serialize metric vote weights keyed by metric name."""
+
+    return {
+        str(spec["metric"]): int(spec["vote_weight"])
+        for spec in metric_vote_specs
+    }
 
 
 def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
@@ -1113,6 +1217,7 @@ def run_dataset(
     combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
     optimization_settings: Mapping[str, Any] | None = None,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
 
@@ -1213,7 +1318,10 @@ def run_dataset(
         base_output["inputs"]["risk_scores"] = str(risk_scores_path)
     if optimization_settings is not None:
         base_output["settings"]["optimization"] = dict(optimization_settings)
-    best_combo_fields = compute_best_combo_fields(summary_runs)
+    best_combo_fields = compute_best_combo_fields(
+        summary_runs,
+        metric_vote_specs=metric_vote_specs,
+    )
     return (
         {**base_output, **best_combo_fields, "runs": summary_runs},
         {**base_output, **best_combo_fields, "runs": detail_runs},
@@ -1237,7 +1345,11 @@ def optimized_parameter_values(
     }
 
 
-def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def compute_best_combo_fields(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
+) -> dict[str, Any]:
     """Compute top-level best-combo selections from aggregate run metrics."""
 
     if not runs:
@@ -1246,13 +1358,13 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
     best_fields: dict[str, Any] = {
         "best_combo_vote_weights": {
             str(spec["metric"]): int(spec["vote_weight"])
-            for spec in BEST_COMBO_METRIC_SPECS
+            for spec in metric_vote_specs
         },
     }
     votes_by_combo: Counter[tuple[str, str]] = Counter()
     metric_votes_by_combo: dict[tuple[str, str], dict[str, int]] = {}
 
-    for spec in BEST_COMBO_METRIC_SPECS:
+    for spec in metric_vote_specs:
         metric = str(spec["metric"])
         best_run = best_run_for_metric(
             runs,
@@ -1261,8 +1373,9 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
         )
         vote_weight = int(spec["vote_weight"])
         combo_key = run_combo_key(best_run)
-        votes_by_combo[combo_key] += vote_weight
-        metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
+        if vote_weight > 0:
+            votes_by_combo[combo_key] += vote_weight
+            metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
         best_fields[str(spec["field"])] = combo_selection_to_json(best_run)
 
     best_overall = min(
@@ -1533,6 +1646,7 @@ def optimize_parameters_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[str, str], SimulationParameters]:
     """Tune algorithm parameters on the eval split for every selected combo."""
 
@@ -1576,6 +1690,7 @@ def optimize_parameters_on_eval(
                 optuna_trials=optuna_trials,
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
+                metric_vote_specs=metric_vote_specs,
             )
             combo_parameters[combo_key] = parameters
             print(
@@ -1618,6 +1733,7 @@ def optimize_combo_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
 ) -> SimulationParameters:
     """Run one multi-objective Optuna study on eval for one localizer/oracle pair."""
 
@@ -1696,7 +1812,10 @@ def optimize_combo_on_eval(
             f"Optuna produced no Pareto-optimal trials for {localizer_name}/{oracle_name}."
         )
 
-    selected_trial = select_pareto_trial(study.best_trials)
+    selected_trial = select_pareto_trial(
+        study.best_trials,
+        metric_vote_specs=metric_vote_specs,
+    )
     selected_parameters = parameters_from_trial(selected_trial)
     return selected_parameters
 
@@ -1928,18 +2047,117 @@ def finite_objective_value(value: Any) -> float:
     return objective_value
 
 
-def select_pareto_trial(trials: Sequence[Any]) -> Any:
-    """Choose the best Pareto trial by success rate, then cost tie-breakers."""
+def finite_metric_value(value: Any) -> float | None:
+    """Return a finite metric value, or None for missing/non-finite inputs."""
 
-    return max(
+    if value is None:
+        return None
+    metric_value = float(value)
+    return metric_value if math.isfinite(metric_value) else None
+
+
+def select_pareto_trial(
+    trials: Sequence[Any],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
+) -> Any:
+    """Choose a Pareto trial by weighted metric votes, then deterministic ties."""
+
+    if not trials:
+        raise ValueError("select_pareto_trial requires at least one trial")
+
+    votes_by_trial: Counter[int] = Counter()
+    for spec in metric_vote_specs:
+        vote_weight = int(spec["vote_weight"])
+        if vote_weight <= 0:
+            continue
+        best_trial = best_pareto_trial_for_metric(
+            trials,
+            metric=str(spec["metric"]),
+            direction=str(spec["direction"]),
+        )
+        votes_by_trial[int(best_trial.number)] += vote_weight
+
+    return min(
         trials,
         key=lambda trial: (
-            float(trial.values[2]),
-            -float(trial.values[1]),
-            -float(trial.values[0]),
-            -int(trial.number),
+            -votes_by_trial[int(trial.number)],
+            *pareto_trial_preference_sort_key(trial),
         ),
     )
+
+
+def best_pareto_trial_for_metric(
+    trials: Sequence[Any],
+    *,
+    metric: str,
+    direction: str,
+) -> Any:
+    """Return the best Pareto trial for one aggregate metric."""
+
+    return min(
+        trials,
+        key=lambda trial: (
+            trial_metric_sort_value(
+                trial,
+                metric=metric,
+                direction=direction,
+            ),
+            *pareto_trial_preference_sort_key(trial),
+        ),
+    )
+
+
+def pareto_trial_preference_sort_key(trial: Any) -> tuple[Any, ...]:
+    """Tie-break Pareto trial votes by the canonical metric preference order."""
+
+    return (
+        trial_metric_sort_value(
+            trial,
+            metric="success_rate_percent",
+            direction="maximize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="mean_elapsed_hours",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="mean_test_runs",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="max_elapsed_hours",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="max_test_runs",
+            direction="minimize",
+        ),
+        int(trial.number),
+    )
+
+
+def trial_metric_sort_value(
+    trial: Any,
+    *,
+    metric: str,
+    direction: str,
+) -> float:
+    """Return a sortable metric value from an Optuna trial."""
+
+    raw_value = trial.user_attrs.get("metrics", {}).get(metric)
+    value = finite_metric_value(raw_value)
+    if value is None:
+        return math.inf
+    if direction == "maximize":
+        return -value
+    if direction == "minimize":
+        return value
+    raise ValueError(f"unknown metric direction: {direction!r}")
 
 
 def parameters_from_trial(trial: Any) -> SimulationParameters:

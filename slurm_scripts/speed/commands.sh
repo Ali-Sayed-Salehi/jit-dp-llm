@@ -174,6 +174,11 @@ echo "Running script ..."
 # --random-seed 42 \
 # --optuna-seed 42 \
 # --optuna-trials 50 \
+# --success-rate-vote-weight 4 \
+# --mean-elapsed-vote-weight 2 \
+# --mean-test-runs-vote-weight 1 \
+# --max-elapsed-vote-weight 1 \
+# --max-test-runs-vote-weight 0 \
 # --midpoint-retrigger-count-max 100 \
 # --multisection-section-count-min 3 \
 # --multisection-section-count-max 32 \
