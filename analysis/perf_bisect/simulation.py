@@ -132,6 +132,20 @@ METRIC_VOTE_WEIGHT_ARGS = {
     "max_elapsed_hours": "max_elapsed_vote_weight",
     "max_test_runs": "max_test_runs_vote_weight",
 }
+METRIC_FORMULA_WEIGHT_ARGS = {
+    "success_rate_percent": "formula_success_weight",
+    "mean_elapsed_hours": "formula_mean_elapsed_weight",
+    "mean_test_runs": "formula_mean_test_runs_weight",
+    "max_elapsed_hours": "formula_max_elapsed_weight",
+    "max_test_runs": "formula_max_test_runs_weight",
+}
+DEFAULT_FORMULA_METRIC_WEIGHTS = {
+    "success_rate_percent": 4.0,
+    "mean_elapsed_hours": 2.0,
+    "mean_test_runs": 1.0,
+    "max_elapsed_hours": 1.0,
+    "max_test_runs": 0.0,
+}
 BEST_COMBO_METRIC_SPECS = (
     {
         "field": "best_combo_by_success_rate",
@@ -259,6 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pba_risk_prior_uniform_weight=args.pba_risk_prior_uniform_weight,
     )
     metric_vote_specs = metric_vote_specs_from_args(args)
+    metric_formula_specs = metric_formula_specs_from_args(args)
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
@@ -346,11 +361,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pareto_trial_vote_weights": metric_vote_weights_to_json(
                 metric_vote_specs,
             ),
-            "selection": (
-                "weighted metric voting on the Pareto frontier; ties use "
-                "success_rate_percent, mean_elapsed_hours, mean_test_runs, "
-                "max_elapsed_hours, max_test_runs, then Optuna trial number"
+            "pareto_trial_formula_weights": metric_formula_weights_to_json(
+                metric_formula_specs,
             ),
+            "pareto_selection": args.pareto_selection,
+            "pareto_success_tolerance": args.pareto_success_tolerance,
+            "selection": pareto_selection_description(args.pareto_selection),
         }
         combo_parameters = optimize_parameters_on_eval(
             regressions=regressions_by_dataset["eval"],
@@ -388,6 +404,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
             metric_vote_specs=metric_vote_specs,
+            metric_formula_specs=metric_formula_specs,
+            pareto_selection=args.pareto_selection,
+            pareto_success_tolerance=args.pareto_success_tolerance,
         )
 
     for dataset_name in dataset_names:
@@ -632,6 +651,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pareto-selection",
+        choices=("voting", "formula"),
+        default="voting",
+        help=(
+            "How to choose one parameter set from Optuna's Pareto frontier. "
+            "Voting uses metric-specific winners; formula uses normalized "
+            "weighted utility after applying --pareto-success-tolerance."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-success-tolerance",
+        type=float,
+        default=1.0,
+        help=(
+            "Formula mode only: consider Pareto trials whose success rate is "
+            "within this many percentage points of the best Pareto success "
+            "rate before scoring normalized metric utility."
+        ),
+    )
+    parser.add_argument(
         "--success-rate-vote-weight",
         type=int,
         default=4,
@@ -674,6 +713,51 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Vote weight for max_test_runs when selecting Optuna "
             "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--formula-success-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["success_rate_percent"],
+        help=(
+            "Formula mode only: normalized utility weight for "
+            "success_rate_percent."
+        ),
+    )
+    parser.add_argument(
+        "--formula-mean-elapsed-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["mean_elapsed_hours"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "mean_elapsed_hours."
+        ),
+    )
+    parser.add_argument(
+        "--formula-mean-test-runs-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["mean_test_runs"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "mean_test_runs."
+        ),
+    )
+    parser.add_argument(
+        "--formula-max-elapsed-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["max_elapsed_hours"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "max_elapsed_hours."
+        ),
+    )
+    parser.add_argument(
+        "--formula-max-test-runs-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["max_test_runs"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "max_test_runs."
         ),
     )
     parser.add_argument(
@@ -886,6 +970,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     elif args.optuna_trials > 0 and args.optuna_seed != args.random_seed:
         parser.error("--optuna-seed must match --random-seed when Optuna is enabled")
     validate_metric_vote_weights(args, parser)
+    validate_metric_formula_weights(args, parser)
     if args.ignore_risk:
         localizers_without_risk = [
             localizer
@@ -926,6 +1011,32 @@ def validate_metric_vote_weights(
         parser.error("at least one metric vote weight must be positive")
 
 
+def validate_metric_formula_weights(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Validate formula selector weights and success tolerance."""
+
+    if args.pareto_success_tolerance < 0.0:
+        parser.error("--pareto-success-tolerance must be non-negative")
+
+    total_weight = 0.0
+    for arg_name in METRIC_FORMULA_WEIGHT_ARGS.values():
+        weight = float(getattr(args, arg_name))
+        if not math.isfinite(weight):
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be finite")
+        if weight < 0.0:
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be non-negative")
+        total_weight += weight
+    if args.pareto_selection == "formula" and total_weight <= 0.0:
+        parser.error(
+            "at least one formula metric weight must be positive when "
+            "--pareto-selection=formula"
+        )
+
+
 def metric_vote_specs_from_args(
     args: argparse.Namespace,
 ) -> tuple[dict[str, Any], ...]:
@@ -951,6 +1062,66 @@ def metric_vote_weights_to_json(
         str(spec["metric"]): int(spec["vote_weight"])
         for spec in metric_vote_specs
     }
+
+
+def metric_formula_specs_from_args(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], ...]:
+    """Return formula metric specs with CLI-configured weights."""
+
+    return tuple(
+        {
+            "metric": str(spec["metric"]),
+            "direction": str(spec["direction"]),
+            "formula_weight": float(
+                getattr(args, METRIC_FORMULA_WEIGHT_ARGS[str(spec["metric"])])
+            ),
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def metric_formula_weights_to_json(
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    """Serialize formula weights keyed by metric name."""
+
+    return {
+        str(spec["metric"]): float(spec["formula_weight"])
+        for spec in metric_formula_specs
+    }
+
+
+def default_metric_formula_specs() -> tuple[dict[str, Any], ...]:
+    """Return default formula metric specs independent of parsed CLI args."""
+
+    return tuple(
+        {
+            "metric": str(spec["metric"]),
+            "direction": str(spec["direction"]),
+            "formula_weight": DEFAULT_FORMULA_METRIC_WEIGHTS[str(spec["metric"])],
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def pareto_selection_description(selection_mode: str) -> str:
+    """Return a human-readable description for Pareto trial selection."""
+
+    if selection_mode == "voting":
+        return (
+            "weighted metric voting on the Pareto frontier; ties use "
+            "success_rate_percent, mean_elapsed_hours, mean_test_runs, "
+            "max_elapsed_hours, max_test_runs, then Optuna trial number"
+        )
+    if selection_mode == "formula":
+        return (
+            "normalized weighted utility on Pareto trials within "
+            "pareto_success_tolerance of the best success_rate_percent; ties "
+            "use success_rate_percent, mean_elapsed_hours, mean_test_runs, "
+            "max_elapsed_hours, max_test_runs, then Optuna trial number"
+        )
+    raise ValueError(f"unknown Pareto selection mode: {selection_mode!r}")
 
 
 def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
@@ -1647,6 +1818,9 @@ def optimize_parameters_on_eval(
     optuna_seed: int,
     random_seed: int | None,
     metric_vote_specs: Sequence[Mapping[str, Any]],
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    pareto_selection: str,
+    pareto_success_tolerance: float,
 ) -> dict[tuple[str, str], SimulationParameters]:
     """Tune algorithm parameters on the eval split for every selected combo."""
 
@@ -1691,6 +1865,9 @@ def optimize_parameters_on_eval(
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
                 metric_vote_specs=metric_vote_specs,
+                metric_formula_specs=metric_formula_specs,
+                pareto_selection=pareto_selection,
+                pareto_success_tolerance=pareto_success_tolerance,
             )
             combo_parameters[combo_key] = parameters
             print(
@@ -1734,6 +1911,9 @@ def optimize_combo_on_eval(
     optuna_seed: int,
     random_seed: int | None,
     metric_vote_specs: Sequence[Mapping[str, Any]],
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    pareto_selection: str,
+    pareto_success_tolerance: float,
 ) -> SimulationParameters:
     """Run one multi-objective Optuna study on eval for one localizer/oracle pair."""
 
@@ -1815,6 +1995,9 @@ def optimize_combo_on_eval(
     selected_trial = select_pareto_trial(
         study.best_trials,
         metric_vote_specs=metric_vote_specs,
+        metric_formula_specs=metric_formula_specs,
+        selection_mode=pareto_selection,
+        success_tolerance=pareto_success_tolerance,
     )
     selected_parameters = parameters_from_trial(selected_trial)
     return selected_parameters
@@ -2060,11 +2243,36 @@ def select_pareto_trial(
     trials: Sequence[Any],
     *,
     metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
+    metric_formula_specs: Sequence[Mapping[str, Any]] | None = None,
+    selection_mode: str = "voting",
+    success_tolerance: float = 1.0,
 ) -> Any:
-    """Choose a Pareto trial by weighted metric votes, then deterministic ties."""
+    """Choose a Pareto trial by the configured selection mode."""
 
     if not trials:
         raise ValueError("select_pareto_trial requires at least one trial")
+    if selection_mode == "voting":
+        return select_pareto_trial_by_voting(
+            trials,
+            metric_vote_specs=metric_vote_specs,
+        )
+    if selection_mode == "formula":
+        return select_pareto_trial_by_formula(
+            trials,
+            metric_formula_specs=(
+                metric_formula_specs or default_metric_formula_specs()
+            ),
+            success_tolerance=success_tolerance,
+        )
+    raise ValueError(f"unknown Pareto selection mode: {selection_mode!r}")
+
+
+def select_pareto_trial_by_voting(
+    trials: Sequence[Any],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+) -> Any:
+    """Choose a Pareto trial by weighted metric votes, then deterministic ties."""
 
     votes_by_trial: Counter[int] = Counter()
     for spec in metric_vote_specs:
@@ -2085,6 +2293,146 @@ def select_pareto_trial(
             *pareto_trial_preference_sort_key(trial),
         ),
     )
+
+
+def select_pareto_trial_by_formula(
+    trials: Sequence[Any],
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    success_tolerance: float,
+) -> Any:
+    """Choose a Pareto trial by normalized weighted utility."""
+
+    candidate_trials = pareto_trials_within_success_tolerance(
+        trials,
+        success_tolerance=success_tolerance,
+    )
+    metric_ranges = pareto_metric_ranges(
+        trials,
+        metric_formula_specs=metric_formula_specs,
+    )
+    return min(
+        candidate_trials,
+        key=lambda trial: (
+            -pareto_formula_score(
+                trial,
+                metric_formula_specs=metric_formula_specs,
+                metric_ranges=metric_ranges,
+            ),
+            *pareto_trial_preference_sort_key(trial),
+        ),
+    )
+
+
+def pareto_trials_within_success_tolerance(
+    trials: Sequence[Any],
+    *,
+    success_tolerance: float,
+) -> list[Any]:
+    """Return Pareto trials close enough to the best success rate."""
+
+    successes = [
+        success
+        for trial in trials
+        if (
+            success := finite_metric_value(
+                trial.user_attrs.get("metrics", {}).get("success_rate_percent")
+            )
+        )
+        is not None
+    ]
+    if not successes:
+        return list(trials)
+
+    threshold = max(successes) - float(success_tolerance)
+    candidates = [
+        trial
+        for trial in trials
+        if (
+            success := finite_metric_value(
+                trial.user_attrs.get("metrics", {}).get("success_rate_percent")
+            )
+        )
+        is not None
+        and success >= threshold
+    ]
+    return candidates or list(trials)
+
+
+def pareto_metric_ranges(
+    trials: Sequence[Any],
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[float, float] | None]:
+    """Return finite min/max metric ranges across the full Pareto frontier."""
+
+    metric_ranges: dict[str, tuple[float, float] | None] = {}
+    for spec in metric_formula_specs:
+        metric = str(spec["metric"])
+        values = [
+            value
+            for trial in trials
+            if (
+                value := finite_metric_value(
+                    trial.user_attrs.get("metrics", {}).get(metric)
+                )
+            )
+            is not None
+        ]
+        metric_ranges[metric] = (min(values), max(values)) if values else None
+    return metric_ranges
+
+
+def pareto_formula_score(
+    trial: Any,
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    metric_ranges: Mapping[str, tuple[float, float] | None],
+) -> float:
+    """Return normalized weighted utility for one Pareto trial."""
+
+    score = 0.0
+    for spec in metric_formula_specs:
+        weight = float(spec["formula_weight"])
+        if weight <= 0.0:
+            continue
+
+        direction = str(spec["direction"])
+        metric = str(spec["metric"])
+        normalized_value = normalized_trial_metric_value(
+            trial,
+            metric=metric,
+            direction=direction,
+            metric_range=metric_ranges.get(metric),
+        )
+        if direction == "maximize":
+            score += weight * normalized_value
+        elif direction == "minimize":
+            score -= weight * normalized_value
+        else:
+            raise ValueError(f"unknown metric direction: {direction!r}")
+    return score
+
+
+def normalized_trial_metric_value(
+    trial: Any,
+    *,
+    metric: str,
+    direction: str,
+    metric_range: tuple[float, float] | None,
+) -> float:
+    """Return a [0, 1] metric value normalized across the Pareto frontier."""
+
+    value = finite_metric_value(trial.user_attrs.get("metrics", {}).get(metric))
+    if value is None:
+        return 0.0 if direction == "maximize" else 1.0
+    if metric_range is None:
+        return 0.0
+
+    min_value, max_value = metric_range
+    if max_value == min_value:
+        return 0.0
+    return (value - min_value) / (max_value - min_value)
 
 
 def best_pareto_trial_for_metric(
