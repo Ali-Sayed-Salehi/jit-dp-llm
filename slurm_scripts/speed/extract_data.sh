@@ -149,6 +149,7 @@ echo "running the data extraction script . . ."
 # Count summary perf jobs per regression, filtered to oracle-metric rows:
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/treeherder/count_per_regression_test_jobs.py \
 # --oracle-metrics /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl \
+# --one-signature-per-alert \
 # --log-level INFO
 
 

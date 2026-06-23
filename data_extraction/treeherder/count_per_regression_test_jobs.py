@@ -9,8 +9,9 @@ matches the regression's failing performance signature.
 
 The default inputs are the Mozilla perf-bisect v2 regression files and the
 reduced v2 per-revision performance cache. Output rows are filtered to
-regressions present in the reduced v2 oracle-metrics JSONL. The default output
-is:
+regressions present in the reduced v2 oracle-metrics JSONL. With
+`--one-signature-per-alert`, only the regression/signature with the largest
+summary job count is kept for each alert summary. The default output is:
 
   datasets/mozilla_perf_bisect_v2/per_regression_test_job_counts.jsonl
 """
@@ -113,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger.info("Revision data: %s", args.revision_data)
     logger.info("Commit graph: %s", args.commits)
     logger.info("Oracle metrics allowlist: %s", args.oracle_metrics)
+    logger.info("One signature per alert: %s", args.one_signature_per_alert)
     logger.info("Output: %s", args.output)
 
     logger.info("Step 1/6: Loading oracle-metric regression allowlist.")
@@ -153,6 +155,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary_counts_by_revision_signature=summary_counts_by_revision_signature,
     )
     logger.info("Regression interval counters: %s", dict(sorted(row_stats.items())))
+
+    if args.one_signature_per_alert:
+        output_rows, selection_stats = select_one_signature_per_alert(output_rows)
+        logger.info(
+            "One-signature-per-alert counters: %s",
+            dict(sorted(selection_stats.items())),
+        )
 
     logger.info("Step 5/6: Writing output JSONL.")
     write_jsonl(args.output, output_rows)
@@ -208,6 +217,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_OUTPUT,
         help="Output JSONL path.",
+    )
+    parser.add_argument(
+        "--one-signature-per-alert",
+        action="store_true",
+        help=(
+            "For each alert_summary_id, keep only the regression/signature with "
+            "the highest summary_test_job_count."
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -623,6 +640,60 @@ def build_output_rows(
         )
 
     return rows, stats
+
+
+def select_one_signature_per_alert(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Keep only the highest-summary-job regression for each alert summary."""
+
+    grouped_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        alert_summary_id = row.get("alert_summary_id")
+        if alert_summary_id is None:
+            key = ("missing", int(row["regression_id"]))
+        else:
+            key = ("alert", int(alert_summary_id))
+        grouped_rows.setdefault(key, []).append(row)
+
+    selected_rows: list[dict[str, Any]] = []
+    stats: Counter[str] = Counter()
+    stats["rows_before_one_signature_per_alert"] = len(rows)
+    stats["alert_summary_groups"] = sum(1 for key in grouped_rows if key[0] == "alert")
+    stats["missing_alert_summary_groups"] = sum(
+        1 for key in grouped_rows if key[0] == "missing"
+    )
+
+    for key, group in grouped_rows.items():
+        if len(group) > 1:
+            stats["multi_regression_alert_summary_groups"] += 1
+            stats["rows_removed_by_one_signature_per_alert"] += len(group) - 1
+            max_count = max(summary_job_count_for_sort(row) for row in group)
+            if sum(summary_job_count_for_sort(row) == max_count for row in group) > 1:
+                stats["selection_ties_broken_by_regression_id"] += 1
+
+        selected_row = min(
+            group,
+            key=lambda row: (
+                -summary_job_count_for_sort(row),
+                int(row["regression_id"]),
+            ),
+        )
+        selected_rows.append(selected_row)
+
+    stats["rows_after_one_signature_per_alert"] = len(selected_rows)
+    return selected_rows, stats
+
+
+def summary_job_count_for_sort(row: Mapping[str, Any]) -> int:
+    """Return a sortable integer summary job count for one output row."""
+
+    value = row.get("summary_test_job_count")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return -1
+    if not math.isfinite(float(value)):
+        return -1
+    return int(value)
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
