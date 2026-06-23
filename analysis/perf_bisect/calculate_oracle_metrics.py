@@ -10,8 +10,8 @@ final-test perf-bisect datasets:
 Rows with no available summary measurements are excluded instead of being
 written with a null accuracy.
 
-By default, the script also writes a histogram of the oracle accuracy
-distribution beside the JSONL output.
+By default, the script also writes a smoothed distribution plot of the oracle
+accuracy distribution beside the JSONL output.
 
 Candidate revisions are found from the Mercurial parent graph in the reduced
 per_revision_perf_data.jsonl by default. The known-good revision is excluded,
@@ -43,6 +43,8 @@ DEFAULT_REGRESSION_INPUTS = (
 DEFAULT_OUTPUT = DEFAULT_DATA_DIR / "per_regression_oracle_metrics_v2.jsonl"
 DEFAULT_DISTRIBUTION_PLOT_DPI = 200
 DEFAULT_DISTRIBUTION_PLOT_FIGSIZE = (6.0, 3.6)
+DEFAULT_DISTRIBUTION_CURVE_POINTS = 320
+DEFAULT_DISTRIBUTION_REFERENCE_BINS = 20
 DEFAULT_SMOOTHING_ALPHA = 0.5
 MINIMUM_ORACLE_ACCURACY = 0.51
 NULL_NODE = "0000000000000000000000000000000000000000"
@@ -778,7 +780,7 @@ def write_accuracy_distribution_plot(
     path: Path,
     rows: Sequence[Mapping[str, Any]],
 ) -> None:
-    """Write a histogram showing the available oracle accuracy distribution."""
+    """Write a smoothed curve showing the oracle accuracy distribution."""
 
     values = oracle_accuracy_values(rows, PLOT_ORACLE_ACCURACY_FIELD)
     if not values:
@@ -795,10 +797,16 @@ def write_accuracy_distribution_plot(
         upper_bound = min(1.0, upper_bound + 0.05)
 
     fig, ax = plt.subplots(figsize=DEFAULT_DISTRIBUTION_PLOT_FIGSIZE)
-    bins = [lower_bound + (upper_bound - lower_bound) * i / 20 for i in range(21)]
     color = "#2563eb"
-    ax.hist(values, bins=bins, histtype="step", linewidth=2, color=color)
-    ax.hist(values, bins=bins, alpha=0.12, color=color)
+    x_values, y_values = smoothed_histogram_curve(
+        values,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        points=DEFAULT_DISTRIBUTION_CURVE_POINTS,
+        reference_bins=DEFAULT_DISTRIBUTION_REFERENCE_BINS,
+    )
+    ax.plot(x_values, y_values, linewidth=2.4, color=color)
+    ax.fill_between(x_values, y_values, color=color, alpha=0.10)
     ax.text(
         0.03,
         0.95,
@@ -820,9 +828,10 @@ def write_accuracy_distribution_plot(
     )
 
     ax.set_xlabel("Oracle accuracy", fontsize=PLOT_LABEL_FONT_SIZE)
-    ax.set_ylabel("Regression count", fontsize=PLOT_LABEL_FONT_SIZE)
+    ax.set_ylabel("Smoothed regression count", fontsize=PLOT_LABEL_FONT_SIZE)
     ax.set_title("Oracle Accuracy Distribution", fontsize=PLOT_TITLE_FONT_SIZE)
     ax.set_xlim(lower_bound, upper_bound)
+    ax.set_ylim(bottom=0)
     ax.tick_params(axis="both", labelsize=PLOT_TICK_FONT_SIZE)
     ax.grid(True, linestyle=":", linewidth=0.7)
     fig.tight_layout()
@@ -832,6 +841,90 @@ def write_accuracy_distribution_plot(
     plt.close(fig)
     logger.info("Wrote oracle accuracy distribution plot: %s", path)
     print(f"wrote {path}")
+
+
+def smoothed_histogram_curve(
+    values: Sequence[float],
+    *,
+    lower_bound: float,
+    upper_bound: float,
+    points: int,
+    reference_bins: int,
+) -> tuple[list[float], list[float]]:
+    """Return a Gaussian-smoothed histogram curve scaled to bin counts."""
+
+    if points < 2:
+        raise ValueError("points must be at least 2")
+    if reference_bins < 1:
+        raise ValueError("reference_bins must be positive")
+
+    domain_width = upper_bound - lower_bound
+    if domain_width <= 0:
+        return [lower_bound], [float(len(values))]
+
+    bandwidth = estimate_distribution_bandwidth(values, domain_width)
+    bin_width = domain_width / reference_bins
+    kernel_scale = bin_width / (bandwidth * math.sqrt(2.0 * math.pi))
+    x_values = [
+        lower_bound + domain_width * i / (points - 1)
+        for i in range(points)
+    ]
+    y_values = [
+        sum(
+            reflected_gaussian_kernel(
+                x,
+                value,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+                bandwidth=bandwidth,
+            )
+            for value in values
+        )
+        * kernel_scale
+        for x in x_values
+    ]
+    return x_values, y_values
+
+
+def reflected_gaussian_kernel(
+    x_value: float,
+    sample: float,
+    *,
+    lower_bound: float,
+    upper_bound: float,
+    bandwidth: float,
+) -> float:
+    """Return a boundary-reflected Gaussian kernel value."""
+
+    reflected_below = 2.0 * lower_bound - sample
+    reflected_above = 2.0 * upper_bound - sample
+    return sum(
+        math.exp(-0.5 * ((x_value - reflected_sample) / bandwidth) ** 2)
+        for reflected_sample in (sample, reflected_below, reflected_above)
+    )
+
+
+def estimate_distribution_bandwidth(
+    values: Sequence[float],
+    domain_width: float,
+) -> float:
+    """Estimate a KDE bandwidth that stays smooth for narrow accuracy ranges."""
+
+    minimum_bandwidth = domain_width / 80.0
+    maximum_bandwidth = domain_width / 5.0
+    if len(values) < 2:
+        return minimum_bandwidth
+
+    mean_value = sum(values) / len(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / (
+        len(values) - 1
+    )
+    standard_deviation = math.sqrt(max(variance, 0.0))
+    if standard_deviation <= 0:
+        return minimum_bandwidth
+
+    bandwidth = 1.06 * standard_deviation * len(values) ** -0.2
+    return min(max(bandwidth, minimum_bandwidth), maximum_bandwidth)
 
 
 def oracle_accuracy_values(
