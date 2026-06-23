@@ -3,8 +3,9 @@
 
 For every regression row, this script reconstructs the Mercurial parent-link
 path from the known-good revision to the known-bad revision, excludes both
-endpoints, and counts every cached Treeherder `performance/summary` measurement
-on those interior revisions where `replicate` is exactly `false`.
+endpoints, and counts cached Treeherder `performance/summary` measurements on
+those interior revisions where `replicate` is exactly `false` and `signature_id`
+matches the regression's failing performance signature.
 
 The default inputs are the Mozilla perf-bisect v2 regression files and the
 reduced v2 per-revision performance cache. Output rows are filtered to
@@ -51,6 +52,7 @@ class Regression:
     good_revision: str
     bad_revision: str
     culprit_revision: str
+    signature_id: int
     alert_summary_id: int | None = None
     num_candidate_revisions: int | None = None
 
@@ -118,29 +120,39 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logger.info("Step 2/6: Loading regression rows.")
     regressions = load_regressions(args.regressions)
+    regressions = filter_regressions_to_oracle_metrics(
+        regressions,
+        oracle_regression_ids=oracle_regression_ids,
+    )
+    needed_signature_ids = {regression.signature_id for regression in regressions}
+    logger.info(
+        "Loaded regressed signatures needed for oracle-filtered rows: %d",
+        len(needed_signature_ids),
+    )
 
-    logger.info("Step 3/6: Loading commit graph and summary job counts.")
+    logger.info("Step 3/6: Loading commit graph and summary job counts by signature.")
     if same_path(args.commits, args.revision_data):
-        commit_graph, summary_counts_by_revision, scan_stats = (
-            load_commit_graph_and_summary_counts(args.revision_data)
+        commit_graph, summary_counts_by_revision_signature, scan_stats = (
+            load_commit_graph_and_summary_counts(
+                args.revision_data,
+                needed_signature_ids=needed_signature_ids,
+            )
         )
     else:
         commit_graph = load_commit_graph(args.commits)
-        summary_counts_by_revision, scan_stats = load_summary_counts(args.revision_data)
+        summary_counts_by_revision_signature, scan_stats = load_summary_counts(
+            args.revision_data,
+            needed_signature_ids=needed_signature_ids,
+        )
     logger.info("Revision data scan counters: %s", dict(sorted(scan_stats.items())))
 
     logger.info("Step 4/6: Building regression interval rows.")
     output_rows, row_stats = build_output_rows(
         regressions,
         commit_graph=commit_graph,
-        summary_counts_by_revision=summary_counts_by_revision,
+        summary_counts_by_revision_signature=summary_counts_by_revision_signature,
     )
     logger.info("Regression interval counters: %s", dict(sorted(row_stats.items())))
-
-    output_rows = filter_rows_to_oracle_metrics(
-        output_rows,
-        oracle_regression_ids=oracle_regression_ids,
-    )
 
     logger.info("Step 5/6: Writing output JSONL.")
     write_jsonl(args.output, output_rows)
@@ -299,6 +311,37 @@ def load_regressions(paths: Sequence[Path]) -> list[Regression]:
     return regressions
 
 
+def filter_regressions_to_oracle_metrics(
+    regressions: Sequence[Regression],
+    *,
+    oracle_regression_ids: set[int],
+) -> list[Regression]:
+    """Keep only regressions whose ID is present in oracle metrics."""
+
+    filtered_regressions = [
+        regression
+        for regression in regressions
+        if regression.regression_id in oracle_regression_ids
+    ]
+    missing_from_regressions = oracle_regression_ids - {
+        regression.regression_id for regression in regressions
+    }
+    logger.info(
+        "Filtered regressions to oracle metrics allowlist: before=%d, after=%d, "
+        "allowlist_ids=%d, oracle_ids_missing_from_regressions=%d",
+        len(regressions),
+        len(filtered_regressions),
+        len(oracle_regression_ids),
+        len(missing_from_regressions),
+    )
+    if missing_from_regressions:
+        logger.warning(
+            "Oracle metric regression IDs missing from regression inputs: %s",
+            sorted(missing_from_regressions)[:20],
+        )
+    return filtered_regressions
+
+
 def parse_regression(raw: Mapping[str, Any], *, path: Path, line_num: int) -> Regression:
     """Parse and validate the fields needed from one regression row."""
 
@@ -309,6 +352,7 @@ def parse_regression(raw: Mapping[str, Any], *, path: Path, line_num: int) -> Re
             good_revision=str(raw["good_revision"]),
             bad_revision=str(raw["bad_revision"]),
             culprit_revision=str(raw["culprit_revision"]),
+            signature_id=parse_failing_signature_id(raw, path=path, line_num=line_num),
             num_candidate_revisions=optional_int(raw.get("num_candidate_revisions")),
         )
     except KeyError as exc:
@@ -323,6 +367,29 @@ def optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def parse_failing_signature_id(
+    raw: Mapping[str, Any],
+    *,
+    path: Path,
+    line_num: int,
+) -> int:
+    """Parse the single regressed performance signature for a regression row."""
+
+    failing_sig = raw.get("failing_sig")
+    if not isinstance(failing_sig, Mapping):
+        raise ValueError(f"missing failing_sig object at {path}:{line_num}")
+    try:
+        return int(failing_sig["signature_id"])
+    except KeyError as exc:
+        raise ValueError(
+            f"missing failing_sig.signature_id at {path}:{line_num}"
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"invalid failing_sig.signature_id at {path}:{line_num}: {exc}"
+        ) from exc
 
 
 def load_commit_graph(path: Path) -> CommitGraph:
@@ -351,12 +418,14 @@ def load_commit_graph(path: Path) -> CommitGraph:
 
 def load_commit_graph_and_summary_counts(
     path: Path,
-) -> tuple[CommitGraph, dict[str, int], Counter[str]]:
-    """Load graph fields and summary counts in one pass."""
+    *,
+    needed_signature_ids: set[int],
+) -> tuple[CommitGraph, dict[str, Counter[int]], Counter[str]]:
+    """Load graph fields and per-signature summary counts in one pass."""
 
     index_by_node: dict[str, int] = {}
     parents_by_node: dict[str, list[str]] = {}
-    summary_counts_by_revision: dict[str, int] = {}
+    summary_counts_by_revision_signature: dict[str, Counter[int]] = {}
     stats: Counter[str] = Counter()
 
     for _, raw in iter_jsonl(path):
@@ -370,28 +439,37 @@ def load_commit_graph_and_summary_counts(
 
         index_by_node[node] = len(index_by_node)
         parents_by_node[node] = clean_parent_nodes(raw.get("parents"))
-        summary_counts_by_revision[node] = count_summary_measurements(raw, stats=stats)
+        summary_counts_by_revision_signature[node] = count_summary_measurements(
+            raw,
+            needed_signature_ids=needed_signature_ids,
+            stats=stats,
+        )
 
     logger.info(
         "Loaded commit graph and summary counts: revisions=%d, parent_entries=%d, "
-        "revisions_with_summary_jobs=%d, summary_jobs=%d, source=%s",
+        "revisions_with_matching_summary_jobs=%d, matching_summary_jobs=%d, "
+        "source=%s",
         len(index_by_node),
         sum(len(parents) for parents in parents_by_node.values()),
-        sum(count > 0 for count in summary_counts_by_revision.values()),
-        sum(summary_counts_by_revision.values()),
+        sum(bool(counts) for counts in summary_counts_by_revision_signature.values()),
+        sum(sum(counts.values()) for counts in summary_counts_by_revision_signature.values()),
         path,
     )
     return (
         CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node),
-        summary_counts_by_revision,
+        summary_counts_by_revision_signature,
         stats,
     )
 
 
-def load_summary_counts(path: Path) -> tuple[dict[str, int], Counter[str]]:
-    """Load summary measurement counts keyed by revision."""
+def load_summary_counts(
+    path: Path,
+    *,
+    needed_signature_ids: set[int],
+) -> tuple[dict[str, Counter[int]], Counter[str]]:
+    """Load summary measurement counts keyed by revision and signature."""
 
-    summary_counts_by_revision: dict[str, int] = {}
+    summary_counts_by_revision_signature: dict[str, Counter[int]] = {}
     stats: Counter[str] = Counter()
 
     for _, raw in iter_jsonl(path):
@@ -400,17 +478,21 @@ def load_summary_counts(path: Path) -> tuple[dict[str, int], Counter[str]]:
         if not isinstance(node, str) or not node:
             stats["revision_rows_without_node"] += 1
             continue
-        summary_counts_by_revision[node] = count_summary_measurements(raw, stats=stats)
+        summary_counts_by_revision_signature[node] = count_summary_measurements(
+            raw,
+            needed_signature_ids=needed_signature_ids,
+            stats=stats,
+        )
 
     logger.info(
-        "Loaded summary counts: revisions=%d, revisions_with_summary_jobs=%d, "
-        "summary_jobs=%d, source=%s",
-        len(summary_counts_by_revision),
-        sum(count > 0 for count in summary_counts_by_revision.values()),
-        sum(summary_counts_by_revision.values()),
+        "Loaded summary counts: revisions=%d, revisions_with_matching_summary_jobs=%d, "
+        "matching_summary_jobs=%d, source=%s",
+        len(summary_counts_by_revision_signature),
+        sum(bool(counts) for counts in summary_counts_by_revision_signature.values()),
+        sum(sum(counts.values()) for counts in summary_counts_by_revision_signature.values()),
         path,
     )
-    return summary_counts_by_revision, stats
+    return summary_counts_by_revision_signature, stats
 
 
 def clean_parent_nodes(raw_parents: Any) -> list[str]:
@@ -428,34 +510,46 @@ def clean_parent_nodes(raw_parents: Any) -> list[str]:
 def count_summary_measurements(
     revision_row: Mapping[str, Any],
     *,
+    needed_signature_ids: set[int],
     stats: Counter[str],
-) -> int:
-    """Count cached summary performance measurements for one revision row."""
+) -> Counter[int]:
+    """Count cached summary measurements by signature for one revision row."""
 
     measurements = revision_row.get("perf_measurement_data", [])
     if not isinstance(measurements, list):
         stats["perf_measurement_data_not_list"] += 1
-        return 0
+        return Counter()
 
-    summary_count = 0
+    counts: Counter[int] = Counter()
     for measurement in measurements:
         stats["measurements_seen"] += 1
         if not isinstance(measurement, Mapping):
             stats["measurement_not_object"] += 1
             continue
-        if measurement.get("replicate") is False:
-            summary_count += 1
-            stats["summary_measurements_seen"] += 1
-        else:
+        if measurement.get("replicate") is not False:
             stats["non_summary_measurements_seen"] += 1
-    return summary_count
+            continue
+
+        stats["summary_measurements_seen"] += 1
+        try:
+            signature_id = int(measurement["signature_id"])
+        except (KeyError, TypeError, ValueError):
+            stats["summary_measurement_bad_signature"] += 1
+            continue
+        if signature_id not in needed_signature_ids:
+            stats["summary_measurement_unneeded_signature"] += 1
+            continue
+
+        counts[signature_id] += 1
+        stats["matching_summary_measurements_seen"] += 1
+    return counts
 
 
 def build_output_rows(
     regressions: Sequence[Regression],
     *,
     commit_graph: CommitGraph,
-    summary_counts_by_revision: Mapping[str, int],
+    summary_counts_by_revision_signature: Mapping[str, Counter[int]],
 ) -> tuple[list[dict[str, Any]], Counter[str]]:
     """Create one output row per regression."""
 
@@ -476,6 +570,7 @@ def build_output_rows(
                     "good_revision": regression.good_revision,
                     "bad_revision": regression.bad_revision,
                     "culprit_revision": regression.culprit_revision,
+                    "signature_id": regression.signature_id,
                     "num_candidate_revisions": regression.num_candidate_revisions,
                     "path_found": False,
                     "interior_revision_count": None,
@@ -494,7 +589,12 @@ def build_output_rows(
         revision_counts = [
             {
                 "revision": revision,
-                "summary_test_jobs": int(summary_counts_by_revision.get(revision, 0)),
+                "summary_test_jobs": int(
+                    summary_counts_by_revision_signature.get(
+                        revision,
+                        Counter(),
+                    )[regression.signature_id]
+                ),
             }
             for revision in interior_revisions
         ]
@@ -513,6 +613,7 @@ def build_output_rows(
                 "good_revision": regression.good_revision,
                 "bad_revision": regression.bad_revision,
                 "culprit_revision": regression.culprit_revision,
+                "signature_id": regression.signature_id,
                 "num_candidate_revisions": regression.num_candidate_revisions,
                 "path_found": True,
                 "interior_revision_count": len(interior_revisions),
@@ -522,35 +623,6 @@ def build_output_rows(
         )
 
     return rows, stats
-
-
-def filter_rows_to_oracle_metrics(
-    rows: Sequence[dict[str, Any]],
-    *,
-    oracle_regression_ids: set[int],
-) -> list[dict[str, Any]]:
-    """Keep only rows whose regression ID is present in oracle metrics."""
-
-    filtered_rows = [
-        row for row in rows if int(row["regression_id"]) in oracle_regression_ids
-    ]
-    missing_from_regressions = oracle_regression_ids - {
-        int(row["regression_id"]) for row in rows
-    }
-    logger.info(
-        "Filtered rows to oracle metrics allowlist: before=%d, after=%d, "
-        "allowlist_ids=%d, oracle_ids_missing_from_regressions=%d",
-        len(rows),
-        len(filtered_rows),
-        len(oracle_regression_ids),
-        len(missing_from_regressions),
-    )
-    if missing_from_regressions:
-        logger.warning(
-            "Oracle metric regression IDs missing from regression inputs: %s",
-            sorted(missing_from_regressions)[:20],
-        )
-    return filtered_rows
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
