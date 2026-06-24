@@ -74,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     worker_counts = parse_worker_counts(sweep_args.worker_counts)
     results_by_localizer: dict[str, list[dict[str, Any]]] = {}
+    settings_by_worker_count: dict[int, dict[str, Any]] = {}
 
     with tempfile.TemporaryDirectory(
         prefix="perf_bisect_worker_count_sweep_",
@@ -94,12 +95,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 final_summary=final_summary,
                 worker_count=worker_count,
             )
+            settings_by_worker_count[worker_count] = extract_simulation_settings(
+                final_summary,
+                worker_count=worker_count,
+            )
 
     normalize_result_order(results_by_localizer)
     payload = build_sweep_payload(
         worker_counts=worker_counts,
         localizers=simulation_args.localizers,
         results_by_localizer=results_by_localizer,
+        settings_by_worker_count=settings_by_worker_count,
     )
     sweep_output_json.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -277,6 +283,29 @@ def add_final_summary_rows(
         results_by_localizer.setdefault(localizer, []).append(row)
 
 
+def extract_simulation_settings(
+    final_summary: Mapping[str, Any],
+    *,
+    worker_count: int,
+) -> dict[str, Any]:
+    """Return the simulation.py settings block for one sweep point."""
+
+    raw_settings = final_summary.get("settings")
+    if not isinstance(raw_settings, Mapping):
+        raise TypeError("final-test summary must contain a settings object")
+
+    raw_workers = raw_settings.get("workers")
+    if not isinstance(raw_workers, int):
+        raise TypeError("final-test summary settings.workers must be an integer")
+    if raw_workers != worker_count:
+        raise ValueError(
+            "final-test summary settings.workers does not match the sweep "
+            f"worker count: expected {worker_count}, got {raw_workers}"
+        )
+
+    return dict(raw_settings)
+
+
 def extract_main_metrics(
     raw_metrics: Mapping[str, Any],
     *,
@@ -318,6 +347,7 @@ def build_sweep_payload(
     worker_counts: Sequence[int],
     localizers: Sequence[str],
     results_by_localizer: Mapping[str, list[dict[str, Any]]],
+    settings_by_worker_count: Mapping[int, Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Build the JSON payload written by this script."""
 
@@ -325,6 +355,10 @@ def build_sweep_payload(
         "generated_at": datetime.now(UTC).isoformat(),
         "split": "final_test",
         "worker_counts": list(worker_counts),
+        "settings_by_worker_count": {
+            str(worker_count): dict(settings_by_worker_count[worker_count])
+            for worker_count in worker_counts
+        },
         "metrics": list(MAIN_METRICS),
         "localizers": list(localizers),
         "results": {
