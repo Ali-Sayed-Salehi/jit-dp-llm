@@ -37,11 +37,13 @@ except ImportError:  # pragma: no cover - supports direct script execution.
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BISECT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
+DEFAULT_BISECT_DATA_DIR = (
+    REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2" / "reduced"
+)
 PROMPT_REGRESSION_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "analysis" / "perf_bisect" / "results"
 DEFAULT_ORACLE_METRICS = (
-    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
+    DEFAULT_BISECT_DATA_DIR / "per_regression_oracle_metrics_v2.jsonl"
 )
 DEFAULT_RISK_SCORES = DEFAULT_BISECT_DATA_DIR / "per_commit_risk_scores.jsonl"
 
@@ -115,6 +117,34 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "multisection_section_count",
         "multisection_retrigger_count",
     ),
+}
+RISK_SCORE_LOCALIZERS = {
+    "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
+    "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
+    "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
+    "RiskWeightedBisection",
+    "RiskWeightedMultisection",
+}
+METRIC_VOTE_WEIGHT_ARGS = {
+    "success_rate_percent": "success_rate_vote_weight",
+    "mean_elapsed_hours": "mean_elapsed_vote_weight",
+    "mean_test_runs": "mean_test_runs_vote_weight",
+    "max_elapsed_hours": "max_elapsed_vote_weight",
+    "max_test_runs": "max_test_runs_vote_weight",
+}
+METRIC_FORMULA_WEIGHT_ARGS = {
+    "success_rate_percent": "formula_success_weight",
+    "mean_elapsed_hours": "formula_mean_elapsed_weight",
+    "mean_test_runs": "formula_mean_test_runs_weight",
+    "max_elapsed_hours": "formula_max_elapsed_weight",
+    "max_test_runs": "formula_max_test_runs_weight",
+}
+DEFAULT_FORMULA_METRIC_WEIGHTS = {
+    "success_rate_percent": 4.0,
+    "mean_elapsed_hours": 2.0,
+    "mean_test_runs": 1.0,
+    "max_elapsed_hours": 1.0,
+    "max_test_runs": 0.0,
 }
 BEST_COMBO_METRIC_SPECS = (
     {
@@ -225,6 +255,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, run requested simulations, and write summary/detail outputs."""
 
     args = parse_args(argv)
+    if args.ignored_risk_localizers:
+        ignored = ", ".join(args.ignored_risk_localizers)
+        kept = ", ".join(args.localizers)
+        print(f"--ignore-risk enabled; ignoring risk localizers: {ignored}")
+        print(f"Running non-risk localizers: {kept}")
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
     default_parameters = SimulationParameters(
         backfill_retrigger_count=args.backfill_retrigger_count,
@@ -237,6 +272,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pba_max_test_runs=args.pba_max_test_runs,
         pba_risk_prior_uniform_weight=args.pba_risk_prior_uniform_weight,
     )
+    metric_vote_specs = metric_vote_specs_from_args(args)
+    metric_formula_specs = metric_formula_specs_from_args(args)
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
@@ -252,13 +289,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     regressions_by_dataset: dict[str, list[dict[str, Any]]] = {}
     regressions_path_by_dataset: dict[str, Path] = {}
+    dataset_stats_by_dataset: dict[str, dict[str, Any]] = {}
     for dataset_name in sorted(required_dataset_names):
         regressions_path = resolve_regression_path(
             args.regression_dir,
             DATASETS[dataset_name],
         )
         regressions_path_by_dataset[dataset_name] = regressions_path
-        regressions_by_dataset[dataset_name] = load_jsonl(regressions_path)
+        loaded_regressions = load_jsonl(regressions_path)
+        filtered_regressions, removed_regression_ids = (
+            filter_regressions_by_oracle_metrics(
+                loaded_regressions,
+                oracle_metrics=oracle_metrics,
+                dataset_name=dataset_name,
+            )
+        )
+        regressions_by_dataset[dataset_name] = filtered_regressions
+        dataset_stats = summarize_regression_dataset(
+            filtered_regressions=filtered_regressions,
+            revision_perf=revision_perf,
+            oracle_metrics=oracle_metrics,
+        )
+        dataset_stats_by_dataset[dataset_name] = dataset_stats
+        if removed_regression_ids:
+            print(
+                f"filtered {dataset_name}: "
+                f"removed_missing_oracle_metrics={len(removed_regression_ids)}"
+            )
+        print_dataset_stats(dataset_name, dataset_stats)
 
     combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
     optimization_settings = None
@@ -300,10 +358,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {"metric": "mean_test_runs", "direction": "minimize"},
                 {"metric": "success_rate_percent", "direction": "maximize"},
             ],
-            "selection": (
-                "highest success_rate_percent on the Pareto frontier; ties "
-                "minimize mean_test_runs, then mean_elapsed_hours"
+            "pareto_trial_vote_weights": metric_vote_weights_to_json(
+                metric_vote_specs,
             ),
+            "pareto_trial_formula_weights": metric_formula_weights_to_json(
+                metric_formula_specs,
+            ),
+            "pareto_selection": args.pareto_selection,
+            "pareto_success_tolerance": args.pareto_success_tolerance,
+            "selection": pareto_selection_description(args.pareto_selection),
         }
         combo_parameters = optimize_parameters_on_eval(
             regressions=regressions_by_dataset["eval"],
@@ -340,6 +403,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             optuna_trials=args.optuna_trials,
             optuna_seed=args.optuna_seed,
             random_seed=args.random_seed,
+            metric_vote_specs=metric_vote_specs,
+            metric_formula_specs=metric_formula_specs,
+            pareto_selection=args.pareto_selection,
+            pareto_success_tolerance=args.pareto_success_tolerance,
         )
 
     for dataset_name in dataset_names:
@@ -351,6 +418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             revision_data_path=args.revision_data,
             oracle_metrics_path=args.oracle_metrics,
             risk_scores_path=risk_scores_path,
+            dataset_stats=dataset_stats_by_dataset[dataset_name],
             signature_info=signature_info,
             revision_perf=revision_perf,
             oracle_metrics=oracle_metrics,
@@ -362,6 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             combo_parameters=combo_parameters,
             optimization_settings=optimization_settings,
             random_seed=args.random_seed,
+            metric_vote_specs=metric_vote_specs,
         )
         output_path = args.output_dir / f"per_bisect_results_{dataset_name}.json"
         details_output_path = (
@@ -413,8 +482,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_ORACLE_METRICS,
         help=(
-            "Path to per_regression_oracle_metrics.jsonl. SummaryComparison "
-            "uses summary_oracle_accuracy as its noisy-oracle accuracy."
+            "Path to per_regression_oracle_metrics*.jsonl. SummaryComparison "
+            "uses summary_oracle_accuracy as its noisy-oracle accuracy. "
+            "Defaults to the reduced v2 metrics file."
         ),
     )
     parser.add_argument(
@@ -454,6 +524,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=sorted(LOCALIZERS),
         default=sorted(LOCALIZERS),
         help="Culprit localization algorithms to run.",
+    )
+    parser.add_argument(
+        "--ignore-risk",
+        action="store_true",
+        help=(
+            "Drop all localizers that require per-commit risk scores before "
+            "tuning or simulation. This also prevents --risk-scores from being "
+            "loaded."
+        ),
     )
     parser.add_argument(
         "--backfill-retrigger-count",
@@ -569,6 +648,116 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Seed for Optuna samplers, used to make optimization reproducible. "
             "Defaults to --random-seed."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-selection",
+        choices=("voting", "formula"),
+        default="voting",
+        help=(
+            "How to choose one parameter set from Optuna's Pareto frontier. "
+            "Voting uses metric-specific winners; formula uses normalized "
+            "weighted utility after applying --pareto-success-tolerance."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-success-tolerance",
+        type=float,
+        default=1.0,
+        help=(
+            "Formula mode only: consider Pareto trials whose success rate is "
+            "within this many percentage points of the best Pareto success "
+            "rate before scoring normalized metric utility."
+        ),
+    )
+    parser.add_argument(
+        "--success-rate-vote-weight",
+        type=int,
+        default=4,
+        help=(
+            "Vote weight for success_rate_percent when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--mean-elapsed-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for mean_elapsed_hours when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--mean-test-runs-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for mean_test_runs when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--max-elapsed-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for max_elapsed_hours when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--max-test-runs-vote-weight",
+        type=int,
+        default=1,
+        help=(
+            "Vote weight for max_test_runs when selecting Optuna "
+            "Pareto-frontier parameters and reporting best_combo_overall."
+        ),
+    )
+    parser.add_argument(
+        "--formula-success-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["success_rate_percent"],
+        help=(
+            "Formula mode only: normalized utility weight for "
+            "success_rate_percent."
+        ),
+    )
+    parser.add_argument(
+        "--formula-mean-elapsed-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["mean_elapsed_hours"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "mean_elapsed_hours."
+        ),
+    )
+    parser.add_argument(
+        "--formula-mean-test-runs-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["mean_test_runs"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "mean_test_runs."
+        ),
+    )
+    parser.add_argument(
+        "--formula-max-elapsed-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["max_elapsed_hours"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "max_elapsed_hours."
+        ),
+    )
+    parser.add_argument(
+        "--formula-max-test-runs-weight",
+        type=float,
+        default=DEFAULT_FORMULA_METRIC_WEIGHTS["max_test_runs"],
+        help=(
+            "Formula mode only: normalized utility penalty weight for "
+            "max_test_runs."
         ),
     )
     parser.add_argument(
@@ -780,7 +969,159 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.optuna_seed = args.random_seed
     elif args.optuna_trials > 0 and args.optuna_seed != args.random_seed:
         parser.error("--optuna-seed must match --random-seed when Optuna is enabled")
+    validate_metric_vote_weights(args, parser)
+    validate_metric_formula_weights(args, parser)
+    if args.ignore_risk:
+        localizers_without_risk = [
+            localizer
+            for localizer in args.localizers
+            if localizer not in RISK_SCORE_LOCALIZERS
+        ]
+        ignored_localizers = [
+            localizer
+            for localizer in args.localizers
+            if localizer in RISK_SCORE_LOCALIZERS
+        ]
+        if not localizers_without_risk:
+            parser.error(
+                "--ignore-risk removed every selected localizer; choose at "
+                "least one non-risk localizer."
+            )
+        args.localizers = localizers_without_risk
+        args.ignored_risk_localizers = ignored_localizers
+    else:
+        args.ignored_risk_localizers = []
     return args
+
+
+def validate_metric_vote_weights(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Validate metric vote weights used by Optuna and summary selection."""
+
+    total_weight = 0
+    for arg_name in METRIC_VOTE_WEIGHT_ARGS.values():
+        weight = int(getattr(args, arg_name))
+        if weight < 0:
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be non-negative")
+        total_weight += weight
+    if total_weight <= 0:
+        parser.error("at least one metric vote weight must be positive")
+
+
+def validate_metric_formula_weights(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Validate formula selector weights and success tolerance."""
+
+    if args.pareto_success_tolerance < 0.0:
+        parser.error("--pareto-success-tolerance must be non-negative")
+
+    total_weight = 0.0
+    for arg_name in METRIC_FORMULA_WEIGHT_ARGS.values():
+        weight = float(getattr(args, arg_name))
+        if not math.isfinite(weight):
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be finite")
+        if weight < 0.0:
+            option_name = f"--{arg_name.replace('_', '-')}"
+            parser.error(f"{option_name} must be non-negative")
+        total_weight += weight
+    if args.pareto_selection == "formula" and total_weight <= 0.0:
+        parser.error(
+            "at least one formula metric weight must be positive when "
+            "--pareto-selection=formula"
+        )
+
+
+def metric_vote_specs_from_args(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], ...]:
+    """Return metric voting specs with CLI-configured vote weights."""
+
+    return tuple(
+        {
+            **spec,
+            "vote_weight": int(
+                getattr(args, METRIC_VOTE_WEIGHT_ARGS[str(spec["metric"])])
+            ),
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def metric_vote_weights_to_json(
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Serialize metric vote weights keyed by metric name."""
+
+    return {
+        str(spec["metric"]): int(spec["vote_weight"])
+        for spec in metric_vote_specs
+    }
+
+
+def metric_formula_specs_from_args(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], ...]:
+    """Return formula metric specs with CLI-configured weights."""
+
+    return tuple(
+        {
+            "metric": str(spec["metric"]),
+            "direction": str(spec["direction"]),
+            "formula_weight": float(
+                getattr(args, METRIC_FORMULA_WEIGHT_ARGS[str(spec["metric"])])
+            ),
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def metric_formula_weights_to_json(
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    """Serialize formula weights keyed by metric name."""
+
+    return {
+        str(spec["metric"]): float(spec["formula_weight"])
+        for spec in metric_formula_specs
+    }
+
+
+def default_metric_formula_specs() -> tuple[dict[str, Any], ...]:
+    """Return default formula metric specs independent of parsed CLI args."""
+
+    return tuple(
+        {
+            "metric": str(spec["metric"]),
+            "direction": str(spec["direction"]),
+            "formula_weight": DEFAULT_FORMULA_METRIC_WEIGHTS[str(spec["metric"])],
+        }
+        for spec in BEST_COMBO_METRIC_SPECS
+    )
+
+
+def pareto_selection_description(selection_mode: str) -> str:
+    """Return a human-readable description for Pareto trial selection."""
+
+    if selection_mode == "voting":
+        return (
+            "weighted metric voting on the Pareto frontier; ties use "
+            "success_rate_percent, mean_elapsed_hours, mean_test_runs, "
+            "max_elapsed_hours, max_test_runs, then Optuna trial number"
+        )
+    if selection_mode == "formula":
+        return (
+            "normalized weighted utility on Pareto trials within "
+            "pareto_success_tolerance of the best success_rate_percent; ties "
+            "use success_rate_percent, mean_elapsed_hours, mean_test_runs, "
+            "max_elapsed_hours, max_test_runs, then Optuna trial number"
+        )
+    raise ValueError(f"unknown Pareto selection mode: {selection_mode!r}")
 
 
 def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
@@ -799,6 +1140,233 @@ def resolve_regression_path(regression_dir: Path, filename: str) -> Path:
     )
 
 
+def filter_regressions_by_oracle_metrics(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    oracle_metrics: Mapping[int, OracleMetrics],
+    dataset_name: str,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Keep only regression rows with a loaded oracle metric."""
+
+    filtered_regressions: list[dict[str, Any]] = []
+    removed_regression_ids: list[int] = []
+    for regression_index, regression in enumerate(regressions):
+        regression_id = require_regression_id(
+            regression,
+            context=f"{dataset_name} split row index {regression_index}",
+        )
+        if regression_id not in oracle_metrics:
+            removed_regression_ids.append(regression_id)
+            continue
+        filtered_regressions.append(dict(regression))
+    return filtered_regressions, removed_regression_ids
+
+
+def summarize_regression_dataset(
+    *,
+    filtered_regressions: Sequence[Mapping[str, Any]],
+    revision_perf: RevisionPerfIndex,
+    oracle_metrics: Mapping[int, OracleMetrics],
+) -> dict[str, Any]:
+    """Return descriptive stats for a filtered regression split."""
+
+    candidate_counts, missing_candidate_count_rows = collect_candidate_counts(
+        filtered_regressions
+    )
+    oracle_accuracy_values = collect_oracle_accuracy_values(
+        filtered_regressions,
+        oracle_metrics=oracle_metrics,
+    )
+    return {
+        "total_rows": len(filtered_regressions),
+        "candidate_commits": {
+            "source": "num_candidate_revisions",
+            **numeric_distribution(candidate_counts),
+            "missing_or_invalid_rows": missing_candidate_count_rows,
+        },
+        "timeframe_boundaries": dataset_timeframe_boundaries(
+            filtered_regressions,
+            revision_perf=revision_perf,
+            revision_field="bad_revision",
+        ),
+        "oracle_accuracy": {
+            "field": "summary_oracle_accuracy",
+            **numeric_distribution(oracle_accuracy_values),
+        },
+    }
+
+
+def collect_candidate_counts(
+    regressions: Sequence[Mapping[str, Any]],
+) -> tuple[list[int], int]:
+    """Return candidate-count values and the number of rows without one."""
+
+    candidate_counts = []
+    missing_rows = 0
+    for regression in regressions:
+        raw_count = regression.get("num_candidate_revisions")
+        try:
+            candidate_count = int(raw_count)
+        except (TypeError, ValueError):
+            missing_rows += 1
+            continue
+        candidate_counts.append(candidate_count)
+    return candidate_counts, missing_rows
+
+
+def collect_oracle_accuracy_values(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    oracle_metrics: Mapping[int, OracleMetrics],
+) -> list[float]:
+    """Return summary-oracle accuracies for the filtered regression rows."""
+
+    values = []
+    for regression_index, regression in enumerate(regressions):
+        regression_id = require_regression_id(
+            regression,
+            context=f"filtered split row index {regression_index}",
+        )
+        metrics = oracle_metrics[regression_id]
+        values.append(metrics.summary_oracle_accuracy)
+    return values
+
+
+def numeric_distribution(values: Sequence[float | int]) -> dict[str, Any]:
+    """Return count, total, min, median, and max for numeric values."""
+
+    if not values:
+        return {
+            "count": 0,
+            "total": 0,
+            "min": None,
+            "median": None,
+            "max": None,
+        }
+    return {
+        "count": len(values),
+        "total": sum(values),
+        "min": min(values),
+        "median": median(values),
+        "max": max(values),
+    }
+
+
+def dataset_timeframe_boundaries(
+    regressions: Sequence[Mapping[str, Any]],
+    *,
+    revision_perf: RevisionPerfIndex,
+    revision_field: str,
+) -> dict[str, Any]:
+    """Return revision dates for the first and last rows in a split."""
+
+    if not regressions:
+        return {
+            "source": f"{revision_field} date for first and last split rows",
+            "start": None,
+            "end": None,
+        }
+
+    return {
+        "source": f"{revision_field} date for first and last split rows",
+        "start": regression_revision_boundary(
+            regressions[0],
+            revision_perf=revision_perf,
+            revision_field=revision_field,
+            context="first split row",
+        ),
+        "end": regression_revision_boundary(
+            regressions[-1],
+            revision_perf=revision_perf,
+            revision_field=revision_field,
+            context="last split row",
+        ),
+    }
+
+
+def regression_revision_boundary(
+    regression: Mapping[str, Any],
+    *,
+    revision_perf: RevisionPerfIndex,
+    revision_field: str,
+    context: str,
+) -> dict[str, Any]:
+    """Return one boundary row's regression id, revision, and date."""
+
+    regression_id = require_regression_id(regression, context=context)
+    revision = regression.get(revision_field)
+    record = revision_perf.records.get(revision) if isinstance(revision, str) else None
+    timestamp = revision_timestamp(record.date if record is not None else None)
+    return {
+        "regression_id": regression_id,
+        "revision_field": revision_field,
+        "revision": revision if isinstance(revision, str) else None,
+        "date": format_timestamp(timestamp) if timestamp is not None else None,
+    }
+
+
+def revision_timestamp(raw_date: Any) -> float | None:
+    """Parse the Mercurial revision timestamp from a revision record date."""
+
+    if isinstance(raw_date, (list, tuple)):
+        if not raw_date:
+            return None
+        raw_date = raw_date[0]
+    try:
+        timestamp = float(raw_date)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(timestamp):
+        return None
+    return timestamp
+
+
+def format_timestamp(timestamp: float) -> str:
+    """Return a stable UTC ISO-8601 timestamp string."""
+
+    return datetime.fromtimestamp(timestamp, UTC).isoformat()
+
+
+def print_dataset_stats(dataset_name: str, stats: Mapping[str, Any]) -> None:
+    """Print filtered split stats for the Slurm log."""
+
+    candidate_stats = stats["candidate_commits"]
+    timeframe_stats = stats["timeframe_boundaries"]
+    oracle_stats = stats["oracle_accuracy"]
+    print(
+        f"dataset_stats[{dataset_name}]: "
+        f"total_rows={stats['total_rows']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].candidate_commits: "
+        f"total={candidate_stats['total']}, "
+        f"median={candidate_stats['median']}, "
+        f"min={candidate_stats['min']}, "
+        f"max={candidate_stats['max']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].timeframe_boundaries: "
+        f"start={boundary_date(timeframe_stats['start'])}, "
+        f"end={boundary_date(timeframe_stats['end'])}, "
+        f"source={timeframe_stats['source']}"
+    )
+    print(
+        f"dataset_stats[{dataset_name}].oracle_accuracy: "
+        f"median={oracle_stats['median']}, "
+        f"min={oracle_stats['min']}, "
+        f"max={oracle_stats['max']}"
+    )
+
+
+def boundary_date(boundary: Any) -> str | None:
+    """Return one boundary date from a printed stats object."""
+
+    if not isinstance(boundary, Mapping):
+        return None
+    date = boundary.get("date")
+    return str(date) if date is not None else None
+
+
 def run_dataset(
     *,
     dataset_name: str,
@@ -808,6 +1376,7 @@ def run_dataset(
     revision_data_path: Path,
     oracle_metrics_path: Path,
     risk_scores_path: Path | None,
+    dataset_stats: Mapping[str, Any],
     signature_info: SignatureInfoIndex,
     revision_perf: RevisionPerfIndex,
     oracle_metrics: Mapping[int, OracleMetrics],
@@ -819,6 +1388,7 @@ def run_dataset(
     combo_parameters: Mapping[tuple[str, str], SimulationParameters] | None = None,
     optimization_settings: Mapping[str, Any] | None = None,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every requested localizer/oracle combination for one regression split."""
 
@@ -887,6 +1457,7 @@ def run_dataset(
             "revision_data": str(revision_data_path),
             "oracle_metrics": str(oracle_metrics_path),
         },
+        "dataset_stats": dict(dataset_stats),
         "settings": {
             "workers": workers,
             "job_duration_source": "per-signature job_duration minutes",
@@ -918,7 +1489,10 @@ def run_dataset(
         base_output["inputs"]["risk_scores"] = str(risk_scores_path)
     if optimization_settings is not None:
         base_output["settings"]["optimization"] = dict(optimization_settings)
-    best_combo_fields = compute_best_combo_fields(summary_runs)
+    best_combo_fields = compute_best_combo_fields(
+        summary_runs,
+        metric_vote_specs=metric_vote_specs,
+    )
     return (
         {**base_output, **best_combo_fields, "runs": summary_runs},
         {**base_output, **best_combo_fields, "runs": detail_runs},
@@ -942,7 +1516,11 @@ def optimized_parameter_values(
     }
 
 
-def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def compute_best_combo_fields(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
+) -> dict[str, Any]:
     """Compute top-level best-combo selections from aggregate run metrics."""
 
     if not runs:
@@ -951,13 +1529,13 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
     best_fields: dict[str, Any] = {
         "best_combo_vote_weights": {
             str(spec["metric"]): int(spec["vote_weight"])
-            for spec in BEST_COMBO_METRIC_SPECS
+            for spec in metric_vote_specs
         },
     }
     votes_by_combo: Counter[tuple[str, str]] = Counter()
     metric_votes_by_combo: dict[tuple[str, str], dict[str, int]] = {}
 
-    for spec in BEST_COMBO_METRIC_SPECS:
+    for spec in metric_vote_specs:
         metric = str(spec["metric"])
         best_run = best_run_for_metric(
             runs,
@@ -966,8 +1544,9 @@ def compute_best_combo_fields(runs: Sequence[Mapping[str, Any]]) -> dict[str, An
         )
         vote_weight = int(spec["vote_weight"])
         combo_key = run_combo_key(best_run)
-        votes_by_combo[combo_key] += vote_weight
-        metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
+        if vote_weight > 0:
+            votes_by_combo[combo_key] += vote_weight
+            metric_votes_by_combo.setdefault(combo_key, {})[metric] = vote_weight
         best_fields[str(spec["field"])] = combo_selection_to_json(best_run)
 
     best_overall = min(
@@ -1238,6 +1817,10 @@ def optimize_parameters_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    pareto_selection: str,
+    pareto_success_tolerance: float,
 ) -> dict[tuple[str, str], SimulationParameters]:
     """Tune algorithm parameters on the eval split for every selected combo."""
 
@@ -1281,6 +1864,10 @@ def optimize_parameters_on_eval(
                 optuna_trials=optuna_trials,
                 optuna_seed=optuna_seed,
                 random_seed=random_seed,
+                metric_vote_specs=metric_vote_specs,
+                metric_formula_specs=metric_formula_specs,
+                pareto_selection=pareto_selection,
+                pareto_success_tolerance=pareto_success_tolerance,
             )
             combo_parameters[combo_key] = parameters
             print(
@@ -1323,6 +1910,10 @@ def optimize_combo_on_eval(
     optuna_trials: int,
     optuna_seed: int,
     random_seed: int | None,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    pareto_selection: str,
+    pareto_success_tolerance: float,
 ) -> SimulationParameters:
     """Run one multi-objective Optuna study on eval for one localizer/oracle pair."""
 
@@ -1401,7 +1992,13 @@ def optimize_combo_on_eval(
             f"Optuna produced no Pareto-optimal trials for {localizer_name}/{oracle_name}."
         )
 
-    selected_trial = select_pareto_trial(study.best_trials)
+    selected_trial = select_pareto_trial(
+        study.best_trials,
+        metric_vote_specs=metric_vote_specs,
+        metric_formula_specs=metric_formula_specs,
+        selection_mode=pareto_selection,
+        success_tolerance=pareto_success_tolerance,
+    )
     selected_parameters = parameters_from_trial(selected_trial)
     return selected_parameters
 
@@ -1633,18 +2230,282 @@ def finite_objective_value(value: Any) -> float:
     return objective_value
 
 
-def select_pareto_trial(trials: Sequence[Any]) -> Any:
-    """Choose the best Pareto trial by success rate, then cost tie-breakers."""
+def finite_metric_value(value: Any) -> float | None:
+    """Return a finite metric value, or None for missing/non-finite inputs."""
 
-    return max(
+    if value is None:
+        return None
+    metric_value = float(value)
+    return metric_value if math.isfinite(metric_value) else None
+
+
+def select_pareto_trial(
+    trials: Sequence[Any],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]] = BEST_COMBO_METRIC_SPECS,
+    metric_formula_specs: Sequence[Mapping[str, Any]] | None = None,
+    selection_mode: str = "voting",
+    success_tolerance: float = 1.0,
+) -> Any:
+    """Choose a Pareto trial by the configured selection mode."""
+
+    if not trials:
+        raise ValueError("select_pareto_trial requires at least one trial")
+    if selection_mode == "voting":
+        return select_pareto_trial_by_voting(
+            trials,
+            metric_vote_specs=metric_vote_specs,
+        )
+    if selection_mode == "formula":
+        return select_pareto_trial_by_formula(
+            trials,
+            metric_formula_specs=(
+                metric_formula_specs or default_metric_formula_specs()
+            ),
+            success_tolerance=success_tolerance,
+        )
+    raise ValueError(f"unknown Pareto selection mode: {selection_mode!r}")
+
+
+def select_pareto_trial_by_voting(
+    trials: Sequence[Any],
+    *,
+    metric_vote_specs: Sequence[Mapping[str, Any]],
+) -> Any:
+    """Choose a Pareto trial by weighted metric votes, then deterministic ties."""
+
+    votes_by_trial: Counter[int] = Counter()
+    for spec in metric_vote_specs:
+        vote_weight = int(spec["vote_weight"])
+        if vote_weight <= 0:
+            continue
+        best_trial = best_pareto_trial_for_metric(
+            trials,
+            metric=str(spec["metric"]),
+            direction=str(spec["direction"]),
+        )
+        votes_by_trial[int(best_trial.number)] += vote_weight
+
+    return min(
         trials,
         key=lambda trial: (
-            float(trial.values[2]),
-            -float(trial.values[1]),
-            -float(trial.values[0]),
-            -int(trial.number),
+            -votes_by_trial[int(trial.number)],
+            *pareto_trial_preference_sort_key(trial),
         ),
     )
+
+
+def select_pareto_trial_by_formula(
+    trials: Sequence[Any],
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    success_tolerance: float,
+) -> Any:
+    """Choose a Pareto trial by normalized weighted utility."""
+
+    candidate_trials = pareto_trials_within_success_tolerance(
+        trials,
+        success_tolerance=success_tolerance,
+    )
+    metric_ranges = pareto_metric_ranges(
+        trials,
+        metric_formula_specs=metric_formula_specs,
+    )
+    return min(
+        candidate_trials,
+        key=lambda trial: (
+            -pareto_formula_score(
+                trial,
+                metric_formula_specs=metric_formula_specs,
+                metric_ranges=metric_ranges,
+            ),
+            *pareto_trial_preference_sort_key(trial),
+        ),
+    )
+
+
+def pareto_trials_within_success_tolerance(
+    trials: Sequence[Any],
+    *,
+    success_tolerance: float,
+) -> list[Any]:
+    """Return Pareto trials close enough to the best success rate."""
+
+    successes = [
+        success
+        for trial in trials
+        if (
+            success := finite_metric_value(
+                trial.user_attrs.get("metrics", {}).get("success_rate_percent")
+            )
+        )
+        is not None
+    ]
+    if not successes:
+        return list(trials)
+
+    threshold = max(successes) - float(success_tolerance)
+    candidates = [
+        trial
+        for trial in trials
+        if (
+            success := finite_metric_value(
+                trial.user_attrs.get("metrics", {}).get("success_rate_percent")
+            )
+        )
+        is not None
+        and success >= threshold
+    ]
+    return candidates or list(trials)
+
+
+def pareto_metric_ranges(
+    trials: Sequence[Any],
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[float, float] | None]:
+    """Return finite min/max metric ranges across the full Pareto frontier."""
+
+    metric_ranges: dict[str, tuple[float, float] | None] = {}
+    for spec in metric_formula_specs:
+        metric = str(spec["metric"])
+        values = [
+            value
+            for trial in trials
+            if (
+                value := finite_metric_value(
+                    trial.user_attrs.get("metrics", {}).get(metric)
+                )
+            )
+            is not None
+        ]
+        metric_ranges[metric] = (min(values), max(values)) if values else None
+    return metric_ranges
+
+
+def pareto_formula_score(
+    trial: Any,
+    *,
+    metric_formula_specs: Sequence[Mapping[str, Any]],
+    metric_ranges: Mapping[str, tuple[float, float] | None],
+) -> float:
+    """Return normalized weighted utility for one Pareto trial."""
+
+    score = 0.0
+    for spec in metric_formula_specs:
+        weight = float(spec["formula_weight"])
+        if weight <= 0.0:
+            continue
+
+        direction = str(spec["direction"])
+        metric = str(spec["metric"])
+        normalized_value = normalized_trial_metric_value(
+            trial,
+            metric=metric,
+            direction=direction,
+            metric_range=metric_ranges.get(metric),
+        )
+        if direction == "maximize":
+            score += weight * normalized_value
+        elif direction == "minimize":
+            score -= weight * normalized_value
+        else:
+            raise ValueError(f"unknown metric direction: {direction!r}")
+    return score
+
+
+def normalized_trial_metric_value(
+    trial: Any,
+    *,
+    metric: str,
+    direction: str,
+    metric_range: tuple[float, float] | None,
+) -> float:
+    """Return a [0, 1] metric value normalized across the Pareto frontier."""
+
+    value = finite_metric_value(trial.user_attrs.get("metrics", {}).get(metric))
+    if value is None:
+        return 0.0 if direction == "maximize" else 1.0
+    if metric_range is None:
+        return 0.0
+
+    min_value, max_value = metric_range
+    if max_value == min_value:
+        return 0.0
+    return (value - min_value) / (max_value - min_value)
+
+
+def best_pareto_trial_for_metric(
+    trials: Sequence[Any],
+    *,
+    metric: str,
+    direction: str,
+) -> Any:
+    """Return the best Pareto trial for one aggregate metric."""
+
+    return min(
+        trials,
+        key=lambda trial: (
+            trial_metric_sort_value(
+                trial,
+                metric=metric,
+                direction=direction,
+            ),
+            *pareto_trial_preference_sort_key(trial),
+        ),
+    )
+
+
+def pareto_trial_preference_sort_key(trial: Any) -> tuple[Any, ...]:
+    """Tie-break Pareto trial votes by the canonical metric preference order."""
+
+    return (
+        trial_metric_sort_value(
+            trial,
+            metric="success_rate_percent",
+            direction="maximize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="mean_elapsed_hours",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="mean_test_runs",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="max_elapsed_hours",
+            direction="minimize",
+        ),
+        trial_metric_sort_value(
+            trial,
+            metric="max_test_runs",
+            direction="minimize",
+        ),
+        int(trial.number),
+    )
+
+
+def trial_metric_sort_value(
+    trial: Any,
+    *,
+    metric: str,
+    direction: str,
+) -> float:
+    """Return a sortable metric value from an Optuna trial."""
+
+    raw_value = trial.user_attrs.get("metrics", {}).get(metric)
+    value = finite_metric_value(raw_value)
+    if value is None:
+        return math.inf
+    if direction == "maximize":
+        return -value
+    if direction == "minimize":
+        return value
+    raise ValueError(f"unknown metric direction: {direction!r}")
 
 
 def parameters_from_trial(trial: Any) -> SimulationParameters:
@@ -1835,14 +2696,7 @@ def uses_risk_scores(localizer_names: Sequence[str]) -> bool:
     """Return whether the requested localizers need per-commit risk scores."""
 
     return any(
-        localizer_name
-        in {
-            "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior",
-            "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior",
-            "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
-            "RiskWeightedBisection",
-            "RiskWeightedMultisection",
-        }
+        localizer_name in RISK_SCORE_LOCALIZERS
         for localizer_name in localizer_names
     )
 
@@ -1876,22 +2730,33 @@ def load_risk_scores(path: Path) -> dict[str, float]:
 
 
 def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:
-    """Load per-regression summary oracle accuracies."""
+    """Load per-regression summary oracle accuracies.
+
+    Rows with null/missing accuracy are intentionally skipped so the regression
+    split filter treats them as not runnable.
+    """
 
     metrics_by_regression_id: dict[int, OracleMetrics] = {}
+    seen_regression_ids: set[int] = set()
+    skipped_missing_accuracy = 0
     for raw in load_jsonl(path):
         regression_id = int(raw["regression_id"])
         if regression_id < 1:
             raise ValueError(
                 f"oracle metrics regression_id must be positive: {regression_id!r}"
             )
-        if regression_id in metrics_by_regression_id:
+        if regression_id in seen_regression_ids:
             raise ValueError(
                 f"duplicate oracle metrics for regression_id {regression_id}"
             )
+        seen_regression_ids.add(regression_id)
 
+        raw_accuracy = raw.get("summary_oracle_accuracy")
+        if raw_accuracy is None:
+            skipped_missing_accuracy += 1
+            continue
         summary_accuracy = parse_oracle_accuracy(
-            raw.get("summary_oracle_accuracy"),
+            raw_accuracy,
             context=f"regression_id {regression_id} summary_oracle_accuracy",
         )
         metrics_by_regression_id[regression_id] = OracleMetrics(
@@ -1899,6 +2764,11 @@ def load_oracle_metrics(path: Path) -> dict[int, OracleMetrics]:
             summary_oracle_accuracy=summary_accuracy,
         )
 
+    if skipped_missing_accuracy:
+        print(
+            "oracle_metrics: "
+            f"skipped_missing_accuracy={skipped_missing_accuracy}"
+        )
     return metrics_by_regression_id
 
 

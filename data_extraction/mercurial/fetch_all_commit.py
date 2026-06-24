@@ -28,7 +28,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 AUTOLAND_URL = "https://hg-edge.mozilla.org/integration/autoland"
 DEST_ROOT = os.path.join(REPO_ROOT, "data_extraction", "mercurial", "repos")
 DEST_REPO = os.path.join(DEST_ROOT, "autoland")
-OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf", "all_commits.jsonl")
+OUT_JSONL = os.path.join(REPO_ROOT, "datasets", "mozilla_perf_bisect_v2", "all_commits.jsonl")
 # ================================================
 
 def run(cmd, cwd=None, stdout=None):

@@ -35,6 +35,7 @@ LLMs/**/*
 **/batch_testing/results/
 **/git_bisect/results/
 **/perf_bisect/results/
+replication_packages/
 
 # cache
 .cache

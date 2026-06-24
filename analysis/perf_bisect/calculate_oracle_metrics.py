@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Calculate real-oracle measurement accuracy for perf-bisect regressions.
+"""Calculate real-oracle summary measurement accuracy for perf-bisect regressions.
 
-The output contains one row per regression from the eval and final-test
-perf-bisect datasets:
+The output contains one row per scorable regression from the eval and
+final-test perf-bisect datasets:
 
   - regression_id
   - summary_oracle_accuracy
-  - replicate_oracle_accuracy
+
+Rows with no available summary measurements are excluded instead of being
+written with a null accuracy.
 
 By default, the script also writes a histogram of the oracle accuracy
 distribution beside the JSONL output.
 
-Candidate revisions are found from the Mercurial parent graph in
-all_commits.jsonl. The known-good revision is excluded, and the known-bad
-revision is included because it can be the culprit revision.
+Candidate revisions are found from the Mercurial parent graph in the reduced
+per_revision_perf_data.jsonl by default. The known-good revision is excluded,
+and the known-bad revision is included because it can be the culprit revision.
 """
 
 from __future__ import annotations
@@ -22,23 +24,23 @@ import argparse
 from collections import Counter, deque
 from dataclasses import dataclass, field
 import json
+import logging
 import math
 from pathlib import Path
 from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
 
+logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect"
+DEFAULT_DATA_DIR = REPO_ROOT / "datasets" / "mozilla_perf_bisect_v2" / "reduced"
 DEFAULT_REVISION_DATA = DEFAULT_DATA_DIR / "per_revision_perf_data.jsonl"
-DEFAULT_COMMITS = DEFAULT_DATA_DIR / "all_commits.jsonl"
+DEFAULT_COMMITS = DEFAULT_REVISION_DATA
 DEFAULT_REGRESSION_INPUTS = (
     DEFAULT_DATA_DIR / "perf_bisect_regressions_eval.jsonl",
     DEFAULT_DATA_DIR / "perf_bisect_regressions_final_test.jsonl",
 )
-DEFAULT_OUTPUT = (
-    REPO_ROOT / "analysis" / "perf_bisect" / "per_regression_oracle_metrics.jsonl"
-)
+DEFAULT_OUTPUT = DEFAULT_DATA_DIR / "per_regression_oracle_metrics_v2.jsonl"
 DEFAULT_DISTRIBUTION_PLOT_DPI = 200
 DEFAULT_DISTRIBUTION_PLOT_FIGSIZE = (6.0, 3.6)
 DEFAULT_SMOOTHING_ALPHA = 0.5
@@ -73,10 +75,9 @@ class Regression:
 
 @dataclass
 class MeasurementValues:
-    """Summary and replicate values for one revision/signature pair."""
+    """Summary values for one revision/signature pair."""
 
     summary: list[float] = field(default_factory=list)
-    replicate: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -128,9 +129,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, calculate per-regression accuracies, and write JSONL."""
 
     args = parse_args(argv)
-    plt = None if args.skip_plot else load_matplotlib()
+    configure_logging(args.log_level)
+    logger.info("Starting perf-bisect oracle metric calculation.")
+    logger.info("Regression inputs: %s", ", ".join(str(p) for p in args.regressions))
+    logger.info("Revision data: %s", args.revision_data)
+    logger.info("Commit graph: %s", args.commits)
+    logger.info("Output: %s", args.output)
+
+    if args.skip_plot:
+        logger.info("Step 1/7: Plot generation disabled.")
+        plt = None
+    else:
+        logger.info("Step 1/7: Loading matplotlib for distribution plot.")
+        plt = load_matplotlib()
+
+    logger.info("Step 2/7: Loading regression rows.")
     regressions = load_regressions(args.regressions)
-    commit_graph = load_commit_graph(args.commits)
+    needed_signatures = {regression.signature_id for regression in regressions}
+
+    logger.info("Step 3/7: Loading commit graph.")
+    preloaded_measurements = None
+    if same_path(args.commits, args.revision_data):
+        logger.info(
+            "Revision data is also the commit graph input; scanning it once "
+            "for graph fields and needed summary measurements."
+        )
+        commit_graph, preloaded_measurements = (
+            load_commit_graph_and_measurements(
+                args.revision_data,
+                needed_signatures=needed_signatures,
+            )
+        )
+    else:
+        commit_graph = load_commit_graph(args.commits)
+
+    logger.info("Step 4/7: Building candidate revision paths.")
     paths_by_regression_id, path_stats = build_candidate_paths(
         regressions,
         commit_graph,
@@ -142,13 +175,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path in paths_by_regression_id.values()
         for revision in path.candidate_revisions
     }
-    needed_signatures = {regression.signature_id for regression in regressions}
-    measurements = load_measurements(
-        args.revision_data,
-        needed_revisions=needed_revisions,
-        needed_signatures=needed_signatures,
+    logger.info(
+        "Candidate path result: regressions=%d, paths=%d, "
+        "candidate_revisions=%d, signatures=%d",
+        len(regressions),
+        len(paths_by_regression_id),
+        len(needed_revisions),
+        len(needed_signatures),
     )
+    if path_stats:
+        logger.info("Candidate path counters: %s", dict(sorted(path_stats.items())))
 
+    logger.info("Step 5/7: Loading summary measurements for candidate paths.")
+    if preloaded_measurements is not None:
+        logger.info(
+            "Using summary measurements preloaded during the graph scan; "
+            "not rescanning revision data."
+        )
+        measurements = filter_measurements_by_revisions(
+            preloaded_measurements,
+            needed_revisions=needed_revisions,
+        )
+    else:
+        measurements = load_measurements(
+            args.revision_data,
+            needed_revisions=needed_revisions,
+            needed_signatures=needed_signatures,
+        )
+
+    logger.info("Step 6/7: Calculating and filtering oracle metrics.")
     output_rows = [
         calculate_regression_metrics(
             regression,
@@ -158,13 +213,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for regression in regressions
     ]
-    output_rows, excluded_rows = exclude_low_accuracy_rows(
-        output_rows,
-        minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
+    output_rows, excluded_missing_rows, excluded_low_accuracy_rows = (
+        exclude_unusable_or_low_accuracy_rows(
+            output_rows,
+            minimum_accuracy=MINIMUM_ORACLE_ACCURACY,
+        )
     )
+    logger.info(
+        "Oracle metrics calculated: kept_rows=%d, "
+        "excluded_missing_accuracy=%d, excluded_low_accuracy=%d",
+        len(output_rows),
+        len(excluded_missing_rows),
+        len(excluded_low_accuracy_rows),
+    )
+
+    logger.info("Step 7/7: Writing oracle metric outputs.")
     write_jsonl(args.output, output_rows)
     if plt is not None:
         plot_output = args.plot_output or default_distribution_plot_path(args.output)
+        logger.info("Writing oracle accuracy distribution plot: %s", plot_output)
         write_accuracy_distribution_plot(plt=plt, path=plot_output, rows=output_rows)
 
     metric_stats = summarize_output_rows(output_rows)
@@ -173,10 +240,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"measurement_keys={len(measurements)}")
     for key, value in sorted(path_stats.items()):
         print(f"{key}={value}")
-    print(f"oracle_metric_rows_excluded_low_accuracy={len(excluded_rows)}")
+    print(
+        "oracle_metric_rows_excluded_missing_accuracy="
+        f"{len(excluded_missing_rows)}"
+    )
+    print(
+        "oracle_metric_rows_excluded_low_accuracy="
+        f"{len(excluded_low_accuracy_rows)}"
+    )
     for key, value in sorted(metric_stats.items()):
         print(f"{key}={value}")
     print(f"wrote {len(output_rows)} rows to {args.output}")
+    logger.info("Finished perf-bisect oracle metric calculation.")
     return 0
 
 
@@ -208,7 +283,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--commits",
         type=Path,
         default=DEFAULT_COMMITS,
-        help="Path to all_commits.jsonl.",
+        help=(
+            "Path to a JSONL parent graph. Defaults to the reduced "
+            "per_revision_perf_data.jsonl."
+        ),
     )
     parser.add_argument(
         "--regressions",
@@ -255,10 +333,32 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "(correct + alpha) / (total + 2 * alpha)."
         ),
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Python logging level.",
+    )
     args = parser.parse_args(argv)
     if args.smoothing_alpha <= 0:
         parser.error("--smoothing-alpha must be positive")
     return args
+
+
+def configure_logging(log_level: str) -> None:
+    """Configure script logging."""
+
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
+
+def same_path(left: Path, right: Path) -> bool:
+    """Return whether two path arguments refer to the same filesystem path."""
+
+    return left.resolve() == right.resolve()
 
 
 def iter_jsonl(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
@@ -287,6 +387,7 @@ def load_regressions(paths: Sequence[Path]) -> list[Regression]:
     regressions = []
     seen_ids: set[int] = set()
     for path in paths:
+        before_count = len(regressions)
         for line_num, raw in iter_jsonl(path):
             regression = parse_regression(raw, path=path, line_num=line_num)
             if regression.regression_id in seen_ids:
@@ -296,6 +397,12 @@ def load_regressions(paths: Sequence[Path]) -> list[Regression]:
                 )
             seen_ids.add(regression.regression_id)
             regressions.append(regression)
+        logger.info(
+            "Loaded regressions: rows=%d, path=%s",
+            len(regressions) - before_count,
+            path,
+        )
+    logger.info("Loaded total regression rows: %d", len(regressions))
     return regressions
 
 
@@ -332,7 +439,7 @@ def optional_int(value: Any) -> int | None:
 
 
 def load_commit_graph(path: Path) -> CommitGraph:
-    """Load Mercurial commit parent links from all_commits.jsonl."""
+    """Load Mercurial commit parent links from a graph JSONL file."""
 
     index_by_node: dict[str, int] = {}
     parents_by_node: dict[str, list[str]] = {}
@@ -350,7 +457,65 @@ def load_commit_graph(path: Path) -> CommitGraph:
             if isinstance(parent, str) and parent and parent != NULL_NODE
         ]
         parents_by_node[node] = parents
+    logger.info(
+        "Loaded commit graph: revisions=%d, parent_entries=%d, source=%s",
+        len(index_by_node),
+        sum(len(parents) for parents in parents_by_node.values()),
+        path,
+    )
     return CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node)
+
+
+def load_commit_graph_and_measurements(
+    path: Path,
+    *,
+    needed_signatures: set[int],
+) -> tuple[CommitGraph, dict[tuple[str, int], MeasurementValues]]:
+    """Load graph fields and needed summary measurements in one file pass."""
+
+    index_by_node: dict[str, int] = {}
+    parents_by_node: dict[str, list[str]] = {}
+    measurements: dict[tuple[str, int], MeasurementValues] = {}
+    stats: Counter[str] = Counter()
+
+    for _, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
+        node = raw.get("node")
+        if not isinstance(node, str) or not node:
+            continue
+        if node in index_by_node:
+            raise ValueError(f"duplicate commit node in {path}: {node}")
+
+        index_by_node[node] = len(index_by_node)
+        parents = [
+            parent
+            for parent in raw.get("parents", [])
+            if isinstance(parent, str) and parent and parent != NULL_NODE
+        ]
+        parents_by_node[node] = parents
+
+        for measurement in raw.get("perf_measurement_data", []):
+            add_summary_measurement(
+                measurements,
+                node=str(node),
+                measurement=measurement,
+                needed_signatures=needed_signatures,
+                stats=stats,
+            )
+
+    logger.info(
+        "Loaded commit graph and summary measurements: revisions=%d, "
+        "parent_entries=%d, measurement_keys=%d, source=%s",
+        len(index_by_node),
+        sum(len(parents) for parents in parents_by_node.values()),
+        len(measurements),
+        path,
+    )
+    logger.info("Combined graph/measurement scan counters: %s", dict(stats))
+    return (
+        CommitGraph(index_by_node=index_by_node, parents_by_node=parents_by_node),
+        measurements,
+    )
 
 
 def build_candidate_paths(
@@ -386,7 +551,35 @@ def build_candidate_paths(
             candidate_revisions=candidates,
             culprit_index=full_path.index(regression.culprit_revision),
         )
+    logger.info(
+        "Built candidate paths: paths=%d, missing=%d, culprit_not_in_path=%d",
+        len(paths),
+        stats["path_missing"],
+        stats["culprit_not_in_path"],
+    )
     return paths, stats
+
+
+def filter_measurements_by_revisions(
+    measurements: Mapping[tuple[str, int], MeasurementValues],
+    *,
+    needed_revisions: set[str],
+) -> dict[tuple[str, int], MeasurementValues]:
+    """Keep preloaded measurements only for candidate revisions."""
+
+    filtered = {
+        key: values
+        for key, values in measurements.items()
+        if key[0] in needed_revisions
+    }
+    logger.info(
+        "Filtered preloaded measurements to candidate revisions: "
+        "before_keys=%d, after_keys=%d, after_values=%d",
+        len(measurements),
+        len(filtered),
+        sum(len(values.summary) for values in filtered.values()),
+    )
+    return filtered
 
 
 def load_measurements(
@@ -395,39 +588,73 @@ def load_measurements(
     needed_revisions: set[str],
     needed_signatures: set[int],
 ) -> dict[tuple[str, int], MeasurementValues]:
-    """Load summary and replicate values for needed revision/signature pairs."""
+    """Load summary values for needed revision/signature pairs."""
 
     measurements: dict[tuple[str, int], MeasurementValues] = {}
     if not needed_revisions or not needed_signatures:
+        logger.info("No revisions or signatures requested; skipping measurement load.")
         return measurements
 
+    stats: Counter[str] = Counter()
     for _, raw in iter_jsonl(path):
+        stats["revision_rows_scanned"] += 1
         node = raw.get("node")
         if node not in needed_revisions:
             continue
+        stats["candidate_revision_rows"] += 1
 
         for measurement in raw.get("perf_measurement_data", []):
-            if not isinstance(measurement, Mapping):
-                continue
-            try:
-                signature_id = int(measurement["signature_id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if signature_id not in needed_signatures:
-                continue
+            add_summary_measurement(
+                measurements,
+                node=str(node),
+                measurement=measurement,
+                needed_signatures=needed_signatures,
+                stats=stats,
+            )
 
-            try:
-                value = float(measurement["value"])
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            values = measurements.setdefault((str(node), signature_id), MeasurementValues())
-            if measurement.get("replicate") is True:
-                values.replicate.append(value)
-            elif measurement.get("replicate") is False:
-                values.summary.append(value)
-
+    logger.info(
+        "Loaded measurements: keys=%d, stats=%s",
+        len(measurements),
+        dict(sorted(stats.items())),
+    )
     return measurements
+
+
+def add_summary_measurement(
+    measurements: dict[tuple[str, int], MeasurementValues],
+    *,
+    node: str,
+    measurement: Any,
+    needed_signatures: set[int],
+    stats: Counter[str],
+) -> None:
+    """Add one summary measurement if it belongs to a needed signature."""
+
+    stats["measurements_seen"] += 1
+    if not isinstance(measurement, Mapping):
+        stats["measurement_not_object"] += 1
+        return
+    if measurement.get("replicate") is not False:
+        stats["measurement_not_summary"] += 1
+        return
+    try:
+        signature_id = int(measurement["signature_id"])
+    except (KeyError, TypeError, ValueError):
+        stats["measurement_bad_signature"] += 1
+        return
+    if signature_id not in needed_signatures:
+        stats["measurement_unneeded_signature"] += 1
+        return
+
+    try:
+        value = float(measurement["value"])
+    except (KeyError, TypeError, ValueError):
+        stats["measurement_bad_value"] += 1
+        return
+
+    values = measurements.setdefault((node, signature_id), MeasurementValues())
+    values.summary.append(value)
+    stats["summary_values_loaded"] += 1
 
 
 def calculate_regression_metrics(
@@ -437,12 +664,10 @@ def calculate_regression_metrics(
     measurements: Mapping[tuple[str, int], MeasurementValues],
     smoothing_alpha: float,
 ) -> dict[str, int | float | None]:
-    """Calculate summary and replicate oracle accuracies for one regression."""
+    """Calculate summary oracle accuracy for one regression."""
 
     summary_correct = 0
     summary_total = 0
-    replicate_correct = 0
-    replicate_total = 0
 
     if candidate_path is not None:
         for revision in candidate_path.candidate_revisions:
@@ -455,26 +680,14 @@ def calculate_regression_metrics(
                 baseline=regression.baseline,
                 expected_bad=expected_bad,
             )
-            correct_replicate, total_replicate = score_values(
-                values.replicate,
-                baseline=regression.baseline,
-                expected_bad=expected_bad,
-            )
             summary_correct += correct_summary
             summary_total += total_summary
-            replicate_correct += correct_replicate
-            replicate_total += total_replicate
 
     return {
         "regression_id": regression.regression_id,
         "summary_oracle_accuracy": accuracy(
             summary_correct,
             summary_total,
-            smoothing_alpha=smoothing_alpha,
-        ),
-        "replicate_oracle_accuracy": accuracy(
-            replicate_correct,
-            replicate_total,
             smoothing_alpha=smoothing_alpha,
         ),
     }
@@ -505,37 +718,41 @@ def accuracy(correct: int, total: int, *, smoothing_alpha: float) -> float | Non
     return (correct + smoothing_alpha) / (total + 2 * smoothing_alpha)
 
 
-def exclude_low_accuracy_rows(
+def exclude_unusable_or_low_accuracy_rows(
     rows: Sequence[dict[str, int | float | None]],
     *,
     minimum_accuracy: float,
-) -> tuple[list[dict[str, int | float | None]], list[dict[str, int | float | None]]]:
-    """Drop rows where either available oracle accuracy is below the threshold."""
+) -> tuple[
+    list[dict[str, int | float | None]],
+    list[dict[str, int | float | None]],
+    list[dict[str, int | float | None]],
+]:
+    """Drop rows without accuracy or below the accuracy threshold."""
 
     kept_rows: list[dict[str, int | float | None]] = []
-    excluded_rows: list[dict[str, int | float | None]] = []
+    excluded_missing_rows: list[dict[str, int | float | None]] = []
+    excluded_low_accuracy_rows: list[dict[str, int | float | None]] = []
     for row in rows:
         summary_accuracy = row["summary_oracle_accuracy"]
-        replicate_accuracy = row["replicate_oracle_accuracy"]
-        should_exclude = (
-            (summary_accuracy is not None and summary_accuracy < minimum_accuracy)
-            or (
-                replicate_accuracy is not None
-                and replicate_accuracy < minimum_accuracy
+        if summary_accuracy is None:
+            excluded_missing_rows.append(row)
+            logger.warning(
+                "Excluding oracle metric row for regression_id=%s: "
+                "no summary measurements available.",
+                row["regression_id"],
             )
-        )
-        if should_exclude:
-            excluded_rows.append(row)
-            print(
-                "[WARN] Excluding oracle metric row for "
-                f"regression_id={row['regression_id']}: "
-                f"summary_oracle_accuracy={summary_accuracy}, "
-                f"replicate_oracle_accuracy={replicate_accuracy}, "
-                f"minimum_accuracy={minimum_accuracy}."
+        elif summary_accuracy < minimum_accuracy:
+            excluded_low_accuracy_rows.append(row)
+            logger.warning(
+                "Excluding oracle metric row for regression_id=%s: "
+                "summary_oracle_accuracy=%s, minimum_accuracy=%s.",
+                row["regression_id"],
+                summary_accuracy,
+                minimum_accuracy,
             )
         else:
             kept_rows.append(row)
-    return kept_rows, excluded_rows
+    return kept_rows, excluded_missing_rows, excluded_low_accuracy_rows
 
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
@@ -546,6 +763,7 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
         for row in rows:
             fh.write(json.dumps(row))
             fh.write("\n")
+    logger.info("Wrote oracle metrics JSONL: path=%s", path)
 
 
 def default_distribution_plot_path(output_path: Path) -> Path:
@@ -612,6 +830,7 @@ def write_accuracy_distribution_plot(
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=DEFAULT_DISTRIBUTION_PLOT_DPI, bbox_inches="tight")
     plt.close(fig)
+    logger.info("Wrote oracle accuracy distribution plot: %s", path)
     print(f"wrote {path}")
 
 
@@ -649,18 +868,14 @@ def load_matplotlib() -> Any:
 
 
 def summarize_output_rows(rows: Sequence[Mapping[str, Any]]) -> Counter[str]:
-    """Summarize nullable metric counts for logging."""
+    """Summarize metric counts for logging."""
 
     stats: Counter[str] = Counter()
     for row in rows:
         if row["summary_oracle_accuracy"] is None:
             stats["summary_accuracy_null"] += 1
-        else:
-            stats["summary_accuracy_present"] += 1
-        if row["replicate_oracle_accuracy"] is None:
-            stats["replicate_accuracy_null"] += 1
-        else:
-            stats["replicate_accuracy_present"] += 1
+            continue
+        stats["summary_accuracy_present"] += 1
     return stats
 
 
