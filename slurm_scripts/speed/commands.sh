@@ -229,7 +229,9 @@ echo "Running script ..."
 # --pba-confidence-threshold-max 0.99 \
 # --pba-repeat-count-max 80 \
 # --pba-max-test-runs-min 20 \
-# --pba-max-test-runs-max 400
+# --pba-max-test-runs-max 400 \
+# --pba-assumed-oracle-accuracy-min 0.55 \
+# --pba-assumed-oracle-accuracy-max 0.99
 
 
 
