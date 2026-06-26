@@ -211,13 +211,15 @@ posterior probability reaches `0.5`. Bisection PBA localizers submit
 `--pba-repeat-count` observations for one revision per round. `pba_batch_size` is
 fixed at `1`, so these variants are sequential rather than batched.
 
-For each clean/bad observation, the localizer reads the oracle's accuracy for
-that probe. With `SummaryComparison`, this is the regression's
-`summary_oracle_accuracy`. If the observation matches what would be expected for
-a possible culprit, that culprit's posterior probability is multiplied by the
-oracle accuracy. If the observation contradicts that possible culprit, its
-posterior probability is multiplied by `1 - accuracy`. The posterior is then
-renormalized to sum to `1.0`.
+For each clean/bad observation, the localizer uses
+`--pba-assumed-oracle-accuracy` as the likelihood in the Bayesian update. This
+is a deployable algorithm parameter, separate from `summary_oracle_accuracy`,
+which is only used by `SummaryComparison` to simulate noisy oracle decisions. If
+the observation matches what would be expected for a possible culprit, that
+culprit's posterior probability is multiplied by the assumed accuracy. If the
+observation contradicts that possible culprit, its posterior probability is
+multiplied by `1 - assumed_accuracy`. The posterior is then renormalized to sum
+to `1.0`.
 
 The localizer accepts a single culprit only when the highest posterior
 probability is at least `--pba-confidence-threshold` and no other candidate is
@@ -236,6 +238,7 @@ The tunable PBA parameters are:
 - `pba_confidence_threshold`
 - `pba_repeat_count`
 - `pba_max_test_runs`
+- `pba_assumed_oracle_accuracy`
 - `pba_risk_prior_uniform_weight` for
   `ProbabilisticBisection_PosteriorMedian_RiskAwarePrior`
 
@@ -244,6 +247,8 @@ Optuna samples these from:
 - `--pba-confidence-threshold-min` / `--pba-confidence-threshold-max`
 - `--pba-repeat-count-min` / `--pba-repeat-count-max`
 - `--pba-max-test-runs-min` / `--pba-max-test-runs-max`
+- `--pba-assumed-oracle-accuracy-min` /
+  `--pba-assumed-oracle-accuracy-max`
 - `--pba-risk-prior-uniform-weight-min` /
   `--pba-risk-prior-uniform-weight-max`
 
@@ -277,6 +282,7 @@ tunes:
 - `pba_confidence_threshold`
 - `pba_repeat_count`
 - `pba_max_test_runs`
+- `pba_assumed_oracle_accuracy`
 
 ## Metrics
 
@@ -447,6 +453,7 @@ python analysis/perf_bisect/simulation.py \
   --pba-confidence-threshold 0.9 \
   --pba-repeat-count 2 \
   --pba-max-test-runs 120 \
+  --pba-assumed-oracle-accuracy 0.9 \
   --pba-risk-prior-uniform-weight 0.05
 ```
 

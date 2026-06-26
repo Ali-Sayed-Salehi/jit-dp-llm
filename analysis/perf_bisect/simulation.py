@@ -72,6 +72,9 @@ DEFAULT_PBA_REPEAT_COUNT_MAX = 5
 DEFAULT_PBA_MAX_TEST_RUNS = 100
 DEFAULT_PBA_MAX_TEST_RUNS_MIN = 1
 DEFAULT_PBA_MAX_TEST_RUNS_MAX = 200
+DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY = 0.9
+DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY_MIN = 0.55
+DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY_MAX = 0.99
 DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT = 0.05
 DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MIN = 0.0
 DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MAX = 0.5
@@ -83,29 +86,34 @@ TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER = {
         "pba_confidence_threshold",
         "pba_repeat_count",
         "pba_max_test_runs",
+        "pba_assumed_oracle_accuracy",
     ),
     "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior": (
         "pba_confidence_threshold",
         "pba_repeat_count",
         "pba_max_test_runs",
+        "pba_assumed_oracle_accuracy",
         "pba_risk_prior_uniform_weight",
     ),
     "ProbabilisticBisection_PosteriorMedian_UniformPrior": (
         "pba_confidence_threshold",
         "pba_repeat_count",
         "pba_max_test_runs",
+        "pba_assumed_oracle_accuracy",
     ),
     "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior": (
         "multisection_section_count",
         "pba_confidence_threshold",
         "pba_repeat_count",
         "pba_max_test_runs",
+        "pba_assumed_oracle_accuracy",
     ),
     "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior": (
         "multisection_section_count",
         "pba_confidence_threshold",
         "pba_repeat_count",
         "pba_max_test_runs",
+        "pba_assumed_oracle_accuracy",
     ),
     "RiskWeightedBisection": ("midpoint_retrigger_count",),
     "RiskWeightedMultisection": (
@@ -192,6 +200,7 @@ class SimulationParameters:
     pba_confidence_threshold: float
     pba_repeat_count: int
     pba_max_test_runs: int
+    pba_assumed_oracle_accuracy: float
     pba_risk_prior_uniform_weight: float
 
     def to_json(self) -> dict[str, Any]:
@@ -206,6 +215,7 @@ class SimulationParameters:
             "pba_confidence_threshold": self.pba_confidence_threshold,
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
+            "pba_assumed_oracle_accuracy": self.pba_assumed_oracle_accuracy,
             "pba_risk_prior_uniform_weight": (
                 self.pba_risk_prior_uniform_weight
             ),
@@ -270,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pba_confidence_threshold=args.pba_confidence_threshold,
         pba_repeat_count=args.pba_repeat_count,
         pba_max_test_runs=args.pba_max_test_runs,
+        pba_assumed_oracle_accuracy=args.pba_assumed_oracle_accuracy,
         pba_risk_prior_uniform_weight=args.pba_risk_prior_uniform_weight,
     )
     metric_vote_specs = metric_vote_specs_from_args(args)
@@ -347,6 +358,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pba_repeat_count_max": args.pba_repeat_count_max,
             "pba_max_test_runs_min": args.pba_max_test_runs_min,
             "pba_max_test_runs_max": args.pba_max_test_runs_max,
+            "pba_assumed_oracle_accuracy_min": (
+                args.pba_assumed_oracle_accuracy_min
+            ),
+            "pba_assumed_oracle_accuracy_max": (
+                args.pba_assumed_oracle_accuracy_max
+            ),
             "pba_risk_prior_uniform_weight_min": (
                 args.pba_risk_prior_uniform_weight_min
             ),
@@ -394,6 +411,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             pba_repeat_count_max=args.pba_repeat_count_max,
             pba_max_test_runs_min=args.pba_max_test_runs_min,
             pba_max_test_runs_max=args.pba_max_test_runs_max,
+            pba_assumed_oracle_accuracy_min=(
+                args.pba_assumed_oracle_accuracy_min
+            ),
+            pba_assumed_oracle_accuracy_max=(
+                args.pba_assumed_oracle_accuracy_max
+            ),
             pba_risk_prior_uniform_weight_min=(
                 args.pba_risk_prior_uniform_weight_min
             ),
@@ -617,6 +640,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Maximum test jobs for one PBA regression before returning the MAP "
             "guess as a low-confidence or ambiguous localization."
+        ),
+    )
+    parser.add_argument(
+        "--pba-assumed-oracle-accuracy",
+        type=float,
+        default=DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY,
+        help=(
+            "Deployable oracle reliability assumed by PBA/PMA posterior "
+            "updates. This is an algorithm parameter and is separate from "
+            "summary_oracle_accuracy, which only simulates noisy oracle "
+            "decisions."
         ),
     )
     parser.add_argument(
@@ -857,6 +891,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum PBA max-test-runs value sampled by Optuna.",
     )
     parser.add_argument(
+        "--pba-assumed-oracle-accuracy-min",
+        type=float,
+        default=DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY_MIN,
+        help="Minimum assumed oracle accuracy sampled by Optuna for PBA/PMA.",
+    )
+    parser.add_argument(
+        "--pba-assumed-oracle-accuracy-max",
+        type=float,
+        default=DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY_MAX,
+        help="Maximum assumed oracle accuracy sampled by Optuna for PBA/PMA.",
+    )
+    parser.add_argument(
         "--pba-risk-prior-uniform-weight-min",
         type=float,
         default=DEFAULT_PBA_RISK_PRIOR_UNIFORM_WEIGHT_MIN,
@@ -891,6 +937,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--pba-repeat-count must be at least 1")
     if args.pba_max_test_runs < 1:
         parser.error("--pba-max-test-runs must be at least 1")
+    if not 0.5 < args.pba_assumed_oracle_accuracy <= 1.0:
+        parser.error("--pba-assumed-oracle-accuracy must be in (0.5, 1]")
     if not 0.0 <= args.pba_risk_prior_uniform_weight <= 1.0:
         parser.error("--pba-risk-prior-uniform-weight must be in [0, 1]")
     if args.optuna_trials < 0:
@@ -952,6 +1000,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--pba-max-test-runs-max must be greater than or equal to "
             "--pba-max-test-runs-min"
+        )
+    if not 0.5 < args.pba_assumed_oracle_accuracy_min <= 1.0:
+        parser.error("--pba-assumed-oracle-accuracy-min must be in (0.5, 1]")
+    if not 0.5 < args.pba_assumed_oracle_accuracy_max <= 1.0:
+        parser.error("--pba-assumed-oracle-accuracy-max must be in (0.5, 1]")
+    if (
+        args.pba_assumed_oracle_accuracy_max
+        < args.pba_assumed_oracle_accuracy_min
+    ):
+        parser.error(
+            "--pba-assumed-oracle-accuracy-max must be greater than or "
+            "equal to --pba-assumed-oracle-accuracy-min"
         )
     if not 0.0 <= args.pba_risk_prior_uniform_weight_min <= 1.0:
         parser.error("--pba-risk-prior-uniform-weight-min must be in [0, 1]")
@@ -1478,6 +1538,10 @@ def run_dataset(
             ),
             "pba_repeat_count": default_parameters.pba_repeat_count,
             "pba_max_test_runs": default_parameters.pba_max_test_runs,
+            "pba_assumed_oracle_accuracy": (
+                default_parameters.pba_assumed_oracle_accuracy
+            ),
+            "pba_assumed_oracle_accuracy_source": "configured_parameter",
             "pba_risk_prior_uniform_weight": (
                 default_parameters.pba_risk_prior_uniform_weight
             ),
@@ -1741,12 +1805,14 @@ def build_localizer(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_assumed_oracle_accuracy=parameters.pba_assumed_oracle_accuracy,
         )
     if localizer_name == "ProbabilisticBisection_CumulativeRiskMedian_UniformPrior":
         return localizer_cls(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_assumed_oracle_accuracy=parameters.pba_assumed_oracle_accuracy,
             risk_scores=risk_scores,
         )
     if (
@@ -1758,6 +1824,7 @@ def build_localizer(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_assumed_oracle_accuracy=parameters.pba_assumed_oracle_accuracy,
             risk_scores=risk_scores,
         )
     if localizer_name == "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior":
@@ -1766,12 +1833,14 @@ def build_localizer(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_assumed_oracle_accuracy=parameters.pba_assumed_oracle_accuracy,
         )
     if localizer_name == "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior":
         return localizer_cls(
             pba_confidence_threshold=parameters.pba_confidence_threshold,
             pba_repeat_count=parameters.pba_repeat_count,
             pba_max_test_runs=parameters.pba_max_test_runs,
+            pba_assumed_oracle_accuracy=parameters.pba_assumed_oracle_accuracy,
             pba_risk_prior_uniform_weight=(
                 parameters.pba_risk_prior_uniform_weight
             ),
@@ -1812,6 +1881,8 @@ def optimize_parameters_on_eval(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_assumed_oracle_accuracy_min: float,
+    pba_assumed_oracle_accuracy_max: float,
     pba_risk_prior_uniform_weight_min: float,
     pba_risk_prior_uniform_weight_max: float,
     optuna_trials: int,
@@ -1855,6 +1926,12 @@ def optimize_parameters_on_eval(
                 pba_repeat_count_max=pba_repeat_count_max,
                 pba_max_test_runs_min=pba_max_test_runs_min,
                 pba_max_test_runs_max=pba_max_test_runs_max,
+                pba_assumed_oracle_accuracy_min=(
+                    pba_assumed_oracle_accuracy_min
+                ),
+                pba_assumed_oracle_accuracy_max=(
+                    pba_assumed_oracle_accuracy_max
+                ),
                 pba_risk_prior_uniform_weight_min=(
                     pba_risk_prior_uniform_weight_min
                 ),
@@ -1905,6 +1982,8 @@ def optimize_combo_on_eval(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_assumed_oracle_accuracy_min: float,
+    pba_assumed_oracle_accuracy_max: float,
     pba_risk_prior_uniform_weight_min: float,
     pba_risk_prior_uniform_weight_max: float,
     optuna_trials: int,
@@ -1962,6 +2041,8 @@ def optimize_combo_on_eval(
             pba_repeat_count_max=pba_repeat_count_max,
             pba_max_test_runs_min=pba_max_test_runs_min,
             pba_max_test_runs_max=pba_max_test_runs_max,
+            pba_assumed_oracle_accuracy_min=pba_assumed_oracle_accuracy_min,
+            pba_assumed_oracle_accuracy_max=pba_assumed_oracle_accuracy_max,
             pba_risk_prior_uniform_weight_min=pba_risk_prior_uniform_weight_min,
             pba_risk_prior_uniform_weight_max=pba_risk_prior_uniform_weight_max,
         )
@@ -2058,6 +2139,8 @@ def suggest_parameters(
     pba_repeat_count_max: int,
     pba_max_test_runs_min: int,
     pba_max_test_runs_max: int,
+    pba_assumed_oracle_accuracy_min: float,
+    pba_assumed_oracle_accuracy_max: float,
     pba_risk_prior_uniform_weight_min: float,
     pba_risk_prior_uniform_weight_max: float,
 ) -> SimulationParameters:
@@ -2072,6 +2155,7 @@ def suggest_parameters(
     pba_confidence_threshold = default_parameters.pba_confidence_threshold
     pba_repeat_count = default_parameters.pba_repeat_count
     pba_max_test_runs = default_parameters.pba_max_test_runs
+    pba_assumed_oracle_accuracy = default_parameters.pba_assumed_oracle_accuracy
     pba_risk_prior_uniform_weight = (
         default_parameters.pba_risk_prior_uniform_weight
     )
@@ -2145,6 +2229,11 @@ def suggest_parameters(
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
+        pba_assumed_oracle_accuracy = trial.suggest_float(
+            f"{localizer_name}_pba_assumed_oracle_accuracy",
+            float(pba_assumed_oracle_accuracy_min),
+            float(pba_assumed_oracle_accuracy_max),
+        )
     elif localizer_name in {
         "ProbabilisticMultiSection_CumulativeRiskQuantile_UniformPrior",
         "ProbabilisticMultiSection_PosteriorQuantile_UniformPrior",
@@ -2169,6 +2258,11 @@ def suggest_parameters(
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
+        pba_assumed_oracle_accuracy = trial.suggest_float(
+            f"{localizer_name}_pba_assumed_oracle_accuracy",
+            float(pba_assumed_oracle_accuracy_min),
+            float(pba_assumed_oracle_accuracy_max),
+        )
     elif localizer_name == "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior":
         pba_confidence_threshold = trial.suggest_float(
             (
@@ -2188,6 +2282,14 @@ def suggest_parameters(
             int(pba_max_test_runs_min),
             int(pba_max_test_runs_max),
         )
+        pba_assumed_oracle_accuracy = trial.suggest_float(
+            (
+                "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_"
+                "pba_assumed_oracle_accuracy"
+            ),
+            float(pba_assumed_oracle_accuracy_min),
+            float(pba_assumed_oracle_accuracy_max),
+        )
         pba_risk_prior_uniform_weight = trial.suggest_float(
             (
                 "ProbabilisticBisection_PosteriorMedian_RiskAwarePrior_"
@@ -2205,6 +2307,7 @@ def suggest_parameters(
         pba_confidence_threshold=float(pba_confidence_threshold),
         pba_repeat_count=int(pba_repeat_count),
         pba_max_test_runs=int(pba_max_test_runs),
+        pba_assumed_oracle_accuracy=float(pba_assumed_oracle_accuracy),
         pba_risk_prior_uniform_weight=float(pba_risk_prior_uniform_weight),
     )
 
@@ -2525,6 +2628,12 @@ def parameters_from_trial(trial: Any) -> SimulationParameters:
         pba_confidence_threshold=float(raw_parameters["pba_confidence_threshold"]),
         pba_repeat_count=int(raw_parameters["pba_repeat_count"]),
         pba_max_test_runs=int(raw_parameters["pba_max_test_runs"]),
+        pba_assumed_oracle_accuracy=float(
+            raw_parameters.get(
+                "pba_assumed_oracle_accuracy",
+                DEFAULT_PBA_ASSUMED_ORACLE_ACCURACY,
+            )
+        ),
         pba_risk_prior_uniform_weight=float(
             raw_parameters.get(
                 "pba_risk_prior_uniform_weight",

@@ -1293,6 +1293,7 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
         pba_confidence_threshold: float = 0.9,
         pba_repeat_count: int = 1,
         pba_max_test_runs: int = 100,
+        pba_assumed_oracle_accuracy: float = 0.9,
     ) -> None:
         """Configure posterior confidence, repeated probes, and test-run budget."""
 
@@ -1302,9 +1303,11 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             raise ValueError("pba_repeat_count must be at least 1")
         if pba_max_test_runs < 1:
             raise ValueError("pba_max_test_runs must be at least 1")
+        self._validate_accuracy(pba_assumed_oracle_accuracy)
         self.pba_confidence_threshold = pba_confidence_threshold
         self.pba_repeat_count = pba_repeat_count
         self.pba_max_test_runs = pba_max_test_runs
+        self.pba_assumed_oracle_accuracy = pba_assumed_oracle_accuracy
 
     def localize(
         self,
@@ -1404,18 +1407,12 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             ):
                 if decision.decision is OracleDecision.UNKNOWN:
                     continue
-                probe_accuracy = oracle.accuracy_for(
-                    decision.revision,
-                    regression=regression,
-                    revision_path=path,
-                )
-                self._validate_accuracy(probe_accuracy)
                 known_observation_count += 1
                 posterior = self._updated_posterior(
                     posterior=posterior,
                     probe_idx=probe_idx,
                     decision=decision.decision,
-                    oracle_accuracy=probe_accuracy,
+                    oracle_accuracy=self.pba_assumed_oracle_accuracy,
                 )
                 if posterior is None:
                     undefined_reason = "posterior_degenerate"
@@ -1520,6 +1517,8 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
             "pba_confidence_threshold": self.pba_confidence_threshold,
             "pba_repeat_count": self.pba_repeat_count,
             "pba_max_test_runs": self.pba_max_test_runs,
+            "pba_assumed_oracle_accuracy": self.pba_assumed_oracle_accuracy,
+            "pba_assumed_oracle_accuracy_source": "configured_parameter",
         }
 
     def _probe_candidate_indices(
@@ -1609,8 +1608,10 @@ class ProbabilisticBisectionPosteriorMedianUniformPrior(CulpritLocalizer):
     def _validate_accuracy(accuracy: float) -> None:
         """Validate one oracle accuracy value before using it as a likelihood."""
 
-        if not 0.0 <= accuracy <= 1.0:
-            raise ValueError(f"oracle accuracy must be between 0 and 1: {accuracy!r}")
+        if not 0.5 < accuracy <= 1.0:
+            raise ValueError(
+                f"assumed oracle accuracy must be in (0.5, 1]: {accuracy!r}"
+            )
 
     @classmethod
     def _posterior_map(cls, posterior: Sequence[float]) -> tuple[int, float, list[int]]:
@@ -1732,6 +1733,7 @@ class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
         pba_confidence_threshold: float = 0.9,
         pba_repeat_count: int = 1,
         pba_max_test_runs: int = 100,
+        pba_assumed_oracle_accuracy: float = 0.9,
     ) -> None:
         """Configure posterior quantile fan-out, repeats, and test-run budget."""
 
@@ -1739,6 +1741,7 @@ class ProbabilisticMultiSectionPosteriorQuantileUniformPrior(
             pba_confidence_threshold=pba_confidence_threshold,
             pba_repeat_count=pba_repeat_count,
             pba_max_test_runs=pba_max_test_runs,
+            pba_assumed_oracle_accuracy=pba_assumed_oracle_accuracy,
         )
         if multisection_section_count < 2:
             raise ValueError("multisection_section_count must be at least 2")
@@ -1878,6 +1881,7 @@ class ProbabilisticMultiSectionCumulativeRiskQuantileUniformPrior(
         pba_confidence_threshold: float = 0.9,
         pba_repeat_count: int = 1,
         pba_max_test_runs: int = 100,
+        pba_assumed_oracle_accuracy: float = 0.9,
     ) -> None:
         """Configure cumulative-risk quantile fan-out and PBA settings."""
 
@@ -1886,6 +1890,7 @@ class ProbabilisticMultiSectionCumulativeRiskQuantileUniformPrior(
             pba_confidence_threshold=pba_confidence_threshold,
             pba_repeat_count=pba_repeat_count,
             pba_max_test_runs=pba_max_test_runs,
+            pba_assumed_oracle_accuracy=pba_assumed_oracle_accuracy,
         )
         self.risk_scores = _validate_risk_scores(risk_scores)
 
@@ -2014,6 +2019,7 @@ class ProbabilisticBisectionCumulativeRiskMedianUniformPrior(
         pba_confidence_threshold: float = 0.9,
         pba_repeat_count: int = 1,
         pba_max_test_runs: int = 100,
+        pba_assumed_oracle_accuracy: float = 0.9,
     ) -> None:
         """Configure PBA and per-revision risk scores for probe selection."""
 
@@ -2021,6 +2027,7 @@ class ProbabilisticBisectionCumulativeRiskMedianUniformPrior(
             pba_confidence_threshold=pba_confidence_threshold,
             pba_repeat_count=pba_repeat_count,
             pba_max_test_runs=pba_max_test_runs,
+            pba_assumed_oracle_accuracy=pba_assumed_oracle_accuracy,
         )
         self.risk_scores = _validate_risk_scores(risk_scores)
 
@@ -2134,6 +2141,7 @@ class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
         pba_repeat_count: int = 1,
         pba_max_test_runs: int = 100,
         pba_risk_prior_uniform_weight: float = 0.05,
+        pba_assumed_oracle_accuracy: float = 0.9,
     ) -> None:
         """Configure PBA and the uniform mix used to soften risk-score priors."""
 
@@ -2141,6 +2149,7 @@ class ProbabilisticBisectionPosteriorMedianRiskAwarePrior(
             pba_confidence_threshold=pba_confidence_threshold,
             pba_repeat_count=pba_repeat_count,
             pba_max_test_runs=pba_max_test_runs,
+            pba_assumed_oracle_accuracy=pba_assumed_oracle_accuracy,
         )
         if not 0.0 <= pba_risk_prior_uniform_weight <= 1.0:
             raise ValueError("pba_risk_prior_uniform_weight must be in [0, 1]")
