@@ -388,6 +388,14 @@ python analysis/perf_bisect/simulation.py --dataset eval
 python analysis/perf_bisect/simulation.py --dataset final_test
 ```
 
+Replay optimized eval parameters on the final-test split only:
+
+```bash
+python analysis/perf_bisect/simulation.py \
+  --final-test-replay \
+  --eval-results-json analysis/perf_bisect/results/1w_50t_332211_final/per_bisect_results_eval.json
+```
+
 Change executor capacity:
 
 ```bash

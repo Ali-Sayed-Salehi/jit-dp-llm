@@ -193,7 +193,9 @@ echo "Running script ..."
 # --pba-max-test-runs-min 20 \
 # --pba-max-test-runs-max 400 \
 # --pba-assumed-oracle-accuracy-min 0.55 \
-# --pba-assumed-oracle-accuracy-max 0.99
+# --pba-assumed-oracle-accuracy-max 0.99 \
+# --final-test-replay \
+# --eval-results-json analysis/perf_bisect/results/1w_50t_332211/per_bisect_results_eval.json
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/perf_bisect/plot_for_machine_counts.py \

@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 try:
     from .localization import LOCALIZERS, CulpritLocalizer
@@ -265,12 +266,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load inputs, run requested simulations, and write summary/detail outputs."""
 
     args = parse_args(argv)
-    if args.ignored_risk_localizers:
-        ignored = ", ".join(args.ignored_risk_localizers)
-        kept = ", ".join(args.localizers)
-        print(f"--ignore-risk enabled; ignoring risk localizers: {ignored}")
-        print(f"Running non-risk localizers: {kept}")
-    dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
     default_parameters = SimulationParameters(
         backfill_retrigger_count=args.backfill_retrigger_count,
         probe_repeat_count=args.probe_repeat_count,
@@ -285,6 +280,63 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metric_vote_specs = metric_vote_specs_from_args(args)
     metric_formula_specs = metric_formula_specs_from_args(args)
+
+    combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
+    optimization_settings = None
+    if args.final_test_replay:
+        (
+            combo_parameters,
+            replay_combo_keys,
+            replay_source_dataset,
+            default_parameters,
+        ) = load_replay_combo_parameters(
+            args.eval_results_json,
+            fallback_default_parameters=default_parameters,
+        )
+        if not args.localizers_were_explicit:
+            args.localizers = ordered_unique(
+                localizer_name for localizer_name, _ in replay_combo_keys
+            )
+            if args.ignore_risk:
+                try:
+                    args.localizers, args.ignored_risk_localizers = (
+                        split_ignored_risk_localizers(args.localizers)
+                    )
+                except ValueError as exc:
+                    raise SystemExit(f"error: {exc}") from exc
+        if not args.oracles_were_explicit:
+            args.oracles = ordered_unique(
+                oracle_name for _, oracle_name in replay_combo_keys
+            )
+        try:
+            validate_replay_combo_coverage(
+                combo_parameters=combo_parameters,
+                localizer_names=args.localizers,
+                oracle_names=args.oracles,
+                source_path=args.eval_results_json,
+            )
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
+        optimization_settings = {
+            "enabled": False,
+            "mode": "final_test_replay",
+            "tuning_dataset": "eval",
+            "replay_dataset": "final_test",
+            "source_eval_results_json": str(args.eval_results_json),
+            "source_dataset": replay_source_dataset,
+            "loaded_combo_count": len(combo_parameters),
+            "selection": (
+                "loaded optuna_optimized_parameters from the eval summary "
+                "without running Optuna"
+            ),
+        }
+
+    if args.ignored_risk_localizers:
+        ignored = ", ".join(args.ignored_risk_localizers)
+        kept = ", ".join(args.localizers)
+        print(f"--ignore-risk enabled; ignoring risk localizers: {ignored}")
+        print(f"Running non-risk localizers: {kept}")
+    dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
 
     signature_info = load_signature_info(args.signature_info)
     revision_perf = load_revision_perf(args.revision_data)
@@ -329,8 +381,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         print_dataset_stats(dataset_name, dataset_stats)
 
-    combo_parameters: dict[tuple[str, str], SimulationParameters] | None = None
-    optimization_settings = None
     if args.optuna_trials > 0:
         optimization_settings = {
             "enabled": True,
@@ -472,6 +522,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line options for dataset, executor, oracle, and localizer setup."""
 
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset",
@@ -526,6 +577,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Directory for per_bisect_results_*.json outputs. Defaults to "
             "analysis/perf_bisect/results under the repo root."
+        ),
+    )
+    parser.add_argument(
+        "--final-test-replay",
+        action="store_true",
+        help=(
+            "Run only the final_test split using optimized parameters loaded "
+            "from --eval-results-json, without running Optuna on eval."
+        ),
+    )
+    parser.add_argument(
+        "--eval-results-json",
+        "--optimized-eval-results-json",
+        dest="eval_results_json",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a prior per_bisect_results_eval.json containing "
+            "optuna_optimized_parameters for --final-test-replay."
         ),
     )
     parser.add_argument(
@@ -920,7 +990,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Seed for noisy oracle verdict draws.",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
+    args.localizers_were_explicit = cli_option_was_provided(
+        raw_argv,
+        ("--localizers",),
+    )
+    args.oracles_were_explicit = cli_option_was_provided(
+        raw_argv,
+        ("--oracles",),
+    )
+    if args.final_test_replay:
+        if args.eval_results_json is None:
+            parser.error("--eval-results-json is required with --final-test-replay")
+        args.dataset = "final_test"
+        args.optuna_trials = 0
     if args.backfill_retrigger_count < 0:
         parser.error("--backfill-retrigger-count must be non-negative")
     if args.probe_repeat_count < 1:
@@ -1032,26 +1115,51 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     validate_metric_vote_weights(args, parser)
     validate_metric_formula_weights(args, parser)
     if args.ignore_risk:
-        localizers_without_risk = [
-            localizer
-            for localizer in args.localizers
-            if localizer not in RISK_SCORE_LOCALIZERS
-        ]
-        ignored_localizers = [
-            localizer
-            for localizer in args.localizers
-            if localizer in RISK_SCORE_LOCALIZERS
-        ]
-        if not localizers_without_risk:
-            parser.error(
-                "--ignore-risk removed every selected localizer; choose at "
-                "least one non-risk localizer."
+        try:
+            args.localizers, args.ignored_risk_localizers = (
+                split_ignored_risk_localizers(args.localizers)
             )
-        args.localizers = localizers_without_risk
-        args.ignored_risk_localizers = ignored_localizers
+        except ValueError as exc:
+            parser.error(str(exc))
     else:
         args.ignored_risk_localizers = []
     return args
+
+
+def cli_option_was_provided(
+    argv: Sequence[str],
+    option_strings: Sequence[str],
+) -> bool:
+    """Return whether any of the option strings appeared in argv."""
+
+    return any(
+        token == option_string or token.startswith(f"{option_string}=")
+        for token in argv
+        for option_string in option_strings
+    )
+
+
+def split_ignored_risk_localizers(
+    localizer_names: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    """Return selected non-risk localizers and ignored risk-score localizers."""
+
+    localizers_without_risk = [
+        localizer
+        for localizer in localizer_names
+        if localizer not in RISK_SCORE_LOCALIZERS
+    ]
+    ignored_localizers = [
+        localizer
+        for localizer in localizer_names
+        if localizer in RISK_SCORE_LOCALIZERS
+    ]
+    if not localizers_without_risk:
+        raise ValueError(
+            "--ignore-risk removed every selected localizer; choose at least "
+            "one non-risk localizer."
+        )
+    return localizers_without_risk, ignored_localizers
 
 
 def validate_metric_vote_weights(
@@ -1425,6 +1533,378 @@ def boundary_date(boundary: Any) -> str | None:
         return None
     date = boundary.get("date")
     return str(date) if date is not None else None
+
+
+def load_replay_combo_parameters(
+    path: Path,
+    *,
+    fallback_default_parameters: SimulationParameters,
+) -> tuple[
+    dict[tuple[str, str], SimulationParameters],
+    tuple[tuple[str, str], ...],
+    str | None,
+    SimulationParameters,
+]:
+    """Load per-combo optimized parameters from a prior eval summary JSON."""
+
+    try:
+        raw_output = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+
+    if not isinstance(raw_output, Mapping):
+        raise ValueError(f"{path}: expected a JSON object")
+
+    source_dataset = raw_output.get("dataset")
+    if source_dataset is not None and str(source_dataset) != "eval":
+        raise ValueError(
+            f"{path}: expected an eval results JSON, got dataset={source_dataset!r}"
+        )
+
+    source_default_parameters = replay_default_parameters(
+        raw_output,
+        fallback_default_parameters=fallback_default_parameters,
+        source_path=path,
+    )
+    replay_base_source = replay_default_parameter_source(
+        raw_output,
+        source_path=path,
+    )
+    runs = raw_output.get("runs")
+    if not isinstance(runs, list):
+        raise ValueError(f"{path}: expected a list field named 'runs'")
+
+    combo_parameters: dict[tuple[str, str], SimulationParameters] = {}
+    combo_keys: list[tuple[str, str]] = []
+    defaulted_fields_by_combo: dict[tuple[str, str], tuple[str, ...]] = {}
+    for run_index, run in enumerate(runs, start=1):
+        context = f"{path}: runs[{run_index - 1}]"
+        if not isinstance(run, Mapping):
+            raise ValueError(f"{context}: expected a JSON object")
+
+        localizer_name = replay_run_name(
+            run,
+            field_name="localizer",
+            valid_names=LOCALIZERS,
+            context=context,
+        )
+        oracle_name = replay_run_name(
+            run,
+            field_name="test_oracle",
+            valid_names=ORACLES,
+            context=context,
+        )
+        combo_key = (localizer_name, oracle_name)
+        if combo_key in combo_parameters:
+            raise ValueError(
+                f"{context}: duplicate run for {localizer_name}/{oracle_name}"
+            )
+
+        raw_optimized_parameters = run.get("optuna_optimized_parameters")
+        if raw_optimized_parameters is None:
+            if has_tunable_parameters(
+                localizer_name=localizer_name,
+                oracle_name=oracle_name,
+            ):
+                raise ValueError(
+                    f"{context}: missing optuna_optimized_parameters for "
+                    f"{localizer_name}/{oracle_name}"
+                )
+            raw_optimized_parameters = {}
+        missing_fields = missing_parameter_fields(
+            raw_optimized_parameters,
+            base_parameters=source_default_parameters,
+        )
+        if missing_fields:
+            defaulted_fields_by_combo[combo_key] = missing_fields
+        parameters = parameters_from_optimized_values(
+            localizer_name=localizer_name,
+            optimized_values=raw_optimized_parameters,
+            base_parameters=source_default_parameters,
+            context=f"{context}.optuna_optimized_parameters",
+        )
+        combo_parameters[combo_key] = parameters
+        combo_keys.append(combo_key)
+
+    if not combo_parameters:
+        raise ValueError(f"{path}: no replayable runs found")
+    print_replay_default_parameter_warning(
+        default_source=replay_base_source,
+        defaulted_fields_by_combo=defaulted_fields_by_combo,
+    )
+
+    return (
+        combo_parameters,
+        tuple(combo_keys),
+        str(source_dataset) if source_dataset is not None else None,
+        source_default_parameters,
+    )
+
+
+def replay_default_parameters(
+    raw_output: Mapping[str, Any],
+    *,
+    fallback_default_parameters: SimulationParameters,
+    source_path: Path,
+) -> SimulationParameters:
+    """Return the default parameter baseline recorded in an eval summary."""
+
+    settings = raw_output.get("settings")
+    if not isinstance(settings, Mapping):
+        return fallback_default_parameters
+    raw_default_parameters = settings.get("default_parameters")
+    if raw_default_parameters is None:
+        return fallback_default_parameters
+    return simulation_parameters_from_serialized_mapping(
+        raw_default_parameters,
+        fallback_default_parameters=fallback_default_parameters,
+        context=f"{source_path}: settings.default_parameters",
+        reject_unknown=False,
+    )
+
+
+def replay_default_parameter_source(
+    raw_output: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> str:
+    """Describe where replay base parameter values came from."""
+
+    settings = raw_output.get("settings")
+    if isinstance(settings, Mapping) and settings.get("default_parameters") is not None:
+        return (
+            f"{source_path}: settings.default_parameters "
+            "(with current defaults for fields absent there)"
+        )
+    return "current CLI/default parameters"
+
+
+def replay_run_name(
+    run: Mapping[str, Any],
+    *,
+    field_name: str,
+    valid_names: Mapping[str, Any],
+    context: str,
+) -> str:
+    """Read and validate one localizer/oracle name from an eval summary run."""
+
+    raw_name = run.get(field_name)
+    if not isinstance(raw_name, str) or raw_name not in valid_names:
+        valid = ", ".join(sorted(valid_names))
+        raise ValueError(
+            f"{context}: unknown {field_name} {raw_name!r}; expected one of {valid}"
+        )
+    return raw_name
+
+
+def parameters_from_optimized_values(
+    *,
+    localizer_name: str,
+    optimized_values: Any,
+    base_parameters: SimulationParameters,
+    context: str,
+) -> SimulationParameters:
+    """Overlay a run's optimized parameter subset onto its eval defaults."""
+
+    if not isinstance(optimized_values, Mapping):
+        raise ValueError(f"{context}: expected a JSON object")
+
+    all_parameter_fields = set(base_parameters.to_json())
+    unknown_fields = sorted(
+        str(field_name)
+        for field_name in optimized_values
+        if field_name not in all_parameter_fields
+    )
+    if unknown_fields:
+        raise ValueError(
+            f"{context}: unknown parameter field(s): {', '.join(unknown_fields)}"
+        )
+
+    tunable_fields = set(
+        TUNABLE_PARAMETER_FIELDS_BY_LOCALIZER.get(localizer_name, ())
+    )
+    invalid_fields = sorted(
+        str(field_name)
+        for field_name in optimized_values
+        if field_name not in tunable_fields
+    )
+    if invalid_fields:
+        raise ValueError(
+            f"{context}: field(s) not tunable for {localizer_name}: "
+            f"{', '.join(invalid_fields)}"
+        )
+
+    return simulation_parameters_from_serialized_mapping(
+        optimized_values,
+        fallback_default_parameters=base_parameters,
+        context=context,
+        reject_unknown=True,
+    )
+
+
+def simulation_parameters_from_serialized_mapping(
+    raw_parameters: Any,
+    *,
+    fallback_default_parameters: SimulationParameters,
+    context: str,
+    reject_unknown: bool,
+) -> SimulationParameters:
+    """Coerce a full or partial serialized parameter object."""
+
+    if not isinstance(raw_parameters, Mapping):
+        raise ValueError(f"{context}: expected a JSON object")
+
+    values = fallback_default_parameters.to_json()
+    unknown_fields = sorted(
+        str(field_name)
+        for field_name in raw_parameters
+        if field_name not in values
+    )
+    if reject_unknown and unknown_fields:
+        raise ValueError(
+            f"{context}: unknown parameter field(s): {', '.join(unknown_fields)}"
+        )
+
+    for field_name in values:
+        if field_name in raw_parameters:
+            values[field_name] = raw_parameters[field_name]
+
+    try:
+        parameters = SimulationParameters(
+            backfill_retrigger_count=int(values["backfill_retrigger_count"]),
+            probe_repeat_count=int(values["probe_repeat_count"]),
+            midpoint_retrigger_count=int(values["midpoint_retrigger_count"]),
+            multisection_section_count=int(values["multisection_section_count"]),
+            multisection_retrigger_count=int(
+                values["multisection_retrigger_count"]
+            ),
+            pba_confidence_threshold=float(values["pba_confidence_threshold"]),
+            pba_repeat_count=int(values["pba_repeat_count"]),
+            pba_max_test_runs=int(values["pba_max_test_runs"]),
+            pba_assumed_oracle_accuracy=float(
+                values["pba_assumed_oracle_accuracy"]
+            ),
+            pba_risk_prior_uniform_weight=float(
+                values["pba_risk_prior_uniform_weight"]
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}: invalid parameter value: {exc}") from exc
+
+    validate_simulation_parameters(parameters, context=context)
+    return parameters
+
+
+def missing_parameter_fields(
+    raw_parameters: Any,
+    *,
+    base_parameters: SimulationParameters,
+) -> tuple[str, ...]:
+    """Return serialized parameter fields absent from a partial parameter object."""
+
+    if not isinstance(raw_parameters, Mapping):
+        return ()
+    return tuple(
+        field_name
+        for field_name in base_parameters.to_json()
+        if field_name not in raw_parameters
+    )
+
+
+def print_replay_default_parameter_warning(
+    *,
+    default_source: str,
+    defaulted_fields_by_combo: Mapping[tuple[str, str], Sequence[str]],
+) -> None:
+    """Warn when replay parameters are completed from eval default parameters."""
+
+    if not defaulted_fields_by_combo:
+        return
+
+    print(
+        "WARNING: final-test replay found missing parameter fields in "
+        "optuna_optimized_parameters; using replay base parameters from "
+        f"{default_source}."
+    )
+    for localizer_name, oracle_name in sorted(defaulted_fields_by_combo):
+        fields = ", ".join(defaulted_fields_by_combo[(localizer_name, oracle_name)])
+        print(f"  {localizer_name}/{oracle_name}: {fields}")
+
+
+def validate_simulation_parameters(
+    parameters: SimulationParameters,
+    *,
+    context: str,
+) -> None:
+    """Validate loaded parameter values before building localizers."""
+
+    if parameters.backfill_retrigger_count < 0:
+        raise ValueError(f"{context}: backfill_retrigger_count must be non-negative")
+    if parameters.probe_repeat_count < 1:
+        raise ValueError(f"{context}: probe_repeat_count must be at least 1")
+    if parameters.midpoint_retrigger_count < 0:
+        raise ValueError(f"{context}: midpoint_retrigger_count must be non-negative")
+    if parameters.multisection_section_count < 2:
+        raise ValueError(f"{context}: multisection_section_count must be at least 2")
+    if parameters.multisection_retrigger_count < 0:
+        raise ValueError(
+            f"{context}: multisection_retrigger_count must be non-negative"
+        )
+    if not 0.0 < parameters.pba_confidence_threshold <= 1.0:
+        raise ValueError(f"{context}: pba_confidence_threshold must be in (0, 1]")
+    if parameters.pba_repeat_count < 1:
+        raise ValueError(f"{context}: pba_repeat_count must be at least 1")
+    if parameters.pba_max_test_runs < 1:
+        raise ValueError(f"{context}: pba_max_test_runs must be at least 1")
+    if not 0.5 < parameters.pba_assumed_oracle_accuracy <= 1.0:
+        raise ValueError(
+            f"{context}: pba_assumed_oracle_accuracy must be in (0.5, 1]"
+        )
+    if not 0.0 <= parameters.pba_risk_prior_uniform_weight <= 1.0:
+        raise ValueError(
+            f"{context}: pba_risk_prior_uniform_weight must be in [0, 1]"
+        )
+
+
+def ordered_unique(values: Iterable[str]) -> list[str]:
+    """Return unique strings in first-seen order."""
+
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def validate_replay_combo_coverage(
+    *,
+    combo_parameters: Mapping[tuple[str, str], SimulationParameters],
+    localizer_names: Sequence[str],
+    oracle_names: Sequence[str],
+    source_path: Path,
+) -> None:
+    """Ensure every selected localizer/oracle pair is present in replay JSON."""
+
+    missing_combos = [
+        (localizer_name, oracle_name)
+        for localizer_name in localizer_names
+        for oracle_name in oracle_names
+        if (localizer_name, oracle_name) not in combo_parameters
+    ]
+    if not missing_combos:
+        return
+
+    formatted_combos = ", ".join(
+        f"{localizer_name}/{oracle_name}"
+        for localizer_name, oracle_name in missing_combos
+    )
+    raise ValueError(
+        f"{source_path}: missing replay parameters for selected combo(s): "
+        f"{formatted_combos}"
+    )
 
 
 def run_dataset(
