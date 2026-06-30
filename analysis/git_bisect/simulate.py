@@ -102,6 +102,12 @@ COMMITS_PATH = os.path.join(REPO_ROOT, "datasets", "mozilla_jit", "all_commits.j
 RISK_EVAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_eval.json")
 RISK_FINAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predictions_final_test.json")
 
+DEFAULT_OUTPUT_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "results")
+OUTPUT_EVAL_FILENAME = "simulation_optuna_eval.json"
+OUTPUT_FINAL_FILENAME = "simulation_optuna_final_test.json"
+PARETO_FRONT_STATS_FILENAME = "pareto_front_stats.json"
+PARETO_FRONT_PLOT_FILENAME = "pareto_front_distributions.png"
+
 logger = logging.getLogger(__name__)
 
 PROBE_KIND_ARBITRARY_COMMIT = "arbitrary_commit"
@@ -1215,29 +1221,13 @@ def get_args() -> argparse.Namespace:
         help="Python logging level.",
     )
     parser.add_argument(
-        "--output-eval",
-        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "results", "simulation_optuna_eval.json"),
-        help="Where to write the EVAL Optuna tuning output JSON.",
-    )
-    parser.add_argument(
-        "--output-final",
-        default=os.path.join(REPO_ROOT, "analysis", "git_bisect", "results", "simulation_optuna_final_test.json"),
-        help="Where to write the FINAL replay output JSON.",
-    )
-    parser.add_argument(
-        "--pareto-front-plot-path",
-        default=None,
+        "--output-path",
+        default=DEFAULT_OUTPUT_PATH,
         help=(
-            "Where to write the combined Pareto-front distribution plot image. "
-            "Default: alongside --output-final as `pareto_front_distributions.png`."
-        ),
-    )
-    parser.add_argument(
-        "--pareto-front-stats-path",
-        default=None,
-        help=(
-            "Where to write the Pareto-front percentile stats JSON. "
-            "Default: alongside --output-final as `pareto_front_stats.json`."
+            "Directory where simulation output artifacts are written. Creates "
+            f"`{OUTPUT_EVAL_FILENAME}`, `{OUTPUT_FINAL_FILENAME}`, "
+            f"`{PARETO_FRONT_STATS_FILENAME}`, and `{PARETO_FRONT_PLOT_FILENAME}` "
+            "inside this directory."
         ),
     )
     parser.add_argument(
@@ -1294,7 +1284,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--final-only",
         action="store_true",
-        help="Skip eval tuning; read best params from --output-eval and run FINAL replay only.",
+        help=f"Skip eval tuning; read best params from `{OUTPUT_EVAL_FILENAME}` under --output-path.",
     )
     parser.add_argument(
         "--penalize-window-start-lookback",
@@ -1369,24 +1359,13 @@ def _filter_strategy_specs(raw: str, *, specs: Sequence[StrategySpec], kind: str
     return [s for s in specs if s.code in selected]
 
 
-def _resolve_pareto_front_artifact_paths(
-    *,
-    output_final: str,
-    pareto_front_plot_path: Optional[str],
-    pareto_front_stats_path: Optional[str],
-) -> tuple[str, str]:
-    output_dir = os.path.dirname(os.path.abspath(str(output_final)))
-    plot_path = (
-        str(pareto_front_plot_path)
-        if pareto_front_plot_path is not None
-        else os.path.join(output_dir, "pareto_front_distributions.png")
-    )
-    stats_path = (
-        str(pareto_front_stats_path)
-        if pareto_front_stats_path is not None
-        else os.path.join(output_dir, "pareto_front_stats.json")
-    )
-    return plot_path, stats_path
+def _resolve_output_artifact_paths(args: argparse.Namespace) -> None:
+    output_path = os.path.abspath(os.path.expanduser(str(args.output_path)))
+    args.output_path = output_path
+    args.output_eval = os.path.join(output_path, OUTPUT_EVAL_FILENAME)
+    args.output_final = os.path.join(output_path, OUTPUT_FINAL_FILENAME)
+    args.pareto_front_stats_path = os.path.join(output_path, PARETO_FRONT_STATS_FILENAME)
+    args.pareto_front_plot_path = os.path.join(output_path, PARETO_FRONT_PLOT_FILENAME)
 
 
 def _pareto_front_rows_by_total_and_max(
@@ -1567,6 +1546,7 @@ def _plot_pareto_front_test_distributions(
 def main() -> int:
     """Run the historical simulation and write a JSON summary."""
     args = get_args()
+    _resolve_output_artifact_paths(args)
 
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
@@ -1578,6 +1558,7 @@ def main() -> int:
     logger.info("Using commits_path=%s", args.commits_path)
     logger.info("Using risk_eval=%s", args.risk_eval)
     logger.info("Using risk_final=%s", args.risk_final)
+    logger.info("Using output_path=%s", args.output_path)
 
     for p in (args.bugs_path, args.commits_path, args.risk_eval, args.risk_final):
         if not os.path.exists(p):
@@ -2519,11 +2500,8 @@ def main() -> int:
         json.dump(final_summary, f, indent=2, sort_keys=True)
         f.write("\n")
 
-    plot_path, stats_path = _resolve_pareto_front_artifact_paths(
-        output_final=str(args.output_final),
-        pareto_front_plot_path=args.pareto_front_plot_path,
-        pareto_front_stats_path=args.pareto_front_stats_path,
-    )
+    plot_path = args.pareto_front_plot_path
+    stats_path = args.pareto_front_stats_path
     pareto_rows = _pareto_front_rows_by_total_and_max(results=final_results)
     if not pareto_rows:
         logger.warning("No eligible FINAL combos found for Pareto-front stats/plots.")

@@ -118,10 +118,7 @@ echo "Running script ..."
 # --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
 # --risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
 # --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
-# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_eval.json \
-# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/simulation_optuna_final_test.json \
-# --pareto-front-stats-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_stats.json \
-# --pareto-front-plot-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t/pareto_front_distributions.png \
+# --output-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t \
 # --penalize-window-start-lookback \
 # --window-start-lookback-penalty-tests 4 \
 # --mopt-trials 50 \
