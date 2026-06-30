@@ -109,7 +109,7 @@ PROBE_KIND_NIGHTLY_ARTIFACT = "nightly_artifact"
 PROBE_KIND_MONTHLY_ARTIFACT = "monthly_artifact"
 
 WEIGHTED_COST_PROFILE_NAME = "default_v1"
-NIGHTLY_ARTIFACT_COST = 0.5
+ARTIFACT_COST_MULTIPLIER = 0.5
 WINDOW_START_FALLBACK_WEIGHTED_PENALTY = 15.0
 ARBITRARY_COMMIT_AGE_COST_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
     (7.0, 1.0),
@@ -429,11 +429,11 @@ def _weighted_cost_profile_metadata() -> Dict[str, Any]:
     return {
         "name": WEIGHTED_COST_PROFILE_NAME,
         "age_reference": "max(0, bug_creation_time - probed_commit_time)",
-        "artifact_costs": {
-            PROBE_KIND_NIGHTLY_ARTIFACT: NIGHTLY_ARTIFACT_COST,
-            PROBE_KIND_MONTHLY_ARTIFACT: NIGHTLY_ARTIFACT_COST,
-        },
-        "monthly_artifact_cost_policy": "monthly_artifact probes use the nightly_artifact cost",
+        "artifact_cost_multiplier": ARTIFACT_COST_MULTIPLIER,
+        "artifact_cost_policy": (
+            "nightly_artifact and monthly_artifact probes use the arbitrary-commit "
+            "age-bucket cost multiplied by artifact_cost_multiplier"
+        ),
         "arbitrary_commit_age_buckets_days": [
             {"max_age_days": max_age_days, "cost": cost}
             for max_age_days, cost in ARBITRARY_COMMIT_AGE_COST_BUCKETS
@@ -487,17 +487,17 @@ def _weighted_probe_cost(
     bug_time_utc: datetime,
 ) -> float:
     """Return weighted cost for one recorded probe."""
-    if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_MONTHLY_ARTIFACT):
-        return float(NIGHTLY_ARTIFACT_COST)
-    if probe.kind != PROBE_KIND_ARBITRARY_COMMIT:
-        raise ValueError(f"Unknown probe kind for weighted cost: {probe.kind!r}")
-
     age_days = _commit_age_days_at_bug(
         commit_times_utc=commit_times_utc,
         commit_index=probe.index,
         bug_time_utc=bug_time_utc,
     )
-    return _arbitrary_commit_probe_cost(age_days)
+    base_cost = _arbitrary_commit_probe_cost(age_days)
+    if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_MONTHLY_ARTIFACT):
+        return float(base_cost) * float(ARTIFACT_COST_MULTIPLIER)
+    if probe.kind == PROBE_KIND_ARBITRARY_COMMIT:
+        return float(base_cost)
+    raise ValueError(f"Unknown probe kind for weighted cost: {probe.kind!r}")
 
 
 def _lookback_probe_kind(*, lookback_code: str, lookback: LookbackStrategy) -> str:

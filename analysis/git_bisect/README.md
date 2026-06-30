@@ -58,17 +58,19 @@ The default profile is `default_v1`:
 
 | Probe type | Age at bug report | Cost |
 |---|---:|---:|
-| Nightly/monthly artifact | any | `0.5` |
 | Arbitrary commit | `0-7` days | `1.0` |
 | Arbitrary commit | `8-30` days | `1.5` |
 | Arbitrary commit | `31-90` days | `3.0` |
 | Arbitrary commit | `91-365` days | `5.0` |
 | Arbitrary commit | `>365` days | `8.0` |
+| Nightly/monthly artifact | any | matching arbitrary-commit age cost `* 0.5` |
+
+For example, a 50-day-old arbitrary commit costs `3.0`; a 50-day-old nightly/monthly artifact costs `3.0 * 0.5 = 1.5`.
 
 Current strategy mapping:
 
-- `NBLB` lookback probes are charged as `nightly_artifact`.
-- `MBLB` lookback probes are labeled as `monthly_artifact` but use the same cost as `nightly_artifact`.
+- `NBLB` lookback probes are charged as `nightly_artifact`, using the age-bucket cost multiplier.
+- `MBLB` lookback probes are labeled as `monthly_artifact` and use the same age-bucket cost multiplier as `nightly_artifact`.
 - Bisection probes and all other existing lookback probes are charged as `arbitrary_commit`.
 - `monthly_artifact` should not be described as a real release artifact unless release metadata is added.
 
