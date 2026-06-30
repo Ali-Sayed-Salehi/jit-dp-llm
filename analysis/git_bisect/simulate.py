@@ -24,11 +24,14 @@ Simulation outline for each regression bug:
      the "bad" observation point.
   3) Choose a "bad" index as the last commit at or before `bug_creation_time`.
   4) Run the configured bisection strategy to locate the single culprit and count tests.
+     The script also reports a weighted localization cost using a fixed probe-cost
+     profile based on probe type and revision age at bug creation time.
 
 Run:
   - Evaluation (Optuna tuning): `python analysis/git_bisect/simulate.py --mopt-trials 200`
     - Default objective: minimize `mean_tests_per_search`
-    - With `--multi-objective-opt`: minimize (`max_tests_per_search`, `mean_tests_per_search`)
+    - With `--objective weighted_cost`: minimize `mean_weighted_cost_per_search`
+    - With `--multi-objective-opt`: minimize the matching max and mean objective metrics
   - Replay tuned params on final test: `python analysis/git_bisect/simulate.py --final-only`
   - Optional: penalize runs where lookback uses the simulation window start commit:
     `python analysis/git_bisect/simulate.py --penalize-window-start-lookback --window-start-lookback-penalty-tests 4`
@@ -65,6 +68,7 @@ from lookback import (
     FixedStrideLookback,
     FixedStrideLookbackForcedFallback,
     LookbackStrategy,
+    MonthlyBuildLookback,
     NightlyBuildLookback,
     NoLookback,
     RiskAwareTriggerLookback,
@@ -100,6 +104,21 @@ RISK_FINAL_PATH = os.path.join(REPO_ROOT, "analysis", "git_bisect", "risk_predic
 
 logger = logging.getLogger(__name__)
 
+PROBE_KIND_ARBITRARY_COMMIT = "arbitrary_commit"
+PROBE_KIND_NIGHTLY_ARTIFACT = "nightly_artifact"
+PROBE_KIND_MONTHLY_ARTIFACT = "monthly_artifact"
+
+WEIGHTED_COST_PROFILE_NAME = "default_v1"
+NIGHTLY_ARTIFACT_COST = 0.5
+WINDOW_START_FALLBACK_WEIGHTED_PENALTY = 15.0
+ARBITRARY_COMMIT_AGE_COST_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
+    (7.0, 1.0),
+    (30.0, 1.5),
+    (90.0, 3.0),
+    (365.0, 5.0),
+    (None, 8.0),
+)
+
 
 @dataclass(frozen=True)
 class StrategySpec:
@@ -114,6 +133,15 @@ class StrategySpec:
     default_params: Dict[str, Any]
     build: Callable[["PreparedInputs", Dict[str, Any]], Any]
     suggest_params: Optional[Callable[[Any], Dict[str, Any]]] = None  # optuna.Trial -> params
+
+
+@dataclass(frozen=True)
+class ProbeRecord:
+    """A single additional revision probe charged by the weighted cost model."""
+    index: int
+    phase: str
+    kind: str
+    failed: bool
 
 
 def _read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -396,17 +424,109 @@ def build_risk_by_index(
     return risk_by_index
 
 
+def _weighted_cost_profile_metadata() -> Dict[str, Any]:
+    """Return the fixed weighted-cost profile used by simulation outputs."""
+    return {
+        "name": WEIGHTED_COST_PROFILE_NAME,
+        "age_reference": "max(0, bug_creation_time - probed_commit_time)",
+        "artifact_costs": {
+            PROBE_KIND_NIGHTLY_ARTIFACT: NIGHTLY_ARTIFACT_COST,
+            PROBE_KIND_MONTHLY_ARTIFACT: NIGHTLY_ARTIFACT_COST,
+        },
+        "monthly_artifact_cost_policy": "monthly_artifact probes use the nightly_artifact cost",
+        "arbitrary_commit_age_buckets_days": [
+            {"max_age_days": max_age_days, "cost": cost}
+            for max_age_days, cost in ARBITRARY_COMMIT_AGE_COST_BUCKETS
+        ],
+        "window_start_fallback_weighted_penalty": WINDOW_START_FALLBACK_WEIGHTED_PENALTY,
+        "window_start_fallback_policy": (
+            "When --penalize-window-start-lookback is enabled and good_index == window_start, "
+            "add this fixed weighted penalty once; do not multiply it by "
+            "--window-start-lookback-penalty-tests."
+        ),
+    }
+
+
+def _commit_age_days_at_bug(
+    *,
+    commit_times_utc: Sequence[datetime],
+    commit_index: int,
+    bug_time_utc: datetime,
+) -> float:
+    """Return non-negative commit age in days at bug report time."""
+    idx = int(commit_index)
+    if idx < 0 or idx >= len(commit_times_utc):
+        raise IndexError(f"Commit index out of range for weighted cost: {idx}")
+
+    commit_time = commit_times_utc[idx]
+    if commit_time.tzinfo is None:
+        commit_time = commit_time.replace(tzinfo=timezone.utc)
+    commit_time = commit_time.astimezone(timezone.utc)
+    bug_time_utc = bug_time_utc.astimezone(timezone.utc)
+
+    age_seconds = (bug_time_utc - commit_time).total_seconds()
+    if age_seconds < 0.0:
+        # Commit timestamps in the source data are not strictly monotone by history index.
+        return 0.0
+    return float(age_seconds / 86400.0)
+
+
+def _arbitrary_commit_probe_cost(age_days: float) -> float:
+    """Map an arbitrary-commit probe age to a weighted cost."""
+    age_days = float(age_days)
+    for max_age_days, cost in ARBITRARY_COMMIT_AGE_COST_BUCKETS:
+        if max_age_days is None or age_days <= float(max_age_days):
+            return float(cost)
+    raise RuntimeError("Arbitrary commit age cost buckets must include an open-ended bucket.")
+
+
+def _weighted_probe_cost(
+    *,
+    probe: ProbeRecord,
+    commit_times_utc: Sequence[datetime],
+    bug_time_utc: datetime,
+) -> float:
+    """Return weighted cost for one recorded probe."""
+    if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_MONTHLY_ARTIFACT):
+        return float(NIGHTLY_ARTIFACT_COST)
+    if probe.kind != PROBE_KIND_ARBITRARY_COMMIT:
+        raise ValueError(f"Unknown probe kind for weighted cost: {probe.kind!r}")
+
+    age_days = _commit_age_days_at_bug(
+        commit_times_utc=commit_times_utc,
+        commit_index=probe.index,
+        bug_time_utc=bug_time_utc,
+    )
+    return _arbitrary_commit_probe_cost(age_days)
+
+
+def _lookback_probe_kind(*, lookback_code: str, lookback: LookbackStrategy) -> str:
+    """Classify lookback probes for the weighted cost model."""
+    name = str(getattr(lookback, "name", ""))
+    code = str(lookback_code).upper()
+    if name == NightlyBuildLookback.name:
+        return PROBE_KIND_NIGHTLY_ARTIFACT
+    if (
+        name == MonthlyBuildLookback.name
+        or "monthly" in name.lower()
+        or code in {"MLB", "MBLB", "MONTHLY"}
+    ):
+        return PROBE_KIND_MONTHLY_ARTIFACT
+    return PROBE_KIND_ARBITRARY_COMMIT
+
+
 def simulate_strategy_combo(
     *,
     bugs: List[Dict[str, Any]],
     bugs_by_id: Dict[str, Dict[str, Any]],
     node_to_index: Dict[str, int],
     nodes_by_index: List[Optional[str]],
+    commit_times_utc: Sequence[datetime],
     sorted_times_utc: List[datetime],
     sorted_time_indices: List[int],
     window_start: int,
     window_end: int,
-    risk_by_index: List[Optional[float]],
+    risk_by_index: Sequence[Optional[float]],
     lookback_code: str,
     lookback: LookbackStrategy,
     bisection_code: str,
@@ -426,9 +546,14 @@ def simulate_strategy_combo(
     total_tests = 0
     total_lookback_tests = 0
     total_bisection_tests = 0
+    total_weighted_cost = 0.0
+    total_lookback_weighted_cost = 0.0
+    total_bisection_weighted_cost = 0.0
     total_culprits_found = 0
     max_tests_per_search = 0
+    max_weighted_cost_per_search = 0.0
     tests_per_search_samples: Optional[List[int]] = [] if bool(collect_tests_per_search) else None
+    weighted_cost_per_search_samples: Optional[List[float]] = [] if bool(collect_tests_per_search) else None
 
     skipped = {
         "not_regression": 0,
@@ -440,6 +565,7 @@ def simulate_strategy_combo(
     }
 
     processed = 0
+    lookback_probe_kind = _lookback_probe_kind(lookback_code=lookback_code, lookback=lookback)
     logger.info("Simulating combo %s+%s over %d bugs", lookback_code, bisection_code, len(bugs))
     for bug in bugs:
         if not bug.get("regression", False):
@@ -498,6 +624,21 @@ def simulate_strategy_combo(
 
         good_index = lookback_outcome.good_index
         lookback_tests = lookback_outcome.steps
+        lookback_probes = [
+            ProbeRecord(
+                index=int(idx),
+                phase="lookback",
+                kind=lookback_probe_kind,
+                failed=bool(failed),
+            )
+            for idx, failed in lookback_outcome.known_results.items()
+        ]
+        if len(lookback_probes) != int(lookback_tests):
+            raise RuntimeError(
+                f"Lookback probe accounting mismatch for bug_id={bug.get('bug_id')}: "
+                f"steps={lookback_tests} recorded_probes={len(lookback_probes)} "
+                f"combo={lookback_code}+{bisection_code}"
+            )
 
         if good_index < window_start:
             skipped["good_not_in_window"] += 1
@@ -522,33 +663,84 @@ def simulate_strategy_combo(
             risk_by_index=risk_by_index,
             known_results=lookback_outcome.known_results,
         )
+        bisection_probes = [
+            ProbeRecord(
+                index=int(idx),
+                phase="bisection",
+                kind=PROBE_KIND_ARBITRARY_COMMIT,
+                failed=bool(int(idx) >= int(culprit_index)),
+            )
+            for idx in bisect_outcome.probed_indices
+        ]
+        if len(bisection_probes) != int(bisect_outcome.tests):
+            raise RuntimeError(
+                f"Bisection probe accounting mismatch for bug_id={bug.get('bug_id')}: "
+                f"tests={bisect_outcome.tests} recorded_probes={len(bisection_probes)} "
+                f"combo={lookback_code}+{bisection_code}"
+            )
 
         window_start_penalty = 0
+        window_start_fallback_weighted_cost = 0.0
         if bool(penalize_window_start_lookback) and good_index == int(window_start):
             window_start_penalty = int(window_start_lookback_penalty_tests)
+            window_start_fallback_weighted_cost = float(WINDOW_START_FALLBACK_WEIGHTED_PENALTY)
+
+        lookback_weighted_cost = sum(
+            _weighted_probe_cost(
+                probe=probe,
+                commit_times_utc=commit_times_utc,
+                bug_time_utc=bug_time,
+            )
+            for probe in lookback_probes
+        )
+        bisection_weighted_cost = sum(
+            _weighted_probe_cost(
+                probe=probe,
+                commit_times_utc=commit_times_utc,
+                bug_time_utc=bug_time,
+            )
+            for probe in bisection_probes
+        ) + window_start_fallback_weighted_cost
+        weighted_cost_per_search = (
+            float(lookback_weighted_cost)
+            + float(bisection_weighted_cost)
+        )
 
         bisection_tests = int(bisect_outcome.tests) + int(window_start_penalty)
         tests_per_search = int(lookback_tests) + int(bisection_tests)
         if tests_per_search > max_tests_per_search:
             max_tests_per_search = tests_per_search
+        if weighted_cost_per_search > max_weighted_cost_per_search:
+            max_weighted_cost_per_search = float(weighted_cost_per_search)
 
         if tests_per_search_samples is not None:
             tests_per_search_samples.append(int(tests_per_search))
+        if weighted_cost_per_search_samples is not None:
+            weighted_cost_per_search_samples.append(float(weighted_cost_per_search))
 
         total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
         total_lookback_tests += lookback_tests
         total_bisection_tests += bisection_tests
         total_tests += lookback_tests + bisection_tests
+        total_lookback_weighted_cost += float(lookback_weighted_cost)
+        total_bisection_weighted_cost += float(bisection_weighted_cost)
+        total_weighted_cost += float(weighted_cost_per_search)
         processed += 1
 
     mean_tests_per_search: Optional[float]
     max_tests_per_search_out: Optional[int]
+    mean_weighted_cost_per_search: Optional[float]
+    max_weighted_cost_per_search_out: Optional[float]
     if processed <= 0:
         mean_tests_per_search = None
         max_tests_per_search_out = None
+        mean_weighted_cost_per_search = None
+        max_weighted_cost_per_search_out = None
     else:
         mean_tests_per_search = float(total_tests) / float(processed)
         max_tests_per_search_out = int(max_tests_per_search)
+        mean_weighted_cost_per_search = float(total_weighted_cost) / float(processed)
+        max_weighted_cost_per_search_out = float(max_weighted_cost_per_search)
 
     logger.info(
         "Finished combo %s+%s: processed=%d total_tests=%d culprits_found=%d skipped=%s",
@@ -564,13 +756,20 @@ def simulate_strategy_combo(
         "total_tests": total_tests,
         "total_lookback_tests": total_lookback_tests,
         "total_bisection_tests": total_bisection_tests,
+        "total_weighted_cost": total_weighted_cost,
+        "total_lookback_weighted_cost": total_lookback_weighted_cost,
+        "total_bisection_weighted_cost": total_bisection_weighted_cost,
         "mean_tests_per_search": mean_tests_per_search,
         "max_tests_per_search": max_tests_per_search_out,
+        "mean_weighted_cost_per_search": mean_weighted_cost_per_search,
+        "max_weighted_cost_per_search": max_weighted_cost_per_search_out,
         "total_culprits_found": total_culprits_found,
         "bugs": {"processed": processed, "skipped": skipped},
     }
     if tests_per_search_samples is not None:
         out["tests_per_search_samples"] = tests_per_search_samples
+    if weighted_cost_per_search_samples is not None:
+        out["weighted_cost_per_search_samples"] = weighted_cost_per_search_samples
     return out
 
 
@@ -611,6 +810,7 @@ class PreparedInputs:
     bugs_by_id: Dict[str, Dict[str, Any]]
     node_to_index: Dict[str, int]
     nodes_by_index: List[Optional[str]]
+    commit_times_utc: Sequence[datetime]
     sorted_times_utc: List[datetime]
     sorted_time_indices: List[int]
     window_start: int
@@ -644,6 +844,7 @@ def prepare_inputs(
     ]
 
     node_to_index = build_node_to_index(commits)
+    commit_times_utc = [_commit_datetime_utc(c) for c in commits]
     sorted_times_utc, sorted_time_indices = _build_commit_time_search(commits)
 
     window_start, window_end = _risk_window_from_predictions(commits, risk_by_commit)
@@ -673,6 +874,7 @@ def prepare_inputs(
         bugs_by_id=bugs_by_id,
         node_to_index=node_to_index,
         nodes_by_index=nodes_by_index,
+        commit_times_utc=commit_times_utc,
         sorted_times_utc=sorted_times_utc,
         sorted_time_indices=sorted_time_indices,
         window_start=window_start,
@@ -710,6 +912,7 @@ def run_combo(
         bugs_by_id=inputs.bugs_by_id,
         node_to_index=inputs.node_to_index,
         nodes_by_index=inputs.nodes_by_index,
+        commit_times_utc=inputs.commit_times_utc,
         sorted_times_utc=inputs.sorted_times_utc,
         sorted_time_indices=inputs.sorted_time_indices,
         window_start=inputs.window_start,
@@ -763,6 +966,7 @@ def optimize_combo_params(
     bisection_spec: StrategySpec,
     n_trials: int,
     seed: int,
+    objective: str = "tests",
     multi_objective_opt: bool = False,
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
@@ -771,14 +975,19 @@ def optimize_combo_params(
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
 
     Objective:
-      - Default: Minimize `mean_tests_per_search`.
-      - With `multi_objective_opt`: Minimize `max_tests_per_search` and `mean_tests_per_search`.
+      - With objective="tests": minimize `mean_tests_per_search`.
+      - With objective="weighted_cost": minimize `mean_weighted_cost_per_search`.
+      - With `multi_objective_opt`: minimize the matching max metric and mean metric.
       - Raise if the combo violates simulation invariants (e.g. no processed bugs,
         missing objective metrics, or any processed bug failed to locate a culprit).
 
     Returns (best_lookback_params, best_bisection_params, payload) where payload
     includes `metrics` (re-run at best params) and `optuna` metadata.
     """
+    objective_family = str(objective)
+    if objective_family not in {"tests", "weighted_cost"}:
+        raise ValueError(f"Unknown objective {objective_family!r}; expected 'tests' or 'weighted_cost'.")
+
     if lookback_spec.suggest_params is None and bisection_spec.suggest_params is None:
         # Nothing to optimize: run once at defaults and return.
         best_lookback_params = dict(lookback_spec.default_params)
@@ -797,6 +1006,7 @@ def optimize_combo_params(
             "reason": "no_suggest_params",
             "n_trials": 0,
             "seed": int(seed),
+            "objective": objective_family,
             "multi_objective_opt": bool(multi_objective_opt),
         }
         return best_lookback_params, best_bisection_params, {"metrics": best_res, "optuna": optuna_meta}
@@ -806,7 +1016,14 @@ def optimize_combo_params(
     except ImportError as exc:
         raise RuntimeError("Optuna is required. Install with `pip install optuna`.") from exc
 
-    def _run_and_validate(lookback_params: Dict[str, Any], bisection_params: Dict[str, Any]) -> tuple[float, float]:
+    def _objective_metric_names() -> tuple[str, str]:
+        if objective_family == "weighted_cost":
+            return "max_weighted_cost_per_search", "mean_weighted_cost_per_search"
+        return "max_tests_per_search", "mean_tests_per_search"
+
+    objective_max_metric, objective_mean_metric = _objective_metric_names()
+
+    def _run_and_validate(lookback_params: Dict[str, Any], bisection_params: Dict[str, Any]) -> Dict[str, float]:
         res = run_combo(
             inputs=inputs,
             lookback_spec=lookback_spec,
@@ -830,16 +1047,29 @@ def optimize_combo_params(
                 f"(found={found} processed={processed}, combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
             )
 
-        max_tests_per_search = res.get("max_tests_per_search")
-        mean_tests_per_search = res.get("mean_tests_per_search")
-        if max_tests_per_search is None or mean_tests_per_search is None:
+        metric_values: Dict[str, float] = {}
+        for metric_name in (
+            "max_tests_per_search",
+            "mean_tests_per_search",
+            "max_weighted_cost_per_search",
+            "mean_weighted_cost_per_search",
+        ):
+            metric_value = res.get(metric_name)
+            if metric_value is None:
+                raise RuntimeError(
+                    "Optuna objective invariant violated: missing objective metrics "
+                    f"({metric_name}={metric_value!r}, combo={lookback_spec.code}+{bisection_spec.code}, "
+                    f"dataset={inputs.dataset})"
+                )
+            metric_values[metric_name] = float(metric_value)
+
+        if objective_max_metric not in metric_values or objective_mean_metric not in metric_values:
             raise RuntimeError(
-                "Optuna objective invariant violated: missing objective metrics "
-                f"(max_tests_per_search={max_tests_per_search!r} mean_tests_per_search={mean_tests_per_search!r}, "
-                f"combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
+                "Optuna objective invariant violated: selected objective metrics are unavailable "
+                f"(objective={objective_family}, combo={lookback_spec.code}+{bisection_spec.code}, dataset={inputs.dataset})"
             )
 
-        return (float(max_tests_per_search), float(mean_tests_per_search))
+        return metric_values
 
     if bool(multi_objective_opt):
         try:
@@ -849,7 +1079,7 @@ def optimize_combo_params(
             sampler = optuna.samplers.RandomSampler(seed=int(seed))
         study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler)
 
-        def objective(trial: Any) -> Tuple[float, float]:
+        def objective_fn(trial: Any) -> Tuple[float, float]:
             lookback_params = (
                 lookback_spec.suggest_params(trial)
                 if lookback_spec.suggest_params is not None
@@ -861,8 +1091,11 @@ def optimize_combo_params(
                 else dict(bisection_spec.default_params)
             )
 
-            max_tests_per_search, mean_tests_per_search = _run_and_validate(lookback_params, bisection_params)
-            return (float(max_tests_per_search), float(mean_tests_per_search))
+            metric_values = _run_and_validate(lookback_params, bisection_params)
+            return (
+                float(metric_values[objective_max_metric]),
+                float(metric_values[objective_mean_metric]),
+            )
     else:
         try:
             sampler = optuna.samplers.TPESampler(seed=int(seed))
@@ -870,7 +1103,7 @@ def optimize_combo_params(
             sampler = optuna.samplers.RandomSampler(seed=int(seed))
         study = optuna.create_study(direction="minimize", sampler=sampler)
 
-        def objective(trial: Any) -> float:
+        def objective_fn(trial: Any) -> float:
             lookback_params = (
                 lookback_spec.suggest_params(trial)
                 if lookback_spec.suggest_params is not None
@@ -882,10 +1115,10 @@ def optimize_combo_params(
                 else dict(bisection_spec.default_params)
             )
 
-            _, mean_tests_per_search = _run_and_validate(lookback_params, bisection_params)
-            return float(mean_tests_per_search)
+            metric_values = _run_and_validate(lookback_params, bisection_params)
+            return float(metric_values[objective_mean_metric])
 
-    study.optimize(objective, n_trials=int(n_trials), show_progress_bar=False)
+    study.optimize(objective_fn, n_trials=int(n_trials), show_progress_bar=False)
 
     if bool(multi_objective_opt):
         # Select a single point from the Pareto front. We primarily minimize the
@@ -933,13 +1166,14 @@ def optimize_combo_params(
         optuna_meta = {
             "n_trials": int(n_trials),
             "seed": int(seed),
+            "objective": objective_family,
             "multi_objective_opt": True,
             "pareto_best_trial_count": int(len(study.best_trials)),
             "selected_trial_number": int(selected_trial.number),
-            "selection": "lexicographic (min max_tests_per_search, then min mean_tests_per_search)",
+            "selection": f"lexicographic (min {objective_max_metric}, then min {objective_mean_metric})",
             "selected_values": {
-                "max_tests_per_search": float(selected_trial.values[0]),
-                "mean_tests_per_search": float(selected_trial.values[1]),
+                objective_max_metric: float(selected_trial.values[0]),
+                objective_mean_metric: float(selected_trial.values[1]),
             },
             "best_trial_params_raw": best_trial_params_raw,
         }
@@ -947,11 +1181,12 @@ def optimize_combo_params(
         optuna_meta = {
             "n_trials": int(n_trials),
             "seed": int(seed),
+            "objective": objective_family,
             "multi_objective_opt": False,
             "selected_trial_number": int(selected_trial.number),
-            "selection": "min mean_tests_per_search",
+            "selection": f"min {objective_mean_metric}",
             "selected_values": {
-                "mean_tests_per_search": float(selected_trial.value),
+                objective_mean_metric: float(selected_trial.value),
             },
             "best_trial_params_raw": best_trial_params_raw,
         }
@@ -1026,8 +1261,18 @@ def get_args() -> argparse.Namespace:
         "--multi-objective-opt",
         action="store_true",
         help=(
-            "Use multi-objective optimization (minimize max_tests_per_search and mean_tests_per_search). "
-            "Default: optimize mean_tests_per_search only."
+            "Use multi-objective optimization: minimize the max and mean metrics for the selected "
+            "--objective family. Default: optimize the selected mean metric only."
+        ),
+    )
+    parser.add_argument(
+        "--objective",
+        choices=["tests", "weighted_cost"],
+        default="tests",
+        help=(
+            "Optimization objective family. `tests` minimizes mean_tests_per_search "
+            "(or max_tests_per_search plus mean_tests_per_search with --multi-objective-opt). "
+            "`weighted_cost` uses the matching weighted-cost metrics instead."
         ),
     )
     parser.add_argument(
@@ -1035,7 +1280,7 @@ def get_args() -> argparse.Namespace:
         default="all",
         help=(
             "Comma-separated lookback strategy codes or names to simulate (default: all). "
-            "Examples: 'NLB,FSLB,FSLB-AD,TWLB-AD' or 'no_lookback,fixed_stride'."
+            "Examples: 'NLB,MBLB,FSLB,FSLB-AD,TWLB-AD' or 'no_lookback,fixed_stride'."
         ),
     )
     parser.add_argument(
@@ -1165,14 +1410,21 @@ def _pareto_front_rows_by_total_and_max(
         if mean_tests_per_search is None:
             continue
         try:
-            eligible.append(
-                {
-                    "combo": str(combo),
-                    "total_tests": int(total_tests),
-                    "max_tests_per_search": int(max_tests_per_search),
-                    "mean_tests_per_search": float(mean_tests_per_search),
-                }
-            )
+            candidate = {
+                "combo": str(combo),
+                "total_tests": int(total_tests),
+                "max_tests_per_search": int(max_tests_per_search),
+                "mean_tests_per_search": float(mean_tests_per_search),
+            }
+            for weighted_key in (
+                "total_weighted_cost",
+                "mean_weighted_cost_per_search",
+                "max_weighted_cost_per_search",
+            ):
+                weighted_value = row.get(weighted_key)
+                if weighted_value is not None:
+                    candidate[weighted_key] = float(weighted_value)
+            eligible.append(candidate)
         except (TypeError, ValueError):
             continue
 
@@ -1219,6 +1471,28 @@ def _percentiles_int(samples: Sequence[int], percentiles: Sequence[int]) -> Dict
     out: Dict[str, int] = {}
     for q, v in zip(percentiles, values):
         out[f"p{int(q)}"] = int(v)
+    return out
+
+
+def _weighted_cost_percentiles(samples: Sequence[float], percentiles: Sequence[int]) -> Dict[str, float]:
+    if not samples:
+        return {f"weighted_cost_p{int(p)}": 0.0 for p in percentiles}
+
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("NumPy is required for percentile computation. Install with `pip install numpy`.") from exc
+
+    arr = np.asarray(list(samples), dtype=float)
+    qs = np.asarray(list(percentiles), dtype=float)
+    try:
+        values = np.percentile(arr, qs, method="higher")
+    except TypeError:
+        values = np.percentile(arr, qs, interpolation="higher")
+
+    out: Dict[str, float] = {}
+    for q, v in zip(percentiles, values):
+        out[f"weighted_cost_p{int(q)}"] = float(v)
     return out
 
 
@@ -1318,6 +1592,17 @@ def main() -> int:
             name="nightly_builds",
             default_params={},
             build=lambda inputs, _p: NightlyBuildLookback(
+                sorted_times_utc=inputs.sorted_times_utc,
+                sorted_time_indices=inputs.sorted_time_indices,
+                window_start=inputs.window_start,
+            ),
+            suggest_params=None,
+        ),
+        StrategySpec(
+            code="MBLB",
+            name=MonthlyBuildLookback.name,
+            default_params={},
+            build=lambda inputs, _p: MonthlyBuildLookback(
                 sorted_times_utc=inputs.sorted_times_utc,
                 sorted_time_indices=inputs.sorted_time_indices,
                 window_start=inputs.window_start,
@@ -1860,6 +2145,9 @@ def main() -> int:
         get_total_tests: Any,
         get_mean_tests_per_search: Any,
         get_max_tests_per_search: Any,
+        get_total_weighted_cost: Optional[Any] = None,
+        get_mean_weighted_cost_per_search: Optional[Any] = None,
+        get_max_weighted_cost_per_search: Optional[Any] = None,
     ) -> Dict[str, Any]:
         baseline_row = next((r for r in results if str(r.get("combo")) == baseline_combo), None)
         if baseline_row is None:
@@ -1914,11 +2202,22 @@ def main() -> int:
             return best_combo
 
         best_row = min(results, key=lambda r: int(get_total_tests(r)))
-        return {
+        out = {
             "best_combo_by_total_tests": str(best_row.get("combo")),
             "best_combo_by_mean_tests_per_search": _best_combo(get_mean_tests_per_search),
             "best_combo_by_max_tests_per_search": _best_combo(get_max_tests_per_search),
         }
+        if get_total_weighted_cost is not None:
+            out["best_combo_by_total_weighted_cost"] = _best_combo(get_total_weighted_cost)
+        if get_mean_weighted_cost_per_search is not None:
+            out["best_combo_by_mean_weighted_cost_per_search"] = _best_combo(
+                get_mean_weighted_cost_per_search
+            )
+        if get_max_weighted_cost_per_search is not None:
+            out["best_combo_by_max_weighted_cost_per_search"] = _best_combo(
+                get_max_weighted_cost_per_search
+            )
+        return out
 
     if not args.final_only:
         eval_inputs = prepare_inputs(
@@ -1952,9 +2251,10 @@ def main() -> int:
                     and bisection_spec.name == GitBisectBaseline.name
                 )
                 logger.info(
-                    "Optuna tuning combo=%s trials=%d multi_objective_opt=%s",
+                    "Optuna tuning combo=%s trials=%d objective=%s multi_objective_opt=%s",
                     combo_key,
                     int(args.mopt_trials),
+                    str(args.objective),
                     bool(args.multi_objective_opt),
                 )
                 lookback_params, bisection_params, payload = optimize_combo_params(
@@ -1963,6 +2263,7 @@ def main() -> int:
                     bisection_spec=bisection_spec,
                     n_trials=int(args.mopt_trials),
                     seed=int(args.optuna_seed),
+                    objective=str(args.objective),
                     multi_objective_opt=bool(args.multi_objective_opt),
                     penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
@@ -1998,15 +2299,63 @@ def main() -> int:
                     lambda r: (r.get("metrics") or {}).get("max_tests_per_search"),
                     lambda r, pct: r.setdefault("metrics", {}).update({"max_tests_per_search_saved_vs_baseline_pct": pct}),
                 ),
+                (
+                    lambda r: (r.get("metrics") or {}).get("total_weighted_cost"),
+                    lambda r, pct: r.setdefault("metrics", {}).update(
+                        {"total_weighted_cost_saved_vs_baseline_pct": pct}
+                    ),
+                ),
+                (
+                    lambda r: (r.get("metrics") or {}).get("mean_weighted_cost_per_search"),
+                    lambda r, pct: r.setdefault("metrics", {}).update(
+                        {"mean_weighted_cost_per_search_saved_vs_baseline_pct": pct}
+                    ),
+                ),
+                (
+                    lambda r: (r.get("metrics") or {}).get("max_weighted_cost_per_search"),
+                    lambda r, pct: r.setdefault("metrics", {}).update(
+                        {"max_weighted_cost_per_search_saved_vs_baseline_pct": pct}
+                    ),
+                ),
             ],
             get_total_tests=lambda r: (r.get("metrics") or {}).get("total_tests", 0),
             get_mean_tests_per_search=lambda r: (r.get("metrics") or {}).get("mean_tests_per_search"),
             get_max_tests_per_search=lambda r: (r.get("metrics") or {}).get("max_tests_per_search"),
+            get_total_weighted_cost=lambda r: (r.get("metrics") or {}).get("total_weighted_cost"),
+            get_mean_weighted_cost_per_search=lambda r: (r.get("metrics") or {}).get(
+                "mean_weighted_cost_per_search"
+            ),
+            get_max_weighted_cost_per_search=lambda r: (r.get("metrics") or {}).get(
+                "max_weighted_cost_per_search"
+            ),
         )
+        if bool(args.multi_objective_opt):
+            if str(args.objective) == "weighted_cost":
+                objective_description = (
+                    "minimize max_weighted_cost_per_search and mean_weighted_cost_per_search; "
+                    "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+                )
+            else:
+                objective_description = (
+                    "minimize max_tests_per_search and mean_tests_per_search; "
+                    "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+                )
+        elif str(args.objective) == "weighted_cost":
+            objective_description = (
+                "minimize mean_weighted_cost_per_search; "
+                "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+            )
+        else:
+            objective_description = (
+                "minimize mean_tests_per_search; "
+                "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
+            )
+
         eval_summary = {
             "dataset": "eval",
             "dry_run": bool(args.dry_run),
             **eval_comparison,
+            "weighted_cost_profile": _weighted_cost_profile_metadata(),
             "commit_window": {
                 "start_index": eval_inputs.window_start,
                 "end_index": eval_inputs.window_end,
@@ -2022,18 +2371,9 @@ def main() -> int:
             "optimization": {
                 "mopt_trials_per_combo": int(args.mopt_trials),
                 "optuna_seed": int(args.optuna_seed),
+                "objective_family": str(args.objective),
                 "multi_objective_opt": bool(args.multi_objective_opt),
-                "objective": (
-                    (
-                        "minimize max_tests_per_search and mean_tests_per_search; "
-                        "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
-                    )
-                    if bool(args.multi_objective_opt)
-                    else (
-                        "minimize mean_tests_per_search; "
-                        "raise if processed == 0, if culprits_found < processed, or if objective metrics are missing"
-                    )
-                ),
+                "objective": objective_description,
             },
             "results": eval_results,
         }
@@ -2127,15 +2467,31 @@ def main() -> int:
                 lambda r: r.get("max_tests_per_search"),
                 lambda r, pct: r.__setitem__("max_tests_per_search_saved_vs_baseline_pct", pct),
             ),
+            (
+                lambda r: r.get("total_weighted_cost"),
+                lambda r, pct: r.__setitem__("total_weighted_cost_saved_vs_baseline_pct", pct),
+            ),
+            (
+                lambda r: r.get("mean_weighted_cost_per_search"),
+                lambda r, pct: r.__setitem__("mean_weighted_cost_per_search_saved_vs_baseline_pct", pct),
+            ),
+            (
+                lambda r: r.get("max_weighted_cost_per_search"),
+                lambda r, pct: r.__setitem__("max_weighted_cost_per_search_saved_vs_baseline_pct", pct),
+            ),
         ],
         get_total_tests=lambda r: r.get("total_tests", 0),
         get_mean_tests_per_search=lambda r: r.get("mean_tests_per_search"),
         get_max_tests_per_search=lambda r: r.get("max_tests_per_search"),
+        get_total_weighted_cost=lambda r: r.get("total_weighted_cost"),
+        get_mean_weighted_cost_per_search=lambda r: r.get("mean_weighted_cost_per_search"),
+        get_max_weighted_cost_per_search=lambda r: r.get("max_weighted_cost_per_search"),
     )
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
         **final_comparison,
+        "weighted_cost_profile": _weighted_cost_profile_metadata(),
         "commit_window": {
             "start_index": final_inputs.window_start,
             "end_index": final_inputs.window_end,
@@ -2191,8 +2547,15 @@ def main() -> int:
                 collect_tests_per_search=True,
             )
             samples = list(dist_res.get("tests_per_search_samples") or [])
+            weighted_samples = list(dist_res.get("weighted_cost_per_search_samples") or [])
             pareto_plot_rows.append({"combo": combo_key, "tests_per_search_samples": samples})
-            pareto_stats_rows.append({**pareto_row, **_percentiles_int(samples, percentile_qs)})
+            pareto_stats_rows.append(
+                {
+                    **pareto_row,
+                    **_percentiles_int(samples, percentile_qs),
+                    **_weighted_cost_percentiles(weighted_samples, percentile_qs),
+                }
+            )
 
         if pareto_stats_rows:
             logger.info("Writing Pareto-front percentile stats to %s", stats_path)

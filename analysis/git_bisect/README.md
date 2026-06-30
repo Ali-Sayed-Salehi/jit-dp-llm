@@ -45,6 +45,43 @@ $$
 
 Important modeling choice: the simulator treats `b` as an *already-observed* failing commit (e.g., the regression was first noticed there), so it is **not** counted as a test. Lookback/bisection only count *additional* probes.
 
+### Weighted localization cost
+The simulator also reports a second, parallel metric: **weighted localization cost**. This does not replace `tests_*`; it is computed alongside the existing integer test counts.
+
+For every additional probe, the simulator records the tested commit index and charges a cost based on probe type and, for arbitrary commits, how old that commit was when the bug was reported:
+
+$$
+\text{age\\_days} = \max(0,\; \text{bug\\_creation\\_time} - \text{probed\\_commit\\_time})
+$$
+
+The default profile is `default_v1`:
+
+| Probe type | Age at bug report | Cost |
+|---|---:|---:|
+| Nightly/monthly artifact | any | `0.5` |
+| Arbitrary commit | `0-7` days | `1.0` |
+| Arbitrary commit | `8-30` days | `1.5` |
+| Arbitrary commit | `31-90` days | `3.0` |
+| Arbitrary commit | `91-365` days | `5.0` |
+| Arbitrary commit | `>365` days | `8.0` |
+
+Current strategy mapping:
+
+- `NBLB` lookback probes are charged as `nightly_artifact`.
+- `MBLB` lookback probes are labeled as `monthly_artifact` but use the same cost as `nightly_artifact`.
+- Bisection probes and all other existing lookback probes are charged as `arbitrary_commit`.
+- `monthly_artifact` should not be described as a real release artifact unless release metadata is added.
+
+The already-observed bad commit is still not charged. Bisection probes that reuse lookback results are not charged again.
+
+Weighted outputs include:
+
+- `total_weighted_cost`
+- `total_lookback_weighted_cost`
+- `total_bisection_weighted_cost`
+- `mean_weighted_cost_per_search`
+- `max_weighted_cost_per_search`
+
 ### Optional: window-start lookback penalty
 Some lookback policies may end up using the **simulation window start** commit as the known-good boundary (`g = window_start`)—either because the strategy is NLB (no lookback), or because it clamps/falls back to the earliest available commit in the window.
 
@@ -68,6 +105,8 @@ $$
 $$
 
 Implementation detail: the penalty is accounted under **bisection tests** (so it affects `total_bisection_tests` and `total_tests`, and therefore `mean_tests_per_search` / `max_tests_per_search`).
+
+For weighted cost, the same flag adds a fixed `window_start_fallback_weighted_penalty = 15.0` once per processed bug where `good_index == window_start`. This is intentionally **not** multiplied by `--window-start-lookback-penalty-tests`; the integer test-count penalty and weighted fallback penalty are separate synthetic overhead estimates. The weighted fallback penalty is included under `total_bisection_weighted_cost` and `total_weighted_cost`. Later bisection probes after the fallback are still charged normally by their own probe ages.
 
 Bugs whose regression predates the risk window (i.e., there is no in-window known-good commit strictly before the culprit) are still skipped as before; enabling this penalty does not change which bugs are processed vs. skipped.
 
@@ -193,6 +232,15 @@ Walk backward by **UTC days** and test one “nightly boundary” commit per day
 
 This is meant to approximate “bisecting by nightly builds”: cheap to try one build per day, but potentially coarse.
 
+#### MBLB: Synthetic monthly artifact lookback
+Walk backward by **UTC month boundaries** and test one synthetic monthly checkpoint per month until a pass is found.
+
+- Define month boundaries in UTC.
+- For each month boundary going backward, choose the last commit strictly before the first day of that month, and test it.
+- Return the first such boundary commit with index `< c`.
+
+This is meant to model coarse prebuilt monthly checkpoints. It should not be interpreted as real release bisection unless actual release metadata is added.
+
 #### NLB: No lookback
 Do **no additional tests** to find a good boundary; use the simulation window start commit:
 
@@ -203,7 +251,7 @@ $$
 The simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`), since there is no known-good commit available strictly before the culprit within the window. When applicable, bisection searches over `(window_start, b]`.
 
 #### Forced-fallback variants (-ff)
-For every lookback strategy **except** NLB and NBLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
+For every lookback strategy **except** NLB, NBLB, and MBLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
 
 If the strategy would execute more than `max_trials` lookback tests while searching backward, it stops early and falls back to using `window_start` as the known-good boundary (instead of continuing to search for a closer passing commit).
 
@@ -437,10 +485,14 @@ When `--final-only` is **not** set, the script runs a full tuning pass on the **
 For each selected `(lookback, bisection)` combo:
 
 1) A single Optuna study is created with:
-   - Default (single-objective): **Minimize** `mean_tests_per_search`
-   - With `--multi-objective-opt`: two objectives:
+   - Default `--objective tests` (single-objective): **Minimize** `mean_tests_per_search`
+   - With `--objective weighted_cost` (single-objective): **Minimize** `mean_weighted_cost_per_search`
+   - With `--multi-objective-opt --objective tests`: two objectives:
      - **Minimize** `max_tests_per_search`
      - **Minimize** `mean_tests_per_search`
+   - With `--multi-objective-opt --objective weighted_cost`: two objectives:
+     - **Minimize** `max_weighted_cost_per_search`
+     - **Minimize** `mean_weighted_cost_per_search`
 
 2) The simulator is executed for each trial and the objective values are computed from the resulting metrics.
 
@@ -455,10 +507,10 @@ For each selected `(lookback, bisection)` combo:
 4) Optuna uses `TPESampler` by default. With `--multi-objective-opt`, it uses `NSGAIISampler` when available (multi-objective evolutionary search). If that sampler is not available in your Optuna version, the script falls back to `RandomSampler`.
 
 5) After optimization:
-   - Default: select the single best trial (min `mean_tests_per_search`)
+   - Single-objective: select the single best trial for the selected mean metric
    - With `--multi-objective-opt`: select a single point from the Pareto front by a simple rule:
-     - Choose the Pareto-optimal trial with the smallest `max_tests_per_search`
-     - Break ties by the smallest `mean_tests_per_search`
+     - Choose the Pareto-optimal trial with the smallest selected max metric
+     - Break ties by the smallest selected mean metric
 
 What gets written to `--output-eval`:
 - `results[].best_params`: the selected best parameter values for the combo (stored without the Optuna prefix, e.g. `{"stride": 100}` rather than `{"FSLB_stride": 100}`).

@@ -10,7 +10,7 @@ executions are required to identify the culprit.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import heapq
 from typing import Mapping, Optional, Protocol, Sequence, overload
@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BisectionOutcome:
-    """Result of a bisection run: tests executed and the located culprit index (if any)."""
+    """Result of a bisection run: tests executed, tested indices, and located culprit."""
     tests: int
     found_index: Optional[int]
+    probed_indices: tuple[int, ...] = ()
 
 
 class BisectionStrategy(Protocol):
@@ -108,6 +109,7 @@ class _BisectionTester:
     cache: dict[int, bool]
     culprit_index: int
     tests: int = 0
+    probed_indices: list[int] = field(default_factory=list)
 
     def test(self, idx: int) -> bool:
         """Return True if commit idx fails; increments `tests` when uncached."""
@@ -115,6 +117,7 @@ class _BisectionTester:
         if idx in self.cache:
             return self.cache[idx]
         self.tests += 1
+        self.probed_indices.append(idx)
         out = bool(idx >= int(self.culprit_index))
         self.cache[idx] = out
         return out
@@ -268,7 +271,11 @@ class GitBisectBaseline:
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tester.tests, found_index=high)
+        return BisectionOutcome(
+            tests=tester.tests,
+            found_index=high,
+            probed_indices=tuple(tester.probed_indices),
+        )
 
 
 class RiskWeightedBisectionSum:
@@ -378,7 +385,11 @@ class RiskWeightedBisectionSum:
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tester.tests, found_index=high)
+        return BisectionOutcome(
+            tests=tester.tests,
+            found_index=high,
+            probed_indices=tuple(tester.probed_indices),
+        )
 
 
 class RiskWeightedBisectionLogSurvival:
@@ -498,7 +509,11 @@ class RiskWeightedBisectionLogSurvival:
             good_index,
             bad_index,
         )
-        return BisectionOutcome(tests=tester.tests, found_index=high)
+        return BisectionOutcome(
+            tests=tester.tests,
+            found_index=high,
+            probed_indices=tuple(tester.probed_indices),
+        )
 
 
 class TopKRiskFirstBisection:
@@ -592,7 +607,11 @@ class TopKRiskFirstBisection:
                         bad_index,
                         self.k,
                     )
-                    return BisectionOutcome(tests=tester.tests, found_index=int(idx))
+                    return BisectionOutcome(
+                        tests=tester.tests,
+                        found_index=int(idx),
+                        probed_indices=tuple(tester.probed_indices),
+                    )
 
         # Tighten the search interval using any newly discovered pass/fail results.
         low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
@@ -614,7 +633,11 @@ class TopKRiskFirstBisection:
             bad_index,
             self.k,
         )
-        return BisectionOutcome(tests=tester.tests, found_index=int(high))
+        return BisectionOutcome(
+            tests=tester.tests,
+            found_index=int(high),
+            probed_indices=tuple(tester.probed_indices),
+        )
 
 
 BISECTION_STRATEGIES = {

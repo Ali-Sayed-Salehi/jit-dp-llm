@@ -494,6 +494,91 @@ class NightlyBuildLookback:
             cutoff = cutoff - timedelta(days=1)
 
 
+def _previous_month_start(dt: datetime) -> datetime:
+    """Return the UTC start of the month before `dt`'s month."""
+    year = int(dt.year)
+    month = int(dt.month)
+    if month == 1:
+        return datetime(year - 1, 12, 1, tzinfo=timezone.utc)
+    return datetime(year, month - 1, 1, tzinfo=timezone.utc)
+
+
+class MonthlyBuildLookback(NightlyBuildLookback):
+    """
+    Synthetic monthly-artifact lookback:
+      - Walk backward by UTC month boundaries.
+      - Test one monthly boundary commit per month until a pass is found.
+
+    This models coarse prebuilt checkpoints. It should not be interpreted as
+    real release artifacts unless release metadata is added.
+    """
+
+    name = "monthly_artifacts"
+
+    def find_good_index(
+        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+    ) -> LookbackOutcome:
+        if start_time_utc is None:
+            raise ValueError("MonthlyBuildLookback requires start_time_utc to be provided")
+        if start_time_utc.tzinfo is None:
+            start_time_utc = start_time_utc.replace(tzinfo=timezone.utc)
+        start_time_utc = start_time_utc.astimezone(timezone.utc)
+
+        culprit_index = int(culprit_index)
+        start_index = int(start_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        month_start = datetime(
+            start_time_utc.year,
+            start_time_utc.month,
+            1,
+            tzinfo=timezone.utc,
+        )
+
+        cur_idx = int(start_index)
+        last_tested: Optional[int] = None
+
+        steps = 0
+        known_results: dict[int, bool] = {}
+        cutoff = month_start
+        while True:
+            monthly_idx = self._last_commit_strictly_before(cutoff, upper_bound_inclusive=cur_idx)
+            if monthly_idx is None:
+                monthly_idx = self.window_start
+
+            if monthly_idx < self.window_start:
+                monthly_idx = self.window_start
+
+            if int(monthly_idx) == int(start_index):
+                cutoff = _previous_month_start(cutoff)
+                continue
+
+            if last_tested is not None and int(monthly_idx) == int(last_tested):
+                cutoff = _previous_month_start(cutoff)
+                continue
+
+            steps += 1
+            known_results[int(monthly_idx)] = bool(int(monthly_idx) >= culprit_index)
+            if monthly_idx < culprit_index:
+                logger.debug(
+                    "Monthly lookback found good_index=%d after steps=%d (start=%d culprit=%d)",
+                    monthly_idx,
+                    steps,
+                    start_index,
+                    culprit_index,
+                )
+                return LookbackOutcome(good_index=monthly_idx, steps=steps, known_results=known_results)
+
+            if monthly_idx == self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            last_tested = int(monthly_idx)
+            cur_idx = int(monthly_idx)
+            cutoff = _previous_month_start(cutoff)
+
+
 class RiskAwareTriggerLookback:
     """
     Risk-Aware Trigger Lookback (RATLB).
@@ -2000,6 +2085,7 @@ LOOKBACK_STRATEGIES = {
     FixedStrideLookbackAdaptiveIncrease.name: FixedStrideLookbackAdaptiveIncrease,
     FixedStrideLookbackAdaptiveIncreaseForcedFallback.name: FixedStrideLookbackAdaptiveIncreaseForcedFallback,
     NightlyBuildLookback.name: NightlyBuildLookback,
+    MonthlyBuildLookback.name: MonthlyBuildLookback,
     RiskAwareTriggerLookback.name: RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback.name: RiskAwareTriggerLookbackForcedFallback,
     RiskAwareTriggerLookbackAdaptiveDecrease.name: RiskAwareTriggerLookbackAdaptiveDecrease,

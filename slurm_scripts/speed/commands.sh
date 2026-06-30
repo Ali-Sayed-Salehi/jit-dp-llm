@@ -8,7 +8,7 @@
 #SBATCH --account=pcr
 #SBATCH --constraint=el9
 
-REPO_ROOT="/speed-scratch/a_s87063/repos/jit-dp-llm"
+set REPO_ROOT = "/speed-scratch/a_s87063/repos/jit-dp-llm"
 
 echo "loading modules"
 module load python/3.12.0/default
@@ -110,6 +110,9 @@ echo "Running script ..."
 # --out /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/scatter_mft.png \
 # --xaxis mft
 
+
+# To optimize weighted localization cost instead, replace the active objective line with:
+# --objective weighted_cost \
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
 # --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
 # --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
@@ -123,12 +126,13 @@ echo "Running script ..."
 # --window-start-lookback-penalty-tests 4 \
 # --mopt-trials 50 \
 # --optuna-seed 42 \
-# --lookback NBLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RATLB-AD,RATLB-AI,RWLBS,RWLBS-AD,RWLBS-AI,RWLBLS,RWLBLS-AD,RWLBLS-AI,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RATLB-AD-FF,RATLB-AI-FF,RWLBS-FF,RWLBS-AD-FF,RWLBS-AI-FF,RWLBLS-FF,RWLBLS-AD-FF,RWLBLS-AI-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \
+# --lookback NBLB,MBLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RATLB-AD,RATLB-AI,RWLBS,RWLBS-AD,RWLBS-AI,RWLBLS,RWLBLS-AD,RWLBLS-AI,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RATLB-AD-FF,RATLB-AI-FF,RWLBS-FF,RWLBS-AD-FF,RWLBS-AI-FF,RWLBLS-FF,RWLBLS-AD-FF,RWLBLS-AI-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \
 # --bisection GB,TKRB,RWBS,RWBLS \
 # --multi-objective-opt \
+# --objective tests \
 # --log-level INFO \
 # --final-only
-# # --dry-run
+# --dry-run
 
 
 # Flag ownership for this simulation command:
