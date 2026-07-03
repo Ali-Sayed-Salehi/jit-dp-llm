@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import hashlib
 import json
 import logging
 import os
@@ -92,6 +93,7 @@ from lookback import (
     TimeWindowLookback,
     TimeWindowLookbackForcedFallback,
 )
+from probe import ProbeFn, ProbeOutcome, ProbeResult
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -125,6 +127,15 @@ ARBITRARY_COMMIT_AGE_COST_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
     (None, 8.0),
 )
 
+DEFAULT_SKIP_SEED = 1729
+SKIP_AGE_PROBABILITY_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
+    (7.0, 0.01),
+    (30.0, 0.03),
+    (90.0, 0.08),
+    (365.0, 0.15),
+    (None, 0.30),
+)
+
 
 @dataclass(frozen=True)
 class StrategySpec:
@@ -147,7 +158,7 @@ class ProbeRecord:
     index: int
     phase: str
     kind: str
-    failed: bool
+    outcome: ProbeOutcome
 
 
 def _read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -448,7 +459,9 @@ def _weighted_cost_profile_metadata() -> Dict[str, Any]:
         "window_start_fallback_policy": (
             "When --penalize-window-start-lookback is enabled and good_index == window_start, "
             "add this fixed weighted penalty once; do not multiply it by "
-            "--window-start-lookback-penalty-tests."
+            "--window-start-lookback-penalty-tests. If --enable-skips is set, "
+            "scale this weighted penalty by the realized integer fallback attempts "
+            "divided by --window-start-lookback-penalty-tests."
         ),
     }
 
@@ -506,6 +519,123 @@ def _weighted_probe_cost(
     raise ValueError(f"Unknown probe kind for weighted cost: {probe.kind!r}")
 
 
+def _skip_probability_for_age(age_days: float) -> float:
+    """Return the configured skip probability for a commit age."""
+    age_days = float(age_days)
+    for max_age_days, probability in SKIP_AGE_PROBABILITY_BUCKETS:
+        p = float(probability)
+        if p < 0.0 or p >= 1.0:
+            raise ValueError(f"Skip probabilities must be in [0,1), got {p}")
+        if max_age_days is None or age_days <= float(max_age_days):
+            return p
+    raise RuntimeError("Skip probability buckets must include an open-ended bucket.")
+
+
+def _oldest_skip_probability() -> float:
+    """Return the open-ended old-commit skip probability."""
+    for max_age_days, probability in reversed(SKIP_AGE_PROBABILITY_BUCKETS):
+        if max_age_days is None:
+            p = float(probability)
+            if p < 0.0 or p >= 1.0:
+                raise ValueError(f"Skip probabilities must be in [0,1), got {p}")
+            return p
+    raise RuntimeError("Skip probability buckets must include an open-ended bucket.")
+
+
+def _stable_unit_interval(*, seed: int, bug_key: str, commit_index: int) -> float:
+    """Return a deterministic pseudo-random float in [0,1)."""
+    payload = f"{int(seed)}:{bug_key}:{int(commit_index)}".encode("utf-8")
+    digest = hashlib.sha256(payload).digest()
+    value = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return float(value) / float(1 << 64)
+
+
+class _CommitProbeOracle:
+    """Deterministic tri-state probe oracle for one bug/regression search."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        seed: int,
+        bug_key: str,
+        culprit_index: int,
+        bug_time_utc: datetime,
+        commit_times_utc: Sequence[datetime],
+    ) -> None:
+        self.enabled = bool(enabled)
+        self.seed = int(seed)
+        self.bug_key = str(bug_key)
+        self.culprit_index = int(culprit_index)
+        self.bug_time_utc = bug_time_utc
+        self.commit_times_utc = commit_times_utc
+        self.cache: Dict[int, ProbeOutcome] = {}
+
+    def probe(self, idx: int) -> ProbeResult:
+        idx = int(idx)
+        cached = self.cache.get(idx)
+        if cached is not None:
+            return ProbeResult(outcome=cached, is_new=False)
+
+        if self.enabled and idx != self.culprit_index:
+            age_days = _commit_age_days_at_bug(
+                commit_times_utc=self.commit_times_utc,
+                commit_index=idx,
+                bug_time_utc=self.bug_time_utc,
+            )
+            p_skip = _skip_probability_for_age(age_days)
+            if _stable_unit_interval(seed=self.seed, bug_key=self.bug_key, commit_index=idx) < p_skip:
+                outcome = ProbeOutcome.SKIP
+            else:
+                outcome = ProbeOutcome.FAIL if idx >= self.culprit_index else ProbeOutcome.PASS
+        else:
+            outcome = ProbeOutcome.FAIL if idx >= self.culprit_index else ProbeOutcome.PASS
+
+        if idx == self.culprit_index and outcome == ProbeOutcome.SKIP:
+            raise RuntimeError(f"Culprit commit unexpectedly skipped at index={idx}")
+
+        self.cache[idx] = outcome
+        return ProbeResult(outcome=outcome, is_new=True)
+
+
+def _window_start_fallback_penalty_draws(
+    *,
+    enable_skips: bool,
+    seed: int,
+    bug_key: str,
+    usable_needed: int,
+) -> Tuple[int, int]:
+    """
+    Return (attempts, skipped_attempts) for synthetic pre-window fallback probes.
+
+    The fallback penalty represents `usable_needed` usable probes before reaching
+    the simulation window. With skips enabled, each virtual probe has the oldest
+    skip probability, so extra integer attempts are drawn until enough usable
+    probes are obtained.
+    """
+    usable_needed = int(usable_needed)
+    if usable_needed < 0:
+        raise ValueError("usable_needed must be >= 0")
+    if usable_needed == 0 or not bool(enable_skips):
+        return usable_needed, 0
+
+    p_old = _oldest_skip_probability()
+    attempts = 0
+    usable = 0
+    fallback_key = f"{bug_key}:window_start_fallback"
+    while usable < usable_needed:
+        value = _stable_unit_interval(
+            seed=int(seed),
+            bug_key=fallback_key,
+            commit_index=int(attempts),
+        )
+        attempts += 1
+        if value < p_old:
+            continue
+        usable += 1
+    return int(attempts), int(attempts - usable_needed)
+
+
 def _lookback_probe_kind(*, lookback_code: str, lookback: LookbackStrategy) -> str:
     """Classify lookback probes for the weighted cost model."""
     name = str(getattr(lookback, "name", ""))
@@ -540,6 +670,8 @@ def simulate_strategy_combo(
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
     collect_tests_per_search: bool = False,
+    enable_skips: bool = False,
+    skip_seed: int = DEFAULT_SKIP_SEED,
 ) -> Dict[str, Any]:
     """Run simulation for a single (lookback, bisection) strategy pair."""
     if int(window_start_lookback_penalty_tests) < 0:
@@ -549,16 +681,20 @@ def simulate_strategy_combo(
         node = nodes_by_index[idx] if 0 <= idx < len(nodes_by_index) else None
         return f"{idx} ({node})" if node else str(idx)
 
-    total_tests = 0
+    total_tests: int | float = 0
     total_lookback_tests = 0
-    total_bisection_tests = 0
+    total_bisection_tests: int | float = 0
     total_weighted_cost = 0.0
     total_lookback_weighted_cost = 0.0
     total_bisection_weighted_cost = 0.0
     total_culprits_found = 0
-    max_tests_per_search = 0
+    total_skip_probes = 0
+    total_lookback_skip_probes = 0
+    total_bisection_skip_probes = 0
+    max_tests_per_search: int | float = 0
     max_weighted_cost_per_search = 0.0
-    tests_per_search_samples: Optional[List[int]] = [] if bool(collect_tests_per_search) else None
+    max_skip_probes_per_search = 0
+    tests_per_search_samples: Optional[List[float]] = [] if bool(collect_tests_per_search) else None
     weighted_cost_per_search_samples: Optional[List[float]] = [] if bool(collect_tests_per_search) else None
 
     skipped = {
@@ -621,10 +757,31 @@ def simulate_strategy_combo(
             skipped["culprit_after_bad"] += 1
             continue
 
+        probe_fn: Optional[ProbeFn] = None
+        if bool(enable_skips):
+            probe_oracle = _CommitProbeOracle(
+                enabled=True,
+                seed=int(skip_seed),
+                bug_key=str(bug.get("bug_id")),
+                culprit_index=culprit_index,
+                bug_time_utc=bug_time,
+                commit_times_utc=commit_times_utc,
+            )
+            probe_fn = probe_oracle.probe
+
         lookback_outcome = lookback.find_good_index(
-            start_index=bad_index, culprit_index=culprit_index, start_time_utc=bug_time
+            start_index=bad_index,
+            culprit_index=culprit_index,
+            start_time_utc=bug_time,
+            probe=probe_fn,
         )
         if lookback_outcome.good_index is None:
+            if bool(enable_skips) and int(window_start) < int(culprit_index):
+                raise RuntimeError(
+                    f"Skip-aware lookback failed to find a usable good revision for bug_id={bug.get('bug_id')} "
+                    f"despite window_start={_fmt(window_start)} being before culprit={_fmt(culprit_index)} "
+                    f"combo={lookback_code}+{bisection_code}"
+                )
             skipped["no_regressors_in_range"] += 1
             continue
 
@@ -635,9 +792,9 @@ def simulate_strategy_combo(
                 index=int(idx),
                 phase="lookback",
                 kind=lookback_probe_kind,
-                failed=bool(failed),
+                outcome=ProbeOutcome(outcome),
             )
-            for idx, failed in lookback_outcome.known_results.items()
+            for idx, outcome in lookback_outcome.known_results.items()
         ]
         if len(lookback_probes) != int(lookback_tests):
             raise RuntimeError(
@@ -668,15 +825,16 @@ def simulate_strategy_combo(
             culprit_index=culprit_index,
             risk_by_index=risk_by_index,
             known_results=lookback_outcome.known_results,
+            probe=probe_fn,
         )
         bisection_probes = [
             ProbeRecord(
-                index=int(idx),
+                index=int(attempt.index),
                 phase="bisection",
                 kind=PROBE_KIND_ARBITRARY_COMMIT,
-                failed=bool(int(idx) >= int(culprit_index)),
+                outcome=ProbeOutcome(attempt.outcome),
             )
-            for idx in bisect_outcome.probed_indices
+            for attempt in bisect_outcome.probe_attempts
         ]
         if len(bisection_probes) != int(bisect_outcome.tests):
             raise RuntimeError(
@@ -684,12 +842,31 @@ def simulate_strategy_combo(
                 f"tests={bisect_outcome.tests} recorded_probes={len(bisection_probes)} "
                 f"combo={lookback_code}+{bisection_code}"
             )
+        if bisect_outcome.found_index != culprit_index:
+            raise RuntimeError(
+                f"Bisection located the wrong culprit for bug_id={bug.get('bug_id')}: "
+                f"found={_fmt(int(bisect_outcome.found_index)) if bisect_outcome.found_index is not None else None} "
+                f"expected={_fmt(culprit_index)} combo={lookback_code}+{bisection_code}"
+            )
 
-        window_start_penalty = 0
+        window_start_penalty: int | float = 0
         window_start_fallback_weighted_cost = 0.0
+        window_start_fallback_skip_tests = 0
         if bool(penalize_window_start_lookback) and good_index == int(window_start):
-            window_start_penalty = int(window_start_lookback_penalty_tests)
-            window_start_fallback_weighted_cost = float(WINDOW_START_FALLBACK_WEIGHTED_PENALTY)
+            penalty_tests = int(window_start_lookback_penalty_tests)
+            window_start_penalty, window_start_fallback_skip_tests = _window_start_fallback_penalty_draws(
+                enable_skips=bool(enable_skips),
+                seed=int(skip_seed),
+                bug_key=str(bug.get("bug_id")),
+                usable_needed=penalty_tests,
+            )
+            if bool(enable_skips) and penalty_tests > 0:
+                window_start_fallback_weighted_cost = (
+                    float(WINDOW_START_FALLBACK_WEIGHTED_PENALTY)
+                    * (float(window_start_penalty) / float(penalty_tests))
+                )
+            else:
+                window_start_fallback_weighted_cost = float(WINDOW_START_FALLBACK_WEIGHTED_PENALTY)
 
         lookback_weighted_cost = sum(
             _weighted_probe_cost(
@@ -712,15 +889,23 @@ def simulate_strategy_combo(
             + float(bisection_weighted_cost)
         )
 
-        bisection_tests = int(bisect_outcome.tests) + int(window_start_penalty)
-        tests_per_search = int(lookback_tests) + int(bisection_tests)
+        lookback_skip_probes = sum(1 for probe_record in lookback_probes if probe_record.outcome == ProbeOutcome.SKIP)
+        bisection_skip_probes = (
+            sum(1 for probe_record in bisection_probes if probe_record.outcome == ProbeOutcome.SKIP)
+        ) + int(window_start_fallback_skip_tests)
+        skip_probes_per_search = int(lookback_skip_probes) + int(bisection_skip_probes)
+
+        bisection_tests = int(bisect_outcome.tests) + window_start_penalty
+        tests_per_search = int(lookback_tests) + bisection_tests
         if tests_per_search > max_tests_per_search:
             max_tests_per_search = tests_per_search
         if weighted_cost_per_search > max_weighted_cost_per_search:
             max_weighted_cost_per_search = float(weighted_cost_per_search)
+        if skip_probes_per_search > max_skip_probes_per_search:
+            max_skip_probes_per_search = int(skip_probes_per_search)
 
         if tests_per_search_samples is not None:
-            tests_per_search_samples.append(int(tests_per_search))
+            tests_per_search_samples.append(float(tests_per_search))
         if weighted_cost_per_search_samples is not None:
             weighted_cost_per_search_samples.append(float(weighted_cost_per_search))
 
@@ -731,10 +916,13 @@ def simulate_strategy_combo(
         total_lookback_weighted_cost += float(lookback_weighted_cost)
         total_bisection_weighted_cost += float(bisection_weighted_cost)
         total_weighted_cost += float(weighted_cost_per_search)
+        total_lookback_skip_probes += int(lookback_skip_probes)
+        total_bisection_skip_probes += int(bisection_skip_probes)
+        total_skip_probes += int(skip_probes_per_search)
         processed += 1
 
     mean_tests_per_search: Optional[float]
-    max_tests_per_search_out: Optional[int]
+    max_tests_per_search_out: Optional[float]
     mean_weighted_cost_per_search: Optional[float]
     max_weighted_cost_per_search_out: Optional[float]
     if processed <= 0:
@@ -742,14 +930,18 @@ def simulate_strategy_combo(
         max_tests_per_search_out = None
         mean_weighted_cost_per_search = None
         max_weighted_cost_per_search_out = None
+        mean_skip_probes_per_search = None
+        max_skip_probes_per_search_out = None
     else:
         mean_tests_per_search = float(total_tests) / float(processed)
-        max_tests_per_search_out = int(max_tests_per_search)
+        max_tests_per_search_out = max_tests_per_search
         mean_weighted_cost_per_search = float(total_weighted_cost) / float(processed)
         max_weighted_cost_per_search_out = float(max_weighted_cost_per_search)
+        mean_skip_probes_per_search = float(total_skip_probes) / float(processed)
+        max_skip_probes_per_search_out = int(max_skip_probes_per_search)
 
     logger.info(
-        "Finished combo %s+%s: processed=%d total_tests=%d culprits_found=%d skipped=%s",
+        "Finished combo %s+%s: processed=%d total_tests=%s culprits_found=%d skipped=%s",
         lookback_code,
         bisection_code,
         processed,
@@ -762,11 +954,16 @@ def simulate_strategy_combo(
         "total_tests": total_tests,
         "total_lookback_tests": total_lookback_tests,
         "total_bisection_tests": total_bisection_tests,
+        "total_skip_probes": total_skip_probes,
+        "total_lookback_skip_probes": total_lookback_skip_probes,
+        "total_bisection_skip_probes": total_bisection_skip_probes,
         "total_weighted_cost": total_weighted_cost,
         "total_lookback_weighted_cost": total_lookback_weighted_cost,
         "total_bisection_weighted_cost": total_bisection_weighted_cost,
         "mean_tests_per_search": mean_tests_per_search,
         "max_tests_per_search": max_tests_per_search_out,
+        "mean_skip_probes_per_search": mean_skip_probes_per_search,
+        "max_skip_probes_per_search": max_skip_probes_per_search_out,
         "mean_weighted_cost_per_search": mean_weighted_cost_per_search,
         "max_weighted_cost_per_search": max_weighted_cost_per_search_out,
         "total_culprits_found": total_culprits_found,
@@ -904,6 +1101,8 @@ def run_combo(
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
     collect_tests_per_search: bool = False,
+    enable_skips: bool = False,
+    skip_seed: int = DEFAULT_SKIP_SEED,
 ) -> Dict[str, Any]:
     """
     Build concrete strategy instances and run a single simulation combo.
@@ -931,6 +1130,8 @@ def run_combo(
         penalize_window_start_lookback=bool(penalize_window_start_lookback),
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
         collect_tests_per_search=bool(collect_tests_per_search),
+        enable_skips=bool(enable_skips),
+        skip_seed=int(skip_seed),
     )
     processed = int((res.get("bugs") or {}).get("processed", 0))
     found = int(res.get("total_culprits_found", 0))
@@ -976,6 +1177,8 @@ def optimize_combo_params(
     multi_objective_opt: bool = False,
     penalize_window_start_lookback: bool = False,
     window_start_lookback_penalty_tests: int = 4,
+    enable_skips: bool = False,
+    skip_seed: int = DEFAULT_SKIP_SEED,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
@@ -1006,6 +1209,8 @@ def optimize_combo_params(
             bisection_params=best_bisection_params,
             penalize_window_start_lookback=bool(penalize_window_start_lookback),
             window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
+            enable_skips=bool(enable_skips),
+            skip_seed=int(skip_seed),
         )
         optuna_meta = {
             "skipped": True,
@@ -1038,6 +1243,8 @@ def optimize_combo_params(
             bisection_params=bisection_params,
             penalize_window_start_lookback=bool(penalize_window_start_lookback),
             window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
+            enable_skips=bool(enable_skips),
+            skip_seed=int(skip_seed),
         )
 
         processed = int(res["bugs"]["processed"])
@@ -1167,6 +1374,8 @@ def optimize_combo_params(
         bisection_params=best_bisection_params,
         penalize_window_start_lookback=bool(penalize_window_start_lookback),
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
+        enable_skips=bool(enable_skips),
+        skip_seed=int(skip_seed),
     )
     if bool(multi_objective_opt):
         optuna_meta = {
@@ -1246,6 +1455,20 @@ def get_args() -> argparse.Namespace:
         type=int,
         default=42,
         help="Random seed for Optuna samplers.",
+    )
+    parser.add_argument(
+        "--enable-skips",
+        action="store_true",
+        help=(
+            "Enable deterministic skip/unbuildable revision simulation. By default, "
+            "all probes use the historical PASS/FAIL-only model."
+        ),
+    )
+    parser.add_argument(
+        "--skip-seed",
+        type=int,
+        default=DEFAULT_SKIP_SEED,
+        help="Seed used for deterministic skip sampling when --enable-skips is set.",
     )
     parser.add_argument(
         "--multi-objective-opt",
@@ -1391,8 +1614,8 @@ def _pareto_front_rows_by_total_and_max(
         try:
             candidate = {
                 "combo": str(combo),
-                "total_tests": int(total_tests),
-                "max_tests_per_search": int(max_tests_per_search),
+                "total_tests": float(total_tests),
+                "max_tests_per_search": float(max_tests_per_search),
                 "mean_tests_per_search": float(mean_tests_per_search),
             }
             for weighted_key in (
@@ -1414,11 +1637,11 @@ def _pareto_front_rows_by_total_and_max(
             if i == j:
                 continue
             if (
-                int(b["total_tests"]) <= int(a["total_tests"])
-                and int(b["max_tests_per_search"]) <= int(a["max_tests_per_search"])
+                float(b["total_tests"]) <= float(a["total_tests"])
+                and float(b["max_tests_per_search"]) <= float(a["max_tests_per_search"])
                 and (
-                    int(b["total_tests"]) < int(a["total_tests"])
-                    or int(b["max_tests_per_search"]) < int(a["max_tests_per_search"])
+                    float(b["total_tests"]) < float(a["total_tests"])
+                    or float(b["max_tests_per_search"]) < float(a["max_tests_per_search"])
                 )
             ):
                 dominated = True
@@ -1426,13 +1649,13 @@ def _pareto_front_rows_by_total_and_max(
         if not dominated:
             pareto.append(a)
 
-    pareto.sort(key=lambda r: (int(r["total_tests"]), int(r["max_tests_per_search"]), str(r["combo"])))
+    pareto.sort(key=lambda r: (float(r["total_tests"]), float(r["max_tests_per_search"]), str(r["combo"])))
     return pareto
 
 
-def _percentiles_int(samples: Sequence[int], percentiles: Sequence[int]) -> Dict[str, int]:
+def _percentiles_numeric(samples: Sequence[float], percentiles: Sequence[int]) -> Dict[str, float]:
     if not samples:
-        return {f"p{int(p)}": 0 for p in percentiles}
+        return {f"p{int(p)}": 0.0 for p in percentiles}
 
     try:
         import numpy as np
@@ -1447,9 +1670,9 @@ def _percentiles_int(samples: Sequence[int], percentiles: Sequence[int]) -> Dict
         # NumPy<1.22 uses `interpolation=...` instead of `method=...`.
         values = np.percentile(arr, qs, interpolation="higher")
 
-    out: Dict[str, int] = {}
+    out: Dict[str, float] = {}
     for q, v in zip(percentiles, values):
-        out[f"p{int(q)}"] = int(v)
+        out[f"p{int(q)}"] = float(v)
     return out
 
 
@@ -1521,7 +1744,7 @@ def _plot_pareto_front_test_distributions(
 
     for ax, row in zip(axes.flat, rows):
         samples = row.get("tests_per_search_samples") or []
-        counts = Counter(int(x) for x in samples)
+        counts = Counter(round(float(x), 6) for x in samples)
         xs = sorted(counts.keys())
         ys = [int(counts[x]) for x in xs]
 
@@ -1559,6 +1782,7 @@ def main() -> int:
     logger.info("Using risk_eval=%s", args.risk_eval)
     logger.info("Using risk_final=%s", args.risk_final)
     logger.info("Using output_path=%s", args.output_path)
+    logger.info("Skip simulation enabled=%s seed=%d", bool(args.enable_skips), int(args.skip_seed))
 
     for p in (args.bugs_path, args.commits_path, args.risk_eval, args.risk_final):
         if not os.path.exists(p):
@@ -2182,7 +2406,7 @@ def main() -> int:
                     best_combo = str(row.get("combo"))
             return best_combo
 
-        best_row = min(results, key=lambda r: int(get_total_tests(r)))
+        best_row = min(results, key=lambda r: float(get_total_tests(r)))
         out = {
             "best_combo_by_total_tests": str(best_row.get("combo")),
             "best_combo_by_mean_tests_per_search": _best_combo(get_mean_tests_per_search),
@@ -2248,6 +2472,8 @@ def main() -> int:
                     multi_objective_opt=bool(args.multi_objective_opt),
                     penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
+                    enable_skips=bool(args.enable_skips),
+                    skip_seed=int(args.skip_seed),
                 )
                 tuned_params_by_combo[combo_key] = {
                     "lookback": lookback_params,
@@ -2425,6 +2651,8 @@ def main() -> int:
                     bisection_params=bisection_params,
                     penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
+                    enable_skips=bool(args.enable_skips),
+                    skip_seed=int(args.skip_seed),
                 )
             )
             final_results[-1].pop("bugs", None)
@@ -2523,6 +2751,8 @@ def main() -> int:
                 penalize_window_start_lookback=bool(args.penalize_window_start_lookback),
                 window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                 collect_tests_per_search=True,
+                enable_skips=bool(args.enable_skips),
+                skip_seed=int(args.skip_seed),
             )
             samples = list(dist_res.get("tests_per_search_samples") or [])
             weighted_samples = list(dist_res.get("weighted_cost_per_search_samples") or [])
@@ -2530,7 +2760,7 @@ def main() -> int:
             pareto_stats_rows.append(
                 {
                     **pareto_row,
-                    **_percentiles_int(samples, percentile_qs),
+                    **_percentiles_numeric(samples, percentile_qs),
                     **_weighted_cost_percentiles(weighted_samples, percentile_qs),
                 }
             )

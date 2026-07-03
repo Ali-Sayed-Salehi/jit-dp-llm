@@ -17,15 +17,79 @@ from typing import List, Optional, Protocol, Sequence
 import bisect
 
 from bisection import RiskSeries
+from probe import (
+    ProbeAttempt,
+    ProbeFn,
+    ProbeOutcome,
+    ProbeResult,
+    outcome_to_failed,
+    pass_fail_outcome,
+    probe_nearby_usable,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _default_probe(*, culprit_index: int) -> ProbeFn:
+    """Return a no-skip probe function for the historical pass/fail model."""
+
+    def _probe(idx: int) -> ProbeResult:
+        return ProbeResult(
+            outcome=pass_fail_outcome(index=int(idx), culprit_index=int(culprit_index)),
+            is_new=True,
+        )
+
+    return _probe
+
+
+def _probe_lookback_candidate(
+    *,
+    target: int,
+    min_index: int,
+    max_index: int,
+    culprit_index: int,
+    probe: Optional[ProbeFn],
+    known_results: dict[int, ProbeOutcome],
+) -> Optional[tuple[int, bool, int]]:
+    """
+    Probe a lookback target, resolving SKIP outcomes to nearby usable revisions.
+
+    Returns (usable_index, failed, newly_charged_probe_count), or None if no
+    usable revision exists in the requested range.
+    """
+
+    attempts: list[ProbeAttempt] = []
+    resolved = probe_nearby_usable(
+        target=int(target),
+        min_index=int(min_index),
+        max_index=int(max_index),
+        probe=probe if probe is not None else _default_probe(culprit_index=int(culprit_index)),
+        attempts=attempts,
+    )
+    for attempt in attempts:
+        known_results[int(attempt.index)] = ProbeOutcome(attempt.outcome)
+
+    if resolved is None:
+        if int(min_index) < int(culprit_index):
+            raise RuntimeError(
+                "Lookback could not find a usable nearby revision even though "
+                f"the range should contain a possible good commit "
+                f"(target={target} range=[{min_index},{max_index}] culprit={culprit_index})"
+            )
+        return None
+
+    idx, outcome = resolved
+    failed = outcome_to_failed(outcome)
+    if failed is None:
+        raise RuntimeError(f"Expected usable lookback outcome for index={idx}, got {outcome.value}")
+    return int(idx), bool(failed), int(len(attempts))
 
 def _forced_fallback_outcome(
     *,
     steps: int,
     window_start: int,
     culprit_index: int,
-    known_results: Optional[dict[int, bool]] = None,
+    known_results: Optional[dict[int, ProbeOutcome]] = None,
 ) -> "LookbackOutcome":
     """
     Return a forced-fallback outcome using `window_start` as the good boundary.
@@ -47,14 +111,19 @@ class LookbackOutcome:
     """Result of selecting a known-good commit for a single bug/regression."""
     good_index: Optional[int]
     steps: int
-    known_results: dict[int, bool] = field(default_factory=dict)
+    known_results: dict[int, ProbeOutcome] = field(default_factory=dict)
 
 
 class LookbackStrategy(Protocol):
     name: str
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         """Return the chosen good commit index for a bug, plus any bookkeeping."""
         ...
@@ -77,7 +146,12 @@ class NoLookback:
         self.window_start = int(window_start)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -117,7 +191,12 @@ class FixedStrideLookback:
         self.max_trials = int(max_trials) if max_trials is not None else None
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         """Find a "good" commit by stepping back in fixed increments."""
         _ = start_time_utc  # not used by this strategy
@@ -125,7 +204,7 @@ class FixedStrideLookback:
         culprit_index = int(culprit_index)
         idx = int(start_index)
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while True:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -152,9 +231,19 @@ class FixedStrideLookback:
                 )
                 return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "Lookback found good_index=%d after steps=%d (start=%d culprit=%d stride=%d window_start=%d)",
                     candidate,
@@ -220,7 +309,12 @@ class FixedStrideLookbackAdaptiveDecrease:
         return max(1, int(math.ceil(float(self.stride) * float(self.alpha ** int(steps_executed)))))
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -233,7 +327,7 @@ class FixedStrideLookbackAdaptiveDecrease:
 
         idx = int(start_index)
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while idx > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -251,9 +345,19 @@ class FixedStrideLookbackAdaptiveDecrease:
                 candidate = idx - 1
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "FSLB-AD found good_index=%d after steps=%d (start=%d culprit=%d stride=%d alpha=%s window_start=%d)",
                     candidate,
@@ -314,7 +418,12 @@ class FixedStrideLookbackAdaptiveIncrease:
         return max(1, int(math.ceil(float(self.stride) * float(self.alpha ** int(steps_executed)))))
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -327,7 +436,7 @@ class FixedStrideLookbackAdaptiveIncrease:
 
         idx = int(start_index)
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while idx > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -345,9 +454,19 @@ class FixedStrideLookbackAdaptiveIncrease:
                 candidate = idx - 1
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "FSLB-AI found good_index=%d after steps=%d (start=%d culprit=%d stride=%d alpha=%s window_start=%d)",
                     candidate,
@@ -423,7 +542,12 @@ class NightlyBuildLookback:
         return None
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         if start_time_utc is None:
             raise ValueError("NightlyBuildLookback requires start_time_utc to be provided")
@@ -449,7 +573,7 @@ class NightlyBuildLookback:
         last_tested: Optional[int] = None
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         cutoff = midnight_today
         while True:
             nightly_idx = self._last_commit_strictly_before(cutoff, upper_bound_inclusive=cur_idx)
@@ -471,9 +595,19 @@ class NightlyBuildLookback:
                 cutoff = cutoff - timedelta(days=1)
                 continue
 
-            steps += 1
-            known_results[int(nightly_idx)] = bool(int(nightly_idx) >= culprit_index)
-            if nightly_idx < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=int(nightly_idx),
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            nightly_idx, nightly_failed, new_steps = resolved
+            steps += new_steps
+            if not nightly_failed:
                 logger.debug(
                     "Nightly lookback found good_index=%d after steps=%d (start=%d culprit=%d)",
                     nightly_idx,
@@ -516,7 +650,12 @@ class MonthlyBuildLookback(NightlyBuildLookback):
     name = "monthly_artifacts"
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         if start_time_utc is None:
             raise ValueError("MonthlyBuildLookback requires start_time_utc to be provided")
@@ -541,7 +680,7 @@ class MonthlyBuildLookback(NightlyBuildLookback):
         last_tested: Optional[int] = None
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         cutoff = month_start
         while True:
             monthly_idx = self._last_commit_strictly_before(cutoff, upper_bound_inclusive=cur_idx)
@@ -559,9 +698,19 @@ class MonthlyBuildLookback(NightlyBuildLookback):
                 cutoff = _previous_month_start(cutoff)
                 continue
 
-            steps += 1
-            known_results[int(monthly_idx)] = bool(int(monthly_idx) >= culprit_index)
-            if monthly_idx < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=int(monthly_idx),
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            monthly_idx, monthly_failed, new_steps = resolved
+            steps += new_steps
+            if not monthly_failed:
                 logger.debug(
                     "Monthly lookback found good_index=%d after steps=%d (start=%d culprit=%d)",
                     monthly_idx,
@@ -623,7 +772,12 @@ class RiskAwareTriggerLookback:
         return 0.0 if v is None else float(v)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -635,7 +789,7 @@ class RiskAwareTriggerLookback:
         search_idx = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         min_trigger_idx = max(self.window_start + 1, 1)
 
         while True:
@@ -659,15 +813,35 @@ class RiskAwareTriggerLookback:
 
             if trigger_idx is None:
                 # No triggers found: fall back to testing the first commit in the window.
-                steps += 1
-                known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-                good = self.window_start if self.window_start < culprit_index else None
+                resolved = _probe_lookback_candidate(
+                    target=int(self.window_start),
+                    min_index=int(self.window_start),
+                    max_index=max(int(self.window_start), int(search_idx) - 1),
+                    culprit_index=culprit_index,
+                    probe=probe,
+                    known_results=known_results,
+                )
+                if resolved is None:
+                    return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+                candidate, candidate_failed, new_steps = resolved
+                steps += new_steps
+                good = int(candidate) if not candidate_failed else None
                 return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
             candidate = int(trigger_idx - 1)
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=search_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RATLB found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s trigger=%d)",
                     candidate,
@@ -724,7 +898,12 @@ class RiskAwareTriggerLookbackAdaptiveDecrease(RiskAwareTriggerLookback):
         return float(self.threshold) * float(self.alpha ** int(steps_executed))
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -735,7 +914,7 @@ class RiskAwareTriggerLookbackAdaptiveDecrease(RiskAwareTriggerLookback):
         search_idx = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         min_trigger_idx = max(self.window_start + 1, 1)
 
         while True:
@@ -758,15 +937,35 @@ class RiskAwareTriggerLookbackAdaptiveDecrease(RiskAwareTriggerLookback):
                 i -= 1
 
             if trigger_idx is None:
-                steps += 1
-                known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-                good = self.window_start if self.window_start < culprit_index else None
+                resolved = _probe_lookback_candidate(
+                    target=int(self.window_start),
+                    min_index=int(self.window_start),
+                    max_index=max(int(self.window_start), int(search_idx) - 1),
+                    culprit_index=culprit_index,
+                    probe=probe,
+                    known_results=known_results,
+                )
+                if resolved is None:
+                    return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+                candidate, candidate_failed, new_steps = resolved
+                steps += new_steps
+                good = int(candidate) if not candidate_failed else None
                 return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
             candidate = int(trigger_idx - 1)
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=search_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RATLB-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s trigger=%d)",
                     candidate,
@@ -822,7 +1021,12 @@ class RiskAwareTriggerLookbackAdaptiveIncrease(RiskAwareTriggerLookback):
         return float(self.threshold) * float(self.alpha ** int(steps_executed))
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -833,7 +1037,7 @@ class RiskAwareTriggerLookbackAdaptiveIncrease(RiskAwareTriggerLookback):
         search_idx = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         min_trigger_idx = max(self.window_start + 1, 1)
 
         while True:
@@ -856,15 +1060,35 @@ class RiskAwareTriggerLookbackAdaptiveIncrease(RiskAwareTriggerLookback):
                 i -= 1
 
             if trigger_idx is None:
-                steps += 1
-                known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-                good = self.window_start if self.window_start < culprit_index else None
+                resolved = _probe_lookback_candidate(
+                    target=int(self.window_start),
+                    min_index=int(self.window_start),
+                    max_index=max(int(self.window_start), int(search_idx) - 1),
+                    culprit_index=culprit_index,
+                    probe=probe,
+                    known_results=known_results,
+                )
+                if resolved is None:
+                    return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+                candidate, candidate_failed, new_steps = resolved
+                steps += new_steps
+                good = int(candidate) if not candidate_failed else None
                 return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
             candidate = int(trigger_idx - 1)
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=search_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RATLB-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s trigger=%d)",
                     candidate,
@@ -950,7 +1174,12 @@ class RiskWeightedLookbackSum:
         return int(candidate)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -966,7 +1195,7 @@ class RiskWeightedLookbackSum:
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -983,9 +1212,19 @@ class RiskWeightedLookbackSum:
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLB-S found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s)",
                     candidate,
@@ -1058,7 +1297,12 @@ class RiskWeightedLookbackSumAdaptiveDecrease(RiskWeightedLookbackSum):
         return int(candidate)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1072,7 +1316,7 @@ class RiskWeightedLookbackSumAdaptiveDecrease(RiskWeightedLookbackSum):
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1090,9 +1334,19 @@ class RiskWeightedLookbackSumAdaptiveDecrease(RiskWeightedLookbackSum):
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLBS-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
                     candidate,
@@ -1164,7 +1418,12 @@ class RiskWeightedLookbackSumAdaptiveIncrease(RiskWeightedLookbackSum):
         return int(candidate)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1178,7 +1437,7 @@ class RiskWeightedLookbackSumAdaptiveIncrease(RiskWeightedLookbackSum):
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1196,9 +1455,19 @@ class RiskWeightedLookbackSumAdaptiveIncrease(RiskWeightedLookbackSum):
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLBS-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
                     candidate,
@@ -1301,7 +1570,12 @@ class RiskWeightedLookbackLogSurvival:
         return int(best)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1317,7 +1591,7 @@ class RiskWeightedLookbackLogSurvival:
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1334,9 +1608,19 @@ class RiskWeightedLookbackLogSurvival:
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLB-LS found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s)",
                     candidate,
@@ -1423,7 +1707,12 @@ class RiskWeightedLookbackLogSurvivalAdaptiveDecrease(RiskWeightedLookbackLogSur
         return int(best)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1437,7 +1726,7 @@ class RiskWeightedLookbackLogSurvivalAdaptiveDecrease(RiskWeightedLookbackLogSur
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1455,9 +1744,19 @@ class RiskWeightedLookbackLogSurvivalAdaptiveDecrease(RiskWeightedLookbackLogSur
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLBLS-AD found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
                     candidate,
@@ -1545,7 +1844,12 @@ class RiskWeightedLookbackLogSurvivalAdaptiveIncrease(RiskWeightedLookbackLogSur
         return int(best)
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1559,7 +1863,7 @@ class RiskWeightedLookbackLogSurvivalAdaptiveIncrease(RiskWeightedLookbackLogSur
         bad = min(start_index, max_idx)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while bad > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1577,9 +1881,19 @@ class RiskWeightedLookbackLogSurvivalAdaptiveIncrease(RiskWeightedLookbackLogSur
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=bad - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "RWLBLS-AI found good_index=%d after steps=%d (start=%d culprit=%d threshold=%s alpha=%s)",
                     candidate,
@@ -1663,7 +1977,12 @@ class TimeWindowLookbackAdaptiveDecrease:
         return self.sorted_time_indices[pos] if pos >= 0 else None
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1678,7 +1997,7 @@ class TimeWindowLookbackAdaptiveDecrease:
         cur_idx = min(start_index, len(self.time_by_index) - 1)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while cur_idx > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1705,9 +2024,19 @@ class TimeWindowLookbackAdaptiveDecrease:
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "TWLB-AD found good_index=%d after steps=%d (start=%d culprit=%d hours=%s alpha=%s)",
                     candidate,
@@ -1725,9 +2054,19 @@ class TimeWindowLookbackAdaptiveDecrease:
             cur_idx = int(candidate)
 
         # If we ran out of history/time-window targets, fall back to testing the first commit in the window.
-        steps += 1
-        known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-        good = self.window_start if self.window_start < culprit_index else None
+        resolved = _probe_lookback_candidate(
+            target=int(self.window_start),
+            min_index=int(self.window_start),
+            max_index=max(int(self.window_start), int(cur_idx) - 1),
+            culprit_index=culprit_index,
+            probe=probe,
+            known_results=known_results,
+        )
+        if resolved is None:
+            return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+        candidate, candidate_failed, new_steps = resolved
+        steps += new_steps
+        good = int(candidate) if not candidate_failed else None
         return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
 
@@ -1796,7 +2135,12 @@ class TimeWindowLookbackAdaptiveIncrease:
         return self.sorted_time_indices[pos] if pos >= 0 else None
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1809,7 +2153,7 @@ class TimeWindowLookbackAdaptiveIncrease:
         cur_idx = min(start_index, len(self.time_by_index) - 1)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while cur_idx > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1835,9 +2179,19 @@ class TimeWindowLookbackAdaptiveIncrease:
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "TWLB-AI found good_index=%d after steps=%d (start=%d culprit=%d hours=%s alpha=%s)",
                     candidate,
@@ -1855,9 +2209,19 @@ class TimeWindowLookbackAdaptiveIncrease:
             cur_idx = int(candidate)
 
         # If we ran out of history/time-window targets, fall back to testing the first commit in the window.
-        steps += 1
-        known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-        good = self.window_start if self.window_start < culprit_index else None
+        resolved = _probe_lookback_candidate(
+            target=int(self.window_start),
+            min_index=int(self.window_start),
+            max_index=max(int(self.window_start), int(cur_idx) - 1),
+            culprit_index=culprit_index,
+            probe=probe,
+            known_results=known_results,
+        )
+        if resolved is None:
+            return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+        candidate, candidate_failed, new_steps = resolved
+        steps += new_steps
+        good = int(candidate) if not candidate_failed else None
         return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
 
@@ -1922,7 +2286,12 @@ class TimeWindowLookback:
         return self.sorted_time_indices[pos] if pos >= 0 else None
 
     def find_good_index(
-        self, *, start_index: int, culprit_index: int, start_time_utc: Optional[datetime] = None
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> LookbackOutcome:
         _ = start_time_utc  # not used by this strategy
 
@@ -1937,7 +2306,7 @@ class TimeWindowLookback:
         cur_idx = min(start_index, len(self.time_by_index) - 1)
 
         steps = 0
-        known_results: dict[int, bool] = {}
+        known_results: dict[int, ProbeOutcome] = {}
         while cur_idx > self.window_start:
             if self.max_trials is not None and steps >= self.max_trials:
                 return _forced_fallback_outcome(
@@ -1961,9 +2330,19 @@ class TimeWindowLookback:
                 candidate = self.window_start
             candidate = int(candidate)
 
-            steps += 1
-            known_results[candidate] = bool(candidate >= culprit_index)
-            if candidate < culprit_index:
+            resolved = _probe_lookback_candidate(
+                target=candidate,
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            candidate, candidate_failed, new_steps = resolved
+            steps += new_steps
+            if not candidate_failed:
                 logger.debug(
                     "TWLB found good_index=%d after steps=%d (start=%d culprit=%d hours=%s)",
                     candidate,
@@ -1980,9 +2359,19 @@ class TimeWindowLookback:
             cur_idx = candidate
 
         # If we ran out of history/time-window targets, fall back to testing the first commit in the window.
-        steps += 1
-        known_results[int(self.window_start)] = bool(int(self.window_start) >= culprit_index)
-        good = self.window_start if self.window_start < culprit_index else None
+        resolved = _probe_lookback_candidate(
+            target=int(self.window_start),
+            min_index=int(self.window_start),
+            max_index=max(int(self.window_start), int(cur_idx) - 1),
+            culprit_index=culprit_index,
+            probe=probe,
+            known_results=known_results,
+        )
+        if resolved is None:
+            return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+        candidate, candidate_failed, new_steps = resolved
+        steps += new_steps
+        good = int(candidate) if not candidate_failed else None
         return LookbackOutcome(good_index=good, steps=steps, known_results=known_results)
 
 

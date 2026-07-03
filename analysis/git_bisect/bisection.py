@@ -17,6 +17,16 @@ from typing import Mapping, Optional, Protocol, Sequence, overload
 
 import bisect
 
+from probe import (
+    ProbeAttempt,
+    ProbeFn,
+    ProbeOutcome,
+    ProbeResult,
+    outcome_to_failed,
+    pass_fail_outcome,
+    probe_nearby_usable,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +36,7 @@ class BisectionOutcome:
     tests: int
     found_index: Optional[int]
     probed_indices: tuple[int, ...] = ()
+    probe_attempts: tuple[ProbeAttempt, ...] = ()
 
 
 class BisectionStrategy(Protocol):
@@ -38,7 +49,8 @@ class BisectionStrategy(Protocol):
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
-        known_results: Optional[Mapping[int, bool]] = None,
+        known_results: Optional[Mapping[int, ProbeOutcome | bool]] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> BisectionOutcome:
         """Run a bisection procedure and return test count plus found culprit."""
         ...
@@ -48,16 +60,20 @@ def _init_cache(
     *,
     good_index: int,
     bad_index: int,
-    known_results: Optional[Mapping[int, bool]],
-) -> dict[int, bool]:
+    known_results: Optional[Mapping[int, ProbeOutcome | bool]],
+) -> dict[int, ProbeOutcome]:
     """Initialize a pass/fail cache from (optional) prior known results."""
-    cache: dict[int, bool] = {}
+    cache: dict[int, ProbeOutcome] = {}
     if known_results:
-        for idx, failed in known_results.items():
-            cache[int(idx)] = bool(failed)
+        for idx, outcome in known_results.items():
+            failed = outcome_to_failed(outcome)
+            if failed is None:
+                cache[int(idx)] = ProbeOutcome.SKIP
+            else:
+                cache[int(idx)] = ProbeOutcome.FAIL if failed else ProbeOutcome.PASS
 
-    cache[int(good_index)] = False
-    cache[int(bad_index)] = True
+    cache[int(good_index)] = ProbeOutcome.PASS
+    cache[int(bad_index)] = ProbeOutcome.FAIL
     return cache
 
 
@@ -65,7 +81,7 @@ def _tighten_bounds(
     *,
     good_index: int,
     bad_index: int,
-    cache: Mapping[int, bool],
+    cache: Mapping[int, ProbeOutcome | bool],
 ) -> tuple[int, int]:
     """
     Tighten (good,bad] bounds using any known pass/fail results.
@@ -81,8 +97,11 @@ def _tighten_bounds(
 
     best_good: Optional[int] = None
     best_bad: Optional[int] = None
-    for idx, failed in cache.items():
+    for idx, outcome in cache.items():
         if idx < good_index or idx > bad_index:
+            continue
+        failed = outcome_to_failed(outcome)
+        if failed is None:
             continue
         if failed:
             if best_bad is None or idx < best_bad:
@@ -106,21 +125,50 @@ def _tighten_bounds(
 class _BisectionTester:
     """Monotone test simulator with memoization and a cache-miss test counter."""
 
-    cache: dict[int, bool]
+    cache: dict[int, ProbeOutcome]
     culprit_index: int
+    probe: Optional[ProbeFn] = None
     tests: int = 0
     probed_indices: list[int] = field(default_factory=list)
+    probe_attempts: list[ProbeAttempt] = field(default_factory=list)
 
-    def test(self, idx: int) -> bool:
-        """Return True if commit idx fails; increments `tests` when uncached."""
+    def _probe_once(self, idx: int) -> ProbeResult:
+        """Return one probe outcome; increments `tests` only for newly charged probes."""
         idx = int(idx)
         if idx in self.cache:
-            return self.cache[idx]
-        self.tests += 1
-        self.probed_indices.append(idx)
-        out = bool(idx >= int(self.culprit_index))
-        self.cache[idx] = out
-        return out
+            return ProbeResult(outcome=self.cache[idx], is_new=False)
+
+        if self.probe is None:
+            result = ProbeResult(
+                outcome=pass_fail_outcome(index=idx, culprit_index=int(self.culprit_index)),
+                is_new=True,
+            )
+        else:
+            result = self.probe(idx)
+
+        outcome = ProbeOutcome(result.outcome)
+        self.cache[idx] = outcome
+        if result.is_new:
+            self.tests += 1
+            self.probed_indices.append(idx)
+        return ProbeResult(outcome=outcome, is_new=bool(result.is_new))
+
+    def test_usable(self, *, target: int, min_index: int, max_index: int) -> Optional[tuple[int, bool]]:
+        """Resolve a target to a nearby PASS/FAIL probe inside the inclusive range."""
+        resolved = probe_nearby_usable(
+            target=int(target),
+            min_index=int(min_index),
+            max_index=int(max_index),
+            probe=self._probe_once,
+            attempts=self.probe_attempts,
+        )
+        if resolved is None:
+            return None
+        idx, outcome = resolved
+        failed = outcome_to_failed(outcome)
+        if failed is None:
+            raise RuntimeError(f"Expected usable bisection outcome for index={idx}, got {outcome.value}")
+        return int(idx), bool(failed)
 
 
 class RiskSeries(Sequence[Optional[float]]):
@@ -233,7 +281,8 @@ class GitBisectBaseline:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
-        known_results: Optional[Mapping[int, bool]] = None,
+        known_results: Optional[Mapping[int, ProbeOutcome | bool]] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> BisectionOutcome:
         """Simulate standard git bisect to find a single culprit and count tests."""
         _ = risk_by_index  # reserved for future strategies
@@ -254,15 +303,23 @@ class GitBisectBaseline:
 
         cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
         low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
-        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index, probe=probe)
 
         while high - low > 1:
             mid = (low + high) // 2
-            mid_failed = tester.test(mid)
+            resolved = tester.test_usable(target=mid, min_index=low + 1, max_index=high - 1)
+            if resolved is None:
+                if high == culprit_index:
+                    break
+                raise RuntimeError(
+                    "Bisect could not find a usable internal revision "
+                    f"(good={low} bad={high} culprit={culprit_index})"
+                )
+            probe_idx, mid_failed = resolved
             if mid_failed:
-                high = mid
+                high = int(probe_idx)
             else:
-                low = mid
+                low = int(probe_idx)
 
         logger.debug(
             "Bisect located culprit=%d in tests=%d (good=%d bad=%d)",
@@ -275,6 +332,7 @@ class GitBisectBaseline:
             tests=tester.tests,
             found_index=high,
             probed_indices=tuple(tester.probed_indices),
+            probe_attempts=tuple(tester.probe_attempts),
         )
 
 
@@ -350,7 +408,8 @@ class RiskWeightedBisectionSum:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
-        known_results: Optional[Mapping[int, bool]] = None,
+        known_results: Optional[Mapping[int, ProbeOutcome | bool]] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
             logger.debug("RWB-SUM skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
@@ -368,15 +427,23 @@ class RiskWeightedBisectionSum:
 
         cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
         low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
-        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index, probe=probe)
 
         while high - low > 1:
             mid = self._choose_mid(low=low, high=high, risk_by_index=risk_by_index)
-            mid_failed = tester.test(mid)
+            resolved = tester.test_usable(target=mid, min_index=low + 1, max_index=high - 1)
+            if resolved is None:
+                if high == culprit_index:
+                    break
+                raise RuntimeError(
+                    "RWB-SUM could not find a usable internal revision "
+                    f"(good={low} bad={high} culprit={culprit_index})"
+                )
+            probe_idx, mid_failed = resolved
             if mid_failed:
-                high = mid
+                high = int(probe_idx)
             else:
-                low = mid
+                low = int(probe_idx)
 
         logger.debug(
             "RWB-SUM located culprit=%d in tests=%d (good=%d bad=%d)",
@@ -389,6 +456,7 @@ class RiskWeightedBisectionSum:
             tests=tester.tests,
             found_index=high,
             probed_indices=tuple(tester.probed_indices),
+            probe_attempts=tuple(tester.probe_attempts),
         )
 
 
@@ -474,7 +542,8 @@ class RiskWeightedBisectionLogSurvival:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
-        known_results: Optional[Mapping[int, bool]] = None,
+        known_results: Optional[Mapping[int, ProbeOutcome | bool]] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> BisectionOutcome:
         if good_index >= bad_index:
             logger.debug("RWB-LS skipped: good_index=%d >= bad_index=%d", good_index, bad_index)
@@ -492,15 +561,23 @@ class RiskWeightedBisectionLogSurvival:
 
         cache = _init_cache(good_index=good_index, bad_index=bad_index, known_results=known_results)
         low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
-        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index, probe=probe)
 
         while high - low > 1:
             mid = self._choose_mid(low=low, high=high, risk_by_index=risk_by_index)
-            mid_failed = tester.test(mid)
+            resolved = tester.test_usable(target=mid, min_index=low + 1, max_index=high - 1)
+            if resolved is None:
+                if high == culprit_index:
+                    break
+                raise RuntimeError(
+                    "RWB-LS could not find a usable internal revision "
+                    f"(good={low} bad={high} culprit={culprit_index})"
+                )
+            probe_idx, mid_failed = resolved
             if mid_failed:
-                high = mid
+                high = int(probe_idx)
             else:
-                low = mid
+                low = int(probe_idx)
 
         logger.debug(
             "RWB-LS located culprit=%d in tests=%d (good=%d bad=%d)",
@@ -513,6 +590,7 @@ class RiskWeightedBisectionLogSurvival:
             tests=tester.tests,
             found_index=high,
             probed_indices=tuple(tester.probed_indices),
+            probe_attempts=tuple(tester.probe_attempts),
         )
 
 
@@ -550,7 +628,8 @@ class TopKRiskFirstBisection:
         bad_index: int,
         culprit_index: int,
         risk_by_index: Optional[Sequence[Optional[float]]] = None,
-        known_results: Optional[Mapping[int, bool]] = None,
+        known_results: Optional[Mapping[int, ProbeOutcome | bool]] = None,
+        probe: Optional[ProbeFn] = None,
     ) -> BisectionOutcome:
         if risk_by_index is None:
             raise ValueError("TKRB-K requires risk_by_index to be provided")
@@ -576,7 +655,7 @@ class TopKRiskFirstBisection:
         low, high = _tighten_bounds(good_index=good_index, bad_index=bad_index, cache=cache)
         good_index = int(low)
         bad_index = int(high)
-        tester = _BisectionTester(cache=cache, culprit_index=culprit_index)
+        tester = _BisectionTester(cache=cache, culprit_index=culprit_index, probe=probe)
 
         # ---- Phase 1: risk-first scan over top-K commits. ----
         start = good_index + 1
@@ -593,12 +672,35 @@ class TopKRiskFirstBisection:
                 prev = idx - 1
                 if prev <= good_index:
                     prev_failed = False
-                    cache[prev] = False
+                    prev_resolved_idx = int(prev)
+                    cache[prev] = ProbeOutcome.PASS
                 else:
-                    prev_failed = tester.test(prev)
+                    prev_resolved = tester.test_usable(
+                        target=prev,
+                        min_index=good_index + 1,
+                        max_index=bad_index - 1,
+                    )
+                    if prev_resolved is None:
+                        prev_resolved_idx = None
+                        prev_failed = None
+                    else:
+                        prev_resolved_idx, prev_failed = prev_resolved
 
-                idx_failed = tester.test(idx)
-                if idx_failed and not prev_failed:
+                idx_resolved = tester.test_usable(
+                    target=idx,
+                    min_index=good_index + 1,
+                    max_index=bad_index,
+                )
+                if idx_resolved is None:
+                    continue
+                idx_resolved_idx, idx_failed = idx_resolved
+
+                direct_adjacent_pair = (
+                    int(idx_resolved_idx) == int(idx)
+                    and prev_failed is not None
+                    and int(prev_resolved_idx) == int(prev)
+                )
+                if direct_adjacent_pair and idx_failed and not prev_failed:
                     logger.debug(
                         "TKRB-K found culprit=%d during risk-first phase (tests=%d good=%d bad=%d k=%d)",
                         idx,
@@ -611,6 +713,7 @@ class TopKRiskFirstBisection:
                         tests=tester.tests,
                         found_index=int(idx),
                         probed_indices=tuple(tester.probed_indices),
+                        probe_attempts=tuple(tester.probe_attempts),
                     )
 
         # Tighten the search interval using any newly discovered pass/fail results.
@@ -619,11 +722,19 @@ class TopKRiskFirstBisection:
         # ---- Phase 2: standard git-bisect with memoization. ----
         while high - low > 1:
             mid = (low + high) // 2
-            mid_failed = tester.test(mid)
+            resolved = tester.test_usable(target=mid, min_index=low + 1, max_index=high - 1)
+            if resolved is None:
+                if high == culprit_index:
+                    break
+                raise RuntimeError(
+                    "TKRB-K could not find a usable internal revision "
+                    f"(good={low} bad={high} culprit={culprit_index})"
+                )
+            probe_idx, mid_failed = resolved
             if mid_failed:
-                high = mid
+                high = int(probe_idx)
             else:
-                low = mid
+                low = int(probe_idx)
 
         logger.debug(
             "TKRB-K located culprit=%d in tests=%d (good=%d bad=%d k=%d)",
@@ -637,6 +748,7 @@ class TopKRiskFirstBisection:
             tests=tester.tests,
             found_index=int(high),
             probed_indices=tuple(tester.probed_indices),
+            probe_attempts=tuple(tester.probe_attempts),
         )
 
 
