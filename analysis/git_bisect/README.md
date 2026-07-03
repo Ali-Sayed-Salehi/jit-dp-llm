@@ -63,16 +63,15 @@ The default profile is `default_v1`:
 | Arbitrary commit | `31-90` days | `3.0` |
 | Arbitrary commit | `91-365` days | `5.0` |
 | Arbitrary commit | `>365` days | `8.0` |
-| Nightly/monthly artifact | any | matching arbitrary-commit age cost `* 0.5` |
+| Nightly/release artifact | any | matching arbitrary-commit age cost `* 0.5` |
 
-For example, a 50-day-old arbitrary commit costs `3.0`; a 50-day-old nightly/monthly artifact costs `3.0 * 0.5 = 1.5`.
+For example, a 50-day-old arbitrary commit costs `3.0`; a 50-day-old nightly/release artifact costs `3.0 * 0.5 = 1.5`.
 
 Current strategy mapping:
 
 - `NBLB` lookback probes are charged as `nightly_artifact`, using the age-bucket cost multiplier.
-- `MBLB` lookback probes are labeled as `monthly_artifact` and use the same age-bucket cost multiplier as `nightly_artifact`.
+- `RLB` lookback probes are labeled as `release_artifact` and use the same age-bucket cost multiplier as `nightly_artifact`.
 - Bisection probes and all other existing lookback probes are charged as `arbitrary_commit`.
-- `monthly_artifact` should not be described as a real release artifact unless release metadata is added.
 
 The already-observed bad commit is still not charged. Bisection probes that reuse lookback results are not charged again.
 
@@ -234,14 +233,14 @@ Walk backward by **UTC days** and test one “nightly boundary” commit per day
 
 This is meant to approximate “bisecting by nightly builds”: cheap to try one build per day, but potentially coarse.
 
-#### MBLB: Synthetic monthly artifact lookback
-Walk backward by **UTC month boundaries** and test one synthetic monthly checkpoint per month until a pass is found.
+#### RLB: Release lookback
+Walk backward through commits marked as release commits in `all_commits.jsonl` and test one release checkpoint at a time until a pass is found.
 
-- Define month boundaries in UTC.
-- For each month boundary going backward, choose the last commit strictly before the first day of that month, and test it.
+- Generate release markers with `data_extraction/mercurial/mark_release_commits.py`.
+- For each lookback step, choose the latest earlier commit whose JSONL row has `release: true`, and test it.
 - Return the first such boundary commit with index `< c`.
 
-This is meant to model coarse prebuilt monthly checkpoints. It should not be interpreted as real release bisection unless actual release metadata is added.
+This is meant to model bisection by release-train artifacts rather than synthetic calendar checkpoints.
 
 #### NLB: No lookback
 Do **no additional tests** to find a good boundary; use the simulation window start commit:
@@ -253,7 +252,7 @@ $$
 The simulator skips bugs where the regression predates the risk window (i.e., `c <= window_start`), since there is no known-good commit available strictly before the culprit within the window. When applicable, bisection searches over `(window_start, b]`.
 
 #### Forced-fallback variants (-ff)
-For every lookback strategy **except** NLB, NBLB, and MBLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
+For every lookback strategy **except** NLB, NBLB, and RLB, the simulator also includes a `-ff` (“forced fallback”) variant that adds an Optuna-tuned `max_trials` parameter.
 
 If the strategy would execute more than `max_trials` lookback tests while searching backward, it stops early and falls back to using `window_start` as the known-good boundary (instead of continuing to search for a closer passing commit).
 

@@ -41,6 +41,21 @@ Ensure a local autoland clone exists, pull updates, and export all commits to JS
   - `data_extraction/mercurial/link_bug_diffs.py` defaults to reading
     `datasets/mozilla_jit/all_commits.jsonl`; you can copy/symlink the exported file if desired.
 
+### `mark_release_commits.py`
+
+Annotate Autoland commit metadata with release-train markers from a local Mozilla Central clone.
+
+- **Flow**
+  1. Read active tags from `data_extraction/mercurial/repos/mozilla-central` using `hg log`.
+  2. Treat modern `FIREFOX_BETA_<version>_BASE` tags, plus legacy Firefox `*_RELEASE` tags, as release commits.
+  3. Rewrite `datasets/mozilla_jit/all_commits.jsonl` atomically with `release: true` on matching nodes and `release: false` otherwise.
+- **Inputs**
+  - Local repo: `data_extraction/mercurial/repos/mozilla-central`
+  - Commit JSONL: `datasets/mozilla_jit/all_commits.jsonl`
+- **Notes**
+  - This script does not clone, pull, or update Mozilla Central by default; it only reads the local checkout.
+  - Use `--dry-run` to compute counts without writing, or `--output <path>` to write a separate JSONL.
+
 ### `get_bug_diffs.py`
 
 Build `perf_bugs_with_diff.jsonl` by attaching a net diff to each Bugzilla bug (perf dataset).
@@ -88,4 +103,3 @@ Build `mozilla_jit.jsonl` by joining Bugzilla bugs to autoland commit blocks and
   1. `python data_extraction/bugzilla/get_all_bugs.py`
   2. `python data_extraction/mercurial/fetch_all_commit.py` (copy/symlink into `datasets/mozilla_jit/all_commits.jsonl`)
   3. `python data_extraction/mercurial/link_bug_diffs.py`
-

@@ -111,8 +111,9 @@ echo "Running script ..."
 # --xaxis mft
 
 
-# To optimize weighted localization cost instead, replace the active objective line with:
-# --objective weighted_cost \
+
+# To optimize weighted localization cost instead, replace the active objective line with: --objective weighted_cost
+
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
 # --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
 # --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
@@ -127,9 +128,10 @@ echo "Running script ..."
 # --bisection GB,TKRB,RWBS,RWBLS \
 # --objective tests \
 # --enable-skips \
-# --log-level INFO \
-# --final-only
-# --dry-run
+# --log-level INFO
+# # --final-only
+# # --dry-run
+
 
 
 # Flag ownership for this simulation command:

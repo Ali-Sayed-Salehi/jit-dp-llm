@@ -69,9 +69,9 @@ from lookback import (
     FixedStrideLookback,
     FixedStrideLookbackForcedFallback,
     LookbackStrategy,
-    MonthlyBuildLookback,
     NightlyBuildLookback,
     NoLookback,
+    ReleaseLookback,
     RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback,
     RiskAwareTriggerLookbackAdaptiveDecrease,
@@ -114,7 +114,7 @@ logger = logging.getLogger(__name__)
 
 PROBE_KIND_ARBITRARY_COMMIT = "arbitrary_commit"
 PROBE_KIND_NIGHTLY_ARTIFACT = "nightly_artifact"
-PROBE_KIND_MONTHLY_ARTIFACT = "monthly_artifact"
+PROBE_KIND_RELEASE_ARTIFACT = "release_artifact"
 
 WEIGHTED_COST_PROFILE_NAME = "default_v1"
 ARTIFACT_COST_MULTIPLIER = 0.5
@@ -279,6 +279,11 @@ def build_node_to_index(commits: List[Dict[str, Any]]) -> Dict[str, int]:
             )
         node_to_index[str(node)] = idx
     return node_to_index
+
+
+def build_release_indices(commits: List[Dict[str, Any]]) -> List[int]:
+    """Return commit indices marked as release commits in `all_commits.jsonl`."""
+    return [idx for idx, commit in enumerate(commits) if commit.get("release") is True]
 
 
 def build_bug_id_index(bugs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -448,7 +453,7 @@ def _weighted_cost_profile_metadata() -> Dict[str, Any]:
         "age_reference": "max(0, bug_creation_time - probed_commit_time)",
         "artifact_cost_multiplier": ARTIFACT_COST_MULTIPLIER,
         "artifact_cost_policy": (
-            "nightly_artifact and monthly_artifact probes use the arbitrary-commit "
+            "nightly_artifact and release_artifact probes use the arbitrary-commit "
             "age-bucket cost multiplied by artifact_cost_multiplier"
         ),
         "arbitrary_commit_age_buckets_days": [
@@ -512,7 +517,7 @@ def _weighted_probe_cost(
         bug_time_utc=bug_time_utc,
     )
     base_cost = _arbitrary_commit_probe_cost(age_days)
-    if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_MONTHLY_ARTIFACT):
+    if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_RELEASE_ARTIFACT):
         return float(base_cost) * float(ARTIFACT_COST_MULTIPLIER)
     if probe.kind == PROBE_KIND_ARBITRARY_COMMIT:
         return float(base_cost)
@@ -643,11 +648,11 @@ def _lookback_probe_kind(*, lookback_code: str, lookback: LookbackStrategy) -> s
     if name == NightlyBuildLookback.name:
         return PROBE_KIND_NIGHTLY_ARTIFACT
     if (
-        name == MonthlyBuildLookback.name
-        or "monthly" in name.lower()
-        or code in {"MLB", "MBLB", "MONTHLY"}
+        name == ReleaseLookback.name
+        or "release" in name.lower()
+        or code in {"RLB", "RELEASE"}
     ):
-        return PROBE_KIND_MONTHLY_ARTIFACT
+        return PROBE_KIND_RELEASE_ARTIFACT
     return PROBE_KIND_ARBITRARY_COMMIT
 
 
@@ -1016,6 +1021,7 @@ class PreparedInputs:
     commit_times_utc: Sequence[datetime]
     sorted_times_utc: List[datetime]
     sorted_time_indices: List[int]
+    release_indices: Sequence[int]
     window_start: int
     window_end: int
     window_start_node: Optional[str]
@@ -1045,6 +1051,13 @@ def prepare_inputs(
     nodes_by_index: List[Optional[str]] = [
         str(c.get("node")) if c.get("node") else None for c in commits
     ]
+    release_indices = build_release_indices(commits)
+    if not release_indices:
+        logger.warning(
+            "No commits are marked `release: true` in %s; run "
+            "data_extraction/mercurial/mark_release_commits.py before using RLB.",
+            commits_path,
+        )
 
     node_to_index = build_node_to_index(commits)
     commit_times_utc = [_commit_datetime_utc(c) for c in commits]
@@ -1080,6 +1093,7 @@ def prepare_inputs(
         commit_times_utc=commit_times_utc,
         sorted_times_utc=sorted_times_utc,
         sorted_time_indices=sorted_time_indices,
+        release_indices=release_indices,
         window_start=window_start,
         window_end=window_end,
         window_start_node=str(window_start_node) if window_start_node else None,
@@ -1493,7 +1507,7 @@ def get_args() -> argparse.Namespace:
         default="all",
         help=(
             "Comma-separated lookback strategy codes or names to simulate (default: all). "
-            "Examples: 'NLB,MBLB,FSLB,FSLB-AD,TWLB-AD' or 'no_lookback,fixed_stride'."
+            "Examples: 'NLB,RLB,FSLB,FSLB-AD,TWLB-AD' or 'no_lookback,fixed_stride'."
         ),
     )
     parser.add_argument(
@@ -1804,12 +1818,11 @@ def main() -> int:
             suggest_params=None,
         ),
         StrategySpec(
-            code="MBLB",
-            name=MonthlyBuildLookback.name,
+            code="RLB",
+            name=ReleaseLookback.name,
             default_params={},
-            build=lambda inputs, _p: MonthlyBuildLookback(
-                sorted_times_utc=inputs.sorted_times_utc,
-                sorted_time_indices=inputs.sorted_time_indices,
+            build=lambda inputs, _p: ReleaseLookback(
+                release_indices=inputs.release_indices,
                 window_start=inputs.window_start,
             ),
             suggest_params=None,
@@ -2575,6 +2588,9 @@ def main() -> int:
                 "path": os.path.relpath(eval_inputs.risk_predictions_path, REPO_ROOT),
                 "num_commits_with_risk": eval_inputs.num_commits_with_risk,
             },
+            "release_commits": {
+                "marked": len(eval_inputs.release_indices),
+            },
             "optimization": {
                 "mopt_trials_per_combo": int(args.mopt_trials),
                 "optuna_seed": int(args.optuna_seed),
@@ -2712,6 +2728,9 @@ def main() -> int:
         "risk_predictions": {
             "path": os.path.relpath(final_inputs.risk_predictions_path, REPO_ROOT),
             "num_commits_with_risk": final_inputs.num_commits_with_risk,
+        },
+        "release_commits": {
+            "marked": len(final_inputs.release_indices),
         },
         "tuned_from_eval": {
             "path": os.path.relpath(args.output_eval, REPO_ROOT),

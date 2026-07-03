@@ -728,6 +728,99 @@ class MonthlyBuildLookback(NightlyBuildLookback):
             cutoff = _previous_month_start(cutoff)
 
 
+class ReleaseLookback:
+    """
+    Release lookback:
+      - Walk backward through commits marked as release artifacts.
+      - Test one release commit at a time until a pass is found.
+
+    Release markers are expected to come from
+    `data_extraction/mercurial/mark_release_commits.py`, which annotates
+    `all_commits.jsonl` rows with `release: true` for Mozilla Central release
+    train commits.
+    """
+
+    name = "release_commits"
+
+    def __init__(self, *, release_indices: Sequence[int], window_start: int = 0) -> None:
+        if window_start < 0:
+            raise ValueError("window_start must be non-negative")
+        self.window_start = int(window_start)
+        all_release_indices = sorted({int(idx) for idx in release_indices})
+        if not all_release_indices:
+            raise ValueError(
+                "ReleaseLookback requires at least one commit marked `release: true`; "
+                "run data_extraction/mercurial/mark_release_commits.py first."
+            )
+        self.release_indices = [
+            idx for idx in all_release_indices if int(idx) >= self.window_start
+        ]
+
+    def _previous_release_index(self, *, upper_bound_inclusive: int) -> Optional[int]:
+        """Return the newest release commit index at or before the upper bound."""
+        pos = bisect.bisect_right(self.release_indices, int(upper_bound_inclusive)) - 1
+        if pos < 0:
+            return None
+        return int(self.release_indices[pos])
+
+    def find_good_index(
+        self,
+        *,
+        start_index: int,
+        culprit_index: int,
+        start_time_utc: Optional[datetime] = None,
+        probe: Optional[ProbeFn] = None,
+    ) -> LookbackOutcome:
+        _ = start_time_utc  # release markers are aligned by commit index.
+
+        culprit_index = int(culprit_index)
+        start_index = int(start_index)
+
+        if start_index <= self.window_start:
+            return LookbackOutcome(good_index=None, steps=0)
+
+        cur_idx = int(start_index)
+        steps = 0
+        known_results: dict[int, ProbeOutcome] = {}
+        while cur_idx > self.window_start:
+            release_idx = self._previous_release_index(upper_bound_inclusive=cur_idx - 1)
+            if release_idx is None:
+                release_idx = self.window_start
+            if release_idx < self.window_start:
+                release_idx = self.window_start
+            if release_idx >= cur_idx:
+                release_idx = cur_idx - 1
+
+            resolved = _probe_lookback_candidate(
+                target=int(release_idx),
+                min_index=self.window_start,
+                max_index=cur_idx - 1,
+                culprit_index=culprit_index,
+                probe=probe,
+                known_results=known_results,
+            )
+            if resolved is None:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+            release_idx, release_failed, new_steps = resolved
+            steps += new_steps
+            if not release_failed:
+                logger.debug(
+                    "Release lookback found good_index=%d after steps=%d (start=%d culprit=%d)",
+                    release_idx,
+                    steps,
+                    start_index,
+                    culprit_index,
+                )
+                return LookbackOutcome(good_index=release_idx, steps=steps, known_results=known_results)
+
+            if release_idx == self.window_start:
+                return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+            cur_idx = int(release_idx)
+
+        return LookbackOutcome(good_index=None, steps=steps, known_results=known_results)
+
+
 class RiskAwareTriggerLookback:
     """
     Risk-Aware Trigger Lookback (RATLB).
@@ -2475,6 +2568,7 @@ LOOKBACK_STRATEGIES = {
     FixedStrideLookbackAdaptiveIncreaseForcedFallback.name: FixedStrideLookbackAdaptiveIncreaseForcedFallback,
     NightlyBuildLookback.name: NightlyBuildLookback,
     MonthlyBuildLookback.name: MonthlyBuildLookback,
+    ReleaseLookback.name: ReleaseLookback,
     RiskAwareTriggerLookback.name: RiskAwareTriggerLookback,
     RiskAwareTriggerLookbackForcedFallback.name: RiskAwareTriggerLookbackForcedFallback,
     RiskAwareTriggerLookbackAdaptiveDecrease.name: RiskAwareTriggerLookbackAdaptiveDecrease,
