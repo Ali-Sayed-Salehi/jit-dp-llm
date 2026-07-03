@@ -31,6 +31,7 @@ echo "running the data extraction script . . ."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/bugzilla/get_perf_bugs.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/get_bug_diffs.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/fetch_all_commit.py
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/mercurial/mark_release_commits.py
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/data_preparation.py --mode mozilla_jit_struc
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/data_extraction/conduit/get_all_drevs.py
