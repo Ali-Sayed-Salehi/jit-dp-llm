@@ -667,8 +667,11 @@ If `processed == 0`, `mean_tests_per_search` and `max_tests_per_search` are repo
 ### Eval output (`--output-eval`)
 Includes:
 - Dataset metadata (commit window, risk file path, bug counts)
+- Dataset/risk-score stats (`dataset_stats.culprit_commit_to_bug_creation_delay_days`
+  and `risk_predictions.score_metrics`)
 - Per-combo Optuna details (selected best-trial params and selected objective values; Pareto-point selection when `--multi-objective-opt` is enabled)
-- Per-combo metrics (including a `bugs` breakdown of processed/skipped)
+- Per-combo metrics (including candidate-commit interval stats and a `bugs`
+  breakdown of processed/skipped)
 
 Optuna tuning is single-objective by default: it minimizes `mean_tests_per_search`. With `--multi-objective-opt`, it is multi-objective and minimizes `(max_tests_per_search, mean_tests_per_search)`.
 
@@ -684,6 +687,7 @@ Eval output structure (high level):
   "best_combo_by_max_tests_per_search": "...",
   "commit_window": { "...": "..." },
   "bugs": { "loaded": 0, "simulated": 0 },
+  "dataset_stats": { "...": "..." },
   "risk_predictions": { "...": "..." },
   "optimization": { "...": "..." },
   "results": [
@@ -702,6 +706,8 @@ Eval output structure (high level):
 ### Final output (`--output-final`)
 Includes:
 - Dataset metadata
+- Dataset/risk-score stats (`dataset_stats.culprit_commit_to_bug_creation_delay_days`
+  and `risk_predictions.score_metrics`)
 - Best-combo keys: `best_combo_by_total_tests`, `best_combo_by_mean_tests_per_search`, `best_combo_by_max_tests_per_search`
 - Per-combo metrics, plus:
   - `total_tests_saved_vs_baseline_pct`, `mean_tests_per_search_saved_vs_baseline_pct`, etc.
@@ -719,6 +725,7 @@ Final output structure (high level):
   "best_combo_by_max_tests_per_search": "...",
   "commit_window": { "...": "..." },
   "bugs": { "loaded": 0, "simulated": 0 },
+  "dataset_stats": { "...": "..." },
   "risk_predictions": { "...": "..." },
   "tuned_from_eval": { "path": "...", "present": true },
   "results": [
@@ -743,6 +750,8 @@ Per-combo metrics fields:
 - `total_tests`: lookback tests + bisection tests summed over all processed bugs
 - `total_lookback_tests`, `total_bisection_tests`
 - `mean_tests_per_search`, `max_tests_per_search`
+- `candidate_commits_per_search`: count plus min/mean/median/max candidate
+  commits in the tightened bisection interval `(good, bad]`
 - `total_culprits_found`
 
 In eval output, per-combo metrics are nested under `row["metrics"]` (because the row also includes Optuna metadata). In final output, per-combo metrics are top-level fields in each `results[]` row.

@@ -94,7 +94,7 @@ from lookback import (
     TimeWindowLookback,
     TimeWindowLookbackForcedFallback,
 )
-from probe import ProbeFn, ProbeOutcome, ProbeResult
+from probe import ProbeFn, ProbeOutcome, ProbeResult, outcome_to_failed
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -361,11 +361,8 @@ def _positive_probability_from_positive_confidence(confidence: Any) -> float:
     return conf
 
 
-def load_risk_predictions(path: str) -> Dict[str, float]:
-    """
-    Load a `risk_predictions_*.json` and return a mapping of:
-      commit_id -> risk score (P(POSITIVE))
-    """
+def _load_risk_prediction_rows(path: str) -> Tuple[List[Dict[str, Any]], str]:
+    """Return prediction rows plus the confidence encoding used by the file."""
     with open(path, "r", encoding="utf-8") as f:
         blob = json.load(f)
 
@@ -387,6 +384,15 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
         raise ValueError(
             f"No prediction rows found in {path}: expected a non-empty `samples` or `results` list."
         )
+    return rows, confidence_mode
+
+
+def load_risk_predictions(path: str) -> Dict[str, float]:
+    """
+    Load a `risk_predictions_*.json` and return a mapping of:
+      commit_id -> risk score (P(POSITIVE))
+    """
+    rows, confidence_mode = _load_risk_prediction_rows(path)
 
     risk_by_commit: Dict[str, float] = {}
     for i, sample in enumerate(rows):
@@ -410,6 +416,95 @@ def load_risk_predictions(path: str) -> Dict[str, float]:
             risk_by_commit[str(commit_id)] = _positive_probability_from_positive_confidence(confidence)
 
     return risk_by_commit
+
+
+def _min_mean_median_max(samples: Sequence[float]) -> Dict[str, Any]:
+    """Return count plus min/mean/median/max for a numeric sample."""
+    if not samples:
+        return {
+            "count": 0,
+            "min": None,
+            "mean": None,
+            "median": None,
+            "max": None,
+        }
+
+    values = sorted(float(v) for v in samples)
+    n = len(values)
+    mid = n // 2
+    if n % 2:
+        median = values[mid]
+    else:
+        median = (values[mid - 1] + values[mid]) / 2.0
+
+    return {
+        "count": int(n),
+        "min": float(values[0]),
+        "mean": float(sum(values) / float(n)),
+        "median": float(median),
+        "max": float(values[-1]),
+    }
+
+
+def compute_risk_score_metrics(path: str) -> Dict[str, Any]:
+    """Compute Brier score and binary log loss for stored risk scores."""
+    rows, confidence_mode = _load_risk_prediction_rows(path)
+
+    brier_total = 0.0
+    log_loss_total = 0.0
+    labeled = 0
+    skipped_missing_label = 0
+    eps = 1e-15
+
+    for i, sample in enumerate(rows):
+        if not isinstance(sample, dict):
+            raise ValueError(
+                f"Invalid sample at index {i} in {path}: expected object, got {type(sample).__name__}"
+            )
+        label = sample.get("true_label")
+        if label is None:
+            skipped_missing_label += 1
+            continue
+
+        y = _parse_binary_label(label)
+        confidence = sample.get("confidence")
+        if confidence is None:
+            raise ValueError(f"Invalid sample at index {i} in {path}: missing `confidence`")
+
+        if confidence_mode == "predicted_class":
+            prediction = sample.get("prediction")
+            if prediction is None:
+                raise ValueError(f"Invalid sample at index {i} in {path}: missing `prediction`")
+            p = _positive_probability_from_predicted_class(prediction, confidence)
+        else:
+            p = _positive_probability_from_positive_confidence(confidence)
+
+        p_clipped = min(max(float(p), eps), 1.0 - eps)
+        brier_total += (float(p) - float(y)) ** 2
+        log_loss_total += -(
+            float(y) * math.log(p_clipped)
+            + (1.0 - float(y)) * math.log(1.0 - p_clipped)
+        )
+        labeled += 1
+
+    if labeled <= 0:
+        return {
+            "brier_score": None,
+            "log_loss": None,
+            "num_labeled_samples": 0,
+            "num_unlabeled_samples": int(skipped_missing_label),
+            "positive_label": 1,
+            "score_source": "risk_predictions_file",
+        }
+
+    return {
+        "brier_score": float(brier_total / float(labeled)),
+        "log_loss": float(log_loss_total / float(labeled)),
+        "num_labeled_samples": int(labeled),
+        "num_unlabeled_samples": int(skipped_missing_label),
+        "positive_label": 1,
+        "score_source": "risk_predictions_file",
+    }
 
 
 def _risk_window_from_predictions(
@@ -1009,6 +1104,7 @@ def simulate_strategy_combo(
     max_skip_probes_per_search = 0
     tests_per_search_samples: Optional[List[float]] = [] if bool(collect_tests_per_search) else None
     weighted_cost_per_search_samples: Optional[List[float]] = [] if bool(collect_tests_per_search) else None
+    candidate_commits_per_search_samples: List[float] = []
 
     skipped = {
         "not_regression": 0,
@@ -1136,6 +1232,16 @@ def simulate_strategy_combo(
                 f"Invalid culprit range for bug_id={bug.get('bug_id')}: "
                 f"good_index={_fmt(good_index)}, bad_index={_fmt(bad_index)}, culprit_index={_fmt(culprit_index)}"
             )
+
+        candidate_commits_per_search_samples.append(
+            float(
+                _tightened_search_interval_candidate_count(
+                    good_index=good_index,
+                    bad_index=bad_index,
+                    known_results=lookback_outcome.known_results,
+                )
+            )
+        )
 
         bisect_outcome = bisection.run(
             good_index=good_index,
@@ -1284,6 +1390,7 @@ def simulate_strategy_combo(
         "max_skip_probes_per_search": max_skip_probes_per_search_out,
         "mean_weighted_cost_per_search": mean_weighted_cost_per_search,
         "max_weighted_cost_per_search": max_weighted_cost_per_search_out,
+        "candidate_commits_per_search": _min_mean_median_max(candidate_commits_per_search_samples),
         "total_culprits_found": total_culprits_found,
         "bugs": {"processed": processed, "skipped": skipped},
     }
@@ -1323,6 +1430,100 @@ def  _build_commit_time_search(commits: List[Dict[str, Any]]) -> Tuple[List[date
     return [t for t, _ in pairs], [i for _, i in pairs]
 
 
+def _culprit_commit_to_bug_creation_delay_days_stats(
+    *,
+    bugs: Sequence[Dict[str, Any]],
+    bugs_by_id: Dict[str, Dict[str, Any]],
+    node_to_index: Dict[str, int],
+    commit_times_utc: Sequence[datetime],
+    sorted_times_utc: List[datetime],
+    sorted_time_indices: List[int],
+    window_end: int,
+) -> Dict[str, Any]:
+    """
+    Return delay stats for regression bugs that can form a valid simulated search.
+
+    Delay is measured as bug_creation_time - culprit_commit_time in days. Negative
+    values are preserved so timestamp/data inconsistencies remain visible.
+    """
+    delays_days: List[float] = []
+
+    for bug in bugs:
+        if not bug.get("regression", False):
+            continue
+
+        available_regressor = bug.get("available_regressor")
+        if not available_regressor:
+            continue
+
+        bug_time = _parse_bug_time(bug.get("bug_creation_time"))
+        bad_index = _find_last_commit_before_or_at(
+            sorted_times_utc, sorted_time_indices, bug_time
+        )
+        if bad_index is None or bad_index > int(window_end):
+            continue
+
+        reg_bug_id = str(available_regressor)
+        reg_bug = bugs_by_id.get(reg_bug_id)
+        if not reg_bug:
+            raise KeyError(
+                f"Bug {bug.get('bug_id')} references regressor bug_id={reg_bug_id}, "
+                "but that bug_id is not present in the loaded dataset."
+            )
+        reg_rev = reg_bug.get("revision")
+        if not reg_rev:
+            raise ValueError(f"Regressor bug_id={reg_bug_id} is missing `revision`.")
+        culprit_index = node_to_index.get(str(reg_rev))
+        if culprit_index is None:
+            raise KeyError(
+                f"Regressor bug_id={reg_bug_id} revision={reg_rev} not found in commits list."
+            )
+        if culprit_index > bad_index:
+            continue
+
+        culprit_time = commit_times_utc[int(culprit_index)]
+        if culprit_time.tzinfo is None:
+            culprit_time = culprit_time.replace(tzinfo=timezone.utc)
+        delay_days = (
+            bug_time.astimezone(timezone.utc)
+            - culprit_time.astimezone(timezone.utc)
+        ).total_seconds() / 86400.0
+        delays_days.append(float(delay_days))
+
+    return _min_mean_median_max(delays_days)
+
+
+def _tightened_search_interval_candidate_count(
+    *,
+    good_index: int,
+    bad_index: int,
+    known_results: Optional[Dict[int, ProbeOutcome | bool]],
+) -> int:
+    """Return candidate commits in the bisection interval after known-result tightening."""
+    original_good = int(good_index)
+    original_bad = int(bad_index)
+    low = original_good
+    high = original_bad
+
+    if known_results:
+        for idx, outcome in known_results.items():
+            idx = int(idx)
+            if idx < original_good or idx > original_bad:
+                continue
+            failed = outcome_to_failed(outcome)
+            if failed is None:
+                continue
+            if failed:
+                high = min(high, idx)
+            else:
+                low = max(low, idx)
+
+    if low >= high:
+        low = original_good
+        high = original_bad
+    return int(high - low)
+
+
 @dataclass(frozen=True)
 class PreparedInputs:
     """Preloaded, pre-indexed inputs required to run a simulation on one dataset."""
@@ -1342,6 +1543,8 @@ class PreparedInputs:
     risk_by_index: Sequence[Optional[float]]
     risk_variant: str
     risk_predictions_path: str
+    risk_score_metrics: Dict[str, Any]
+    culprit_commit_to_bug_creation_delay_days: Dict[str, Any]
     num_commits_with_risk: int
     num_bugs_loaded: int
 
@@ -1401,6 +1604,16 @@ def prepare_inputs(
     )
     bugs = all_bugs[:1000] if dry_run else all_bugs
     bugs_by_id = build_bug_id_index(all_bugs)
+    risk_score_metrics = compute_risk_score_metrics(risk_path)
+    delay_stats = _culprit_commit_to_bug_creation_delay_days_stats(
+        bugs=bugs,
+        bugs_by_id=bugs_by_id,
+        node_to_index=node_to_index,
+        commit_times_utc=commit_times_utc,
+        sorted_times_utc=sorted_times_utc,
+        sorted_time_indices=sorted_time_indices,
+        window_end=window_end,
+    )
 
     return PreparedInputs(
         dataset=dataset,
@@ -1419,6 +1632,8 @@ def prepare_inputs(
         risk_by_index=risk_by_index,
         risk_variant=str(risk_variant),
         risk_predictions_path=risk_path,
+        risk_score_metrics=risk_score_metrics,
+        culprit_commit_to_bug_creation_delay_days=delay_stats,
         num_commits_with_risk=len(risk_by_commit),
         num_bugs_loaded=len(all_bugs),
     )
@@ -2952,9 +3167,15 @@ def main() -> int:
                 "num_commits": eval_inputs.window_end - eval_inputs.window_start + 1,
             },
             "bugs": {"loaded": eval_inputs.num_bugs_loaded, "simulated": len(eval_inputs.bugs)},
+            "dataset_stats": {
+                "culprit_commit_to_bug_creation_delay_days": (
+                    eval_inputs.culprit_commit_to_bug_creation_delay_days
+                ),
+            },
             "risk_predictions": {
                 "path": os.path.relpath(eval_inputs.risk_predictions_path, REPO_ROOT),
                 "num_commits_with_risk": eval_inputs.num_commits_with_risk,
+                "score_metrics": eval_inputs.risk_score_metrics,
             },
             "release_commits": {
                 "marked": len(eval_inputs.release_indices),
@@ -3103,9 +3324,15 @@ def main() -> int:
             "num_commits": final_inputs.window_end - final_inputs.window_start + 1,
         },
         "bugs": {"loaded": final_inputs.num_bugs_loaded, "simulated": len(final_inputs.bugs)},
+        "dataset_stats": {
+            "culprit_commit_to_bug_creation_delay_days": (
+                final_inputs.culprit_commit_to_bug_creation_delay_days
+            ),
+        },
         "risk_predictions": {
             "path": os.path.relpath(final_inputs.risk_predictions_path, REPO_ROOT),
             "num_commits_with_risk": final_inputs.num_commits_with_risk,
+            "score_metrics": final_inputs.risk_score_metrics,
         },
         "release_commits": {
             "marked": len(final_inputs.release_indices),
