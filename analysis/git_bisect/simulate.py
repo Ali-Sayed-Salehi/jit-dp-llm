@@ -44,6 +44,7 @@ import bisect
 import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -135,6 +136,21 @@ SKIP_AGE_PROBABILITY_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
     (365.0, 0.15),
     (None, 0.30),
 )
+
+RISK_VARIANT_REAL = "real"
+RISK_VARIANT_SHUFFLED = "shuffled"
+RISK_VARIANT_RANDOM_UNIFORM = "random_uniform"
+RISK_VARIANT_ORACLE = "oracle"
+RISK_VARIANT_RANK_ONLY = "rank_only"
+RISK_VARIANTS = {
+    RISK_VARIANT_REAL,
+    RISK_VARIANT_SHUFFLED,
+    RISK_VARIANT_RANDOM_UNIFORM,
+    RISK_VARIANT_ORACLE,
+    RISK_VARIANT_RANK_ONLY,
+}
+DEFAULT_RISK_SEED = 1729
+ORACLE_LOG_SURVIVAL_EPS = 1e-15
 
 
 @dataclass(frozen=True)
@@ -416,6 +432,18 @@ def _risk_window_from_predictions(
     return min(indices), max(indices)
 
 
+def _stable_hash_uint64(*parts: Any) -> int:
+    """Return a deterministic unsigned 64-bit integer for the given key parts."""
+    payload = ":".join(str(part) for part in parts).encode("utf-8")
+    digest = hashlib.sha256(payload).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
+def _stable_unit_interval_from_parts(*parts: Any) -> float:
+    """Return a deterministic pseudo-random float in [0,1) for the given key parts."""
+    return float(_stable_hash_uint64(*parts)) / float(1 << 64)
+
+
 def build_risk_by_index(
     *,
     commits: List[Dict[str, Any]],
@@ -444,6 +472,289 @@ def build_risk_by_index(
         risk_by_index[idx] = float(risk)
 
     return risk_by_index
+
+
+class OracleRiskSeries(RiskSeries):
+    """
+    Dynamic per-search oracle scores.
+
+    The same object is shared by risk-aware lookback and bisection strategies.
+    Before each simulated bug, `set_culprit_index` points the oracle at that
+    bug's true culprit: culprit risk is 1.0, all other in-window commits are 0.0,
+    and out-of-window commits are None.
+    """
+
+    def __init__(self, *, length: int, window_start: int, window_end: int) -> None:
+        self._length = int(length)
+        self.window_start = int(window_start)
+        self.window_end = int(window_end)
+        self._culprit_index: Optional[int] = None
+        self._prefix_sums_cache: Optional[List[float]] = None
+        self._prefix_log_survival_cache: Optional[List[float]] = None
+
+    def set_culprit_index(self, culprit_index: int) -> None:
+        self._culprit_index = int(culprit_index)
+        self._prefix_sums_cache = None
+        self._prefix_log_survival_cache = None
+
+    def _require_culprit_index(self) -> int:
+        if self._culprit_index is None:
+            raise RuntimeError("Oracle risk scores require a culprit index before use.")
+        return int(self._culprit_index)
+
+    def __len__(self) -> int:  # pragma: no cover
+        return self._length
+
+    def __getitem__(self, index: int | slice) -> Optional[float] | Sequence[Optional[float]]:  # pragma: no cover
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(self._length))]
+
+        idx = int(index)
+        if idx < self.window_start or idx > self.window_end:
+            return None
+        culprit_index = self._require_culprit_index()
+        return 1.0 if idx == culprit_index else 0.0
+
+    @property
+    def prefix_sums(self) -> Sequence[float]:
+        culprit_index = self._require_culprit_index()
+        if self._prefix_sums_cache is None:
+            prefix = [0.0] * (self._length + 1)
+            if self.window_start <= culprit_index <= self.window_end:
+                for i in range(culprit_index + 1, self._length + 1):
+                    prefix[i] = 1.0
+            self._prefix_sums_cache = prefix
+        return self._prefix_sums_cache
+
+    @property
+    def prefix_log_survival(self) -> Sequence[float]:
+        culprit_index = self._require_culprit_index()
+        if self._prefix_log_survival_cache is None:
+            prefix = [0.0] * (self._length + 1)
+            if self.window_start <= culprit_index <= self.window_end:
+                log_survival_after_culprit = math.log(float(ORACLE_LOG_SURVIVAL_EPS))
+                for i in range(culprit_index + 1, self._length + 1):
+                    prefix[i] = log_survival_after_culprit
+            self._prefix_log_survival_cache = prefix
+        return self._prefix_log_survival_cache
+
+    def range_sum(self, start: int, end: int) -> float:
+        culprit_index = self._require_culprit_index()
+        if start < 0 or end < 0 or start > end or end > self._length:
+            raise ValueError(f"Invalid range [{start},{end}) for length={self._length}")
+        return 1.0 if int(start) <= culprit_index < int(end) else 0.0
+
+    def range_combined_probability(self, start: int, end: int) -> float:
+        return self.range_sum(start, end)
+
+
+def _risk_by_explicit_index(
+    *,
+    commits: Sequence[Dict[str, Any]],
+    risk_by_commit: Dict[str, float],
+    window_start: int,
+    window_end: int,
+) -> Dict[int, float]:
+    node_to_index = build_node_to_index(list(commits))
+    by_index: Dict[int, float] = {}
+    for commit_id, risk in risk_by_commit.items():
+        idx = node_to_index.get(str(commit_id))
+        if idx is None:
+            continue
+        if idx < int(window_start) or idx > int(window_end):
+            continue
+        value = float(risk)
+        if value < 0.0 or value > 1.0:
+            raise ValueError(f"Risk probabilities must be in [0,1], got {value}")
+        by_index[int(idx)] = value
+    if not by_index:
+        raise RuntimeError("No in-window risk predictions are available for variant construction.")
+    return by_index
+
+
+def _sample_observed_risk_value(
+    *,
+    observed_values: Sequence[float],
+    seed: int,
+    dataset: str,
+    variant: str,
+    index: int,
+    node: Optional[str],
+) -> float:
+    if not observed_values:
+        raise RuntimeError("Cannot sample from an empty observed risk-score distribution.")
+    sample_idx = _stable_hash_uint64(
+        int(seed),
+        str(dataset),
+        str(variant),
+        "missing_fill",
+        int(index),
+        str(node or ""),
+    ) % len(observed_values)
+    return float(observed_values[int(sample_idx)])
+
+
+def _dense_observed_risk_values(
+    *,
+    commits: Sequence[Dict[str, Any]],
+    explicit_by_index: Dict[int, float],
+    window_start: int,
+    window_end: int,
+    seed: int,
+    dataset: str,
+    variant: str,
+) -> List[float]:
+    observed_values = [explicit_by_index[idx] for idx in sorted(explicit_by_index)]
+    dense_values: List[float] = []
+    for idx in range(int(window_start), int(window_end) + 1):
+        if idx in explicit_by_index:
+            dense_values.append(float(explicit_by_index[idx]))
+            continue
+        node = commits[idx].get("node")
+        dense_values.append(
+            _sample_observed_risk_value(
+                observed_values=observed_values,
+                seed=int(seed),
+                dataset=str(dataset),
+                variant=str(variant),
+                index=int(idx),
+                node=str(node) if node else None,
+            )
+        )
+    return dense_values
+
+
+def _rank_only_scores(values: Sequence[float]) -> List[float]:
+    """
+    Replace calibrated values with empirical midrank quantiles while preserving ties.
+    """
+    n = len(values)
+    if n <= 0:
+        return []
+
+    sorted_values = sorted(float(v) for v in values)
+    rank_by_value: Dict[float, float] = {}
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and sorted_values[j] == sorted_values[i]:
+            j += 1
+
+        first_rank = i + 1
+        last_rank = j
+        midrank = (float(first_rank) + float(last_rank)) / 2.0
+        rank_by_value[sorted_values[i]] = float(midrank) / (float(n) + 1.0)
+        i = j
+
+    return [float(rank_by_value[float(v)]) for v in values]
+
+
+def build_variant_risk_by_index(
+    *,
+    dataset: str,
+    commits: List[Dict[str, Any]],
+    risk_by_commit: Dict[str, float],
+    window_start: int,
+    window_end: int,
+    risk_variant: str,
+    risk_seed: int,
+) -> RiskSeries:
+    """
+    Build the risk scores used by risk-aware strategies for one simulation run.
+
+    The real prediction file always defines the simulation window. The selected
+    variant only controls the per-commit scores inside that fixed window.
+    """
+    variant = str(risk_variant)
+    if variant not in RISK_VARIANTS:
+        raise ValueError(f"Unknown risk variant {variant!r}; expected one of {sorted(RISK_VARIANTS)}.")
+
+    if variant == RISK_VARIANT_REAL:
+        return RiskSeries(
+            build_risk_by_index(
+                commits=commits,
+                risk_by_commit=risk_by_commit,
+                window_start=int(window_start),
+                window_end=int(window_end),
+            )
+        )
+
+    if variant == RISK_VARIANT_ORACLE:
+        return OracleRiskSeries(
+            length=len(commits),
+            window_start=int(window_start),
+            window_end=int(window_end),
+        )
+
+    risk_by_index: List[Optional[float]] = [None] * len(commits)
+    explicit_by_index = _risk_by_explicit_index(
+        commits=commits,
+        risk_by_commit=risk_by_commit,
+        window_start=int(window_start),
+        window_end=int(window_end),
+    )
+
+    if variant == RISK_VARIANT_RANDOM_UNIFORM:
+        for idx in range(int(window_start), int(window_end) + 1):
+            node = commits[idx].get("node")
+            risk_by_index[idx] = _stable_unit_interval_from_parts(
+                int(risk_seed),
+                str(dataset),
+                variant,
+                int(idx),
+                str(node or ""),
+            )
+        return RiskSeries(risk_by_index)
+
+    dense_values = _dense_observed_risk_values(
+        commits=commits,
+        explicit_by_index=explicit_by_index,
+        window_start=int(window_start),
+        window_end=int(window_end),
+        seed=int(risk_seed),
+        dataset=str(dataset),
+        variant=variant,
+    )
+
+    if variant == RISK_VARIANT_SHUFFLED:
+        dense_values = [
+            value
+            for _key, value in sorted(
+                (
+                    (
+                        _stable_hash_uint64(
+                            int(risk_seed),
+                            str(dataset),
+                            variant,
+                            "shuffle",
+                            int(offset),
+                            f"{float(value):.17g}",
+                        ),
+                        float(value),
+                    )
+                    for offset, value in enumerate(dense_values)
+                ),
+                key=lambda item: item[0],
+            )
+        ]
+    elif variant == RISK_VARIANT_RANK_ONLY:
+        dense_values = _rank_only_scores(dense_values)
+    else:
+        raise ValueError(f"Unhandled risk variant {variant!r}")
+
+    for offset, idx in enumerate(range(int(window_start), int(window_end) + 1)):
+        risk_by_index[idx] = float(dense_values[offset])
+    return RiskSeries(risk_by_index)
+
+
+def _set_dynamic_risk_culprit(
+    *,
+    risk_by_index: Sequence[Optional[float]],
+    culprit_index: int,
+) -> None:
+    setter = getattr(risk_by_index, "set_culprit_index", None)
+    if callable(setter):
+        setter(int(culprit_index))
 
 
 def _weighted_cost_profile_metadata() -> Dict[str, Any]:
@@ -549,10 +860,7 @@ def _oldest_skip_probability() -> float:
 
 def _stable_unit_interval(*, seed: int, bug_key: str, commit_index: int) -> float:
     """Return a deterministic pseudo-random float in [0,1)."""
-    payload = f"{int(seed)}:{bug_key}:{int(commit_index)}".encode("utf-8")
-    digest = hashlib.sha256(payload).digest()
-    value = int.from_bytes(digest[:8], byteorder="big", signed=False)
-    return float(value) / float(1 << 64)
+    return _stable_unit_interval_from_parts(int(seed), str(bug_key), int(commit_index))
 
 
 class _CommitProbeOracle:
@@ -761,6 +1069,11 @@ def simulate_strategy_combo(
         if culprit_index > bad_index:
             skipped["culprit_after_bad"] += 1
             continue
+
+        _set_dynamic_risk_culprit(
+            risk_by_index=risk_by_index,
+            culprit_index=culprit_index,
+        )
 
         probe_fn: Optional[ProbeFn] = None
         if bool(enable_skips):
@@ -1027,6 +1340,7 @@ class PreparedInputs:
     window_start_node: Optional[str]
     window_end_node: Optional[str]
     risk_by_index: Sequence[Optional[float]]
+    risk_variant: str
     risk_predictions_path: str
     num_commits_with_risk: int
     num_bugs_loaded: int
@@ -1039,6 +1353,8 @@ def prepare_inputs(
     commits_path: str,
     risk_path: str,
     dry_run: bool,
+    risk_variant: str = RISK_VARIANT_REAL,
+    risk_seed: int = DEFAULT_RISK_SEED,
 ) -> PreparedInputs:
     """
     Load commits, predictions, and bugs; build indices and the commit window.
@@ -1067,13 +1383,15 @@ def prepare_inputs(
     window_start_node = commits[window_start].get("node")
     window_end_node = commits[window_end].get("node")
 
-    risk_by_index = build_risk_by_index(
+    risk_by_index = build_variant_risk_by_index(
+        dataset=dataset,
         commits=commits,
         risk_by_commit=risk_by_commit,
         window_start=window_start,
         window_end=window_end,
+        risk_variant=str(risk_variant),
+        risk_seed=int(risk_seed),
     )
-    risk_by_index = RiskSeries(risk_by_index)
 
     all_bugs = load_bugs_with_available_regressors(
         bugs_path,
@@ -1099,6 +1417,7 @@ def prepare_inputs(
         window_start_node=str(window_start_node) if window_start_node else None,
         window_end_node=str(window_end_node) if window_end_node else None,
         risk_by_index=risk_by_index,
+        risk_variant=str(risk_variant),
         risk_predictions_path=risk_path,
         num_commits_with_risk=len(risk_by_commit),
         num_bugs_loaded=len(all_bugs),
@@ -1437,6 +1756,48 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--risk-eval", default=RISK_EVAL_PATH)
     parser.add_argument("--risk-final", default=RISK_FINAL_PATH)
+    risk_group = parser.add_mutually_exclusive_group()
+    risk_group.add_argument(
+        "--risk-real",
+        dest="risk_variant",
+        action="store_const",
+        const=RISK_VARIANT_REAL,
+        help="Use real LLaMA risk scores. This is the default.",
+    )
+    risk_group.add_argument(
+        "--risk-shuffled",
+        dest="risk_variant",
+        action="store_const",
+        const=RISK_VARIANT_SHUFFLED,
+        help="Use deterministically shuffled risk scores.",
+    )
+    risk_group.add_argument(
+        "--risk-random-uniform",
+        dest="risk_variant",
+        action="store_const",
+        const=RISK_VARIANT_RANDOM_UNIFORM,
+        help="Use deterministic random Uniform(0,1) risk scores.",
+    )
+    risk_group.add_argument(
+        "--risk-oracle",
+        dest="risk_variant",
+        action="store_const",
+        const=RISK_VARIANT_ORACLE,
+        help="Use per-search oracle risk scores.",
+    )
+    risk_group.add_argument(
+        "--risk-rank-only",
+        dest="risk_variant",
+        action="store_const",
+        const=RISK_VARIANT_RANK_ONLY,
+        help="Use rank-only transformed risk scores.",
+    )
+    parser.add_argument(
+        "--risk-seed",
+        type=int,
+        default=DEFAULT_RISK_SEED,
+        help="Seed for deterministic random/shuffled/rank-only risk-score variants.",
+    )
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -1542,7 +1903,10 @@ def get_args() -> argparse.Namespace:
             "is enabled and the chosen good boundary is window_start (default: 4)."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.risk_variant is None:
+        args.risk_variant = RISK_VARIANT_REAL
+    return args
 
 
 def _parse_csv_strategy_list(raw: str) -> List[str]:
@@ -1795,6 +2159,7 @@ def main() -> int:
     logger.info("Using commits_path=%s", args.commits_path)
     logger.info("Using risk_eval=%s", args.risk_eval)
     logger.info("Using risk_final=%s", args.risk_final)
+    logger.info("Using risk_variant=%s", args.risk_variant)
     logger.info("Using output_path=%s", args.output_path)
     logger.info("Skip simulation enabled=%s seed=%d", bool(args.enable_skips), int(args.skip_seed))
 
@@ -2443,6 +2808,8 @@ def main() -> int:
             bugs_path=args.bugs_path,
             commits_path=args.commits_path,
             risk_path=args.risk_eval,
+            risk_variant=str(args.risk_variant),
+            risk_seed=int(args.risk_seed),
             dry_run=bool(args.dry_run),
         )
         logger.info(
@@ -2574,6 +2941,7 @@ def main() -> int:
         eval_summary = {
             "dataset": "eval",
             "dry_run": bool(args.dry_run),
+            "risk_variant": str(args.risk_variant),
             **eval_comparison,
             "weighted_cost_profile": _weighted_cost_profile_metadata(),
             "commit_window": {
@@ -2613,6 +2981,13 @@ def main() -> int:
         logger.info("Loading tuned params from %s", args.output_eval)
         with open(args.output_eval, "r", encoding="utf-8") as f:
             eval_summary = json.load(f)
+        eval_risk_variant = str(eval_summary.get("risk_variant") or RISK_VARIANT_REAL)
+        if eval_risk_variant != str(args.risk_variant):
+            raise ValueError(
+                "Loaded eval params were tuned with a different risk variant: "
+                f"{eval_risk_variant!r}; requested {str(args.risk_variant)!r}. "
+                "Rerun eval tuning with the requested risk variant before using --final-only."
+            )
         for row in eval_summary.get("results", []):
             combo_key = row.get("combo")
             best_params = row.get("best_params")
@@ -2624,6 +2999,8 @@ def main() -> int:
         bugs_path=args.bugs_path,
         commits_path=args.commits_path,
         risk_path=args.risk_final,
+        risk_variant=str(args.risk_variant),
+        risk_seed=int(args.risk_seed),
         dry_run=bool(args.dry_run),
     )
     logger.info(
@@ -2715,6 +3092,7 @@ def main() -> int:
     final_summary: Dict[str, Any] = {
         "dataset": "final_test",
         "dry_run": bool(args.dry_run),
+        "risk_variant": str(args.risk_variant),
         **final_comparison,
         "weighted_cost_profile": _weighted_cost_profile_metadata(),
         "commit_window": {

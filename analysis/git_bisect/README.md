@@ -118,6 +118,8 @@ Risk predictions define the commit window used for simulation:
 - The simulator maps those `commit_id`s to commit indices in `datasets/mozilla_jit/all_commits.jsonl`.
 - The **min/max matched indices** define `[window_start, window_end]`.
 
+The real prediction files always define this window, even when running a risk-score ablation such as shuffled, random, oracle, or rank-only scores.
+
 Outside this window, risk is treated as unavailable (`None`) and many bugs are skipped if their good/bad commit would fall outside the window.
 
 Lookback strategies are also constrained to return a `good_index` within the window; if a policy would otherwise need to test earlier history, it falls back to testing `window_start` as the earliest available commit.
@@ -126,7 +128,8 @@ Lookback strategies are also constrained to return a `good_index` within the win
 Some strategies use a per-commit **risk score**:
 
 - Let `p_i ∈ [0, 1]` be the model’s score for commit `i`, interpreted as `P(POSITIVE)` / “how likely this commit is a regressor”.
-- Inside `[window_start, window_end]`, missing predictions are treated as `p_i = 0.0`.
+- With real risk scores, missing predictions inside `[window_start, window_end]` are treated as `p_i = 0.0`.
+- With non-real risk variants, missing predictions inside `[window_start, window_end]` are filled according to the selected variant; they are not kept as the real-score `0.0` imputation.
 - Outside the window the simulator sets risk to “unavailable” (`None`). Strategies are constrained to probe no earlier than `window_start`; NLB uses `window_start` as its known-good boundary.
 
 Two common ways to aggregate risk over a contiguous range of commits `[a, b)`:
@@ -144,6 +147,40 @@ R_{\text{ls}}([a,b)) = 1 - \prod_{i=a}^{b-1} (1 - p_i)
 $$
 
 `R_ls` is the probability that **at least one** commit in the interval is “positive” under an (imperfect) independence assumption. For small `p_i`, `R_ls([a,b)) ≈ R_sum([a,b))`.
+
+### Risk-score variants
+The simulator supports one risk-score scheme per run. The flags are mutually exclusive; passing more than one is an argument error.
+
+| Flag | Scheme | Purpose |
+|---|---|---|
+| `--risk-real` | Real LLaMA risk scores | Main result; this is the default when no risk flag is provided |
+| `--risk-shuffled` | Deterministic shuffle of in-window scores | Tests whether gains come from real commit-level signal rather than the score distribution |
+| `--risk-random-uniform` | Deterministic random `Uniform(0,1)` score per in-window commit | Sanity-control risk source |
+| `--risk-oracle` | Per-search oracle scores | Upper-bound risk source |
+| `--risk-rank-only` | Rank-only transformed scores | Tests whether calibration matters beyond score ordering |
+
+`--risk-seed` controls deterministic generated variants (`--risk-shuffled`, `--risk-random-uniform`, and the missing-score fill used by `--risk-rank-only`). The default is `1729`.
+
+Important details:
+
+- Only one variant is active during both eval tuning and final replay. To compare variants, rerun the simulator with a different risk flag.
+- Output filenames are unchanged; rerunning with another variant will overwrite the same output paths unless you choose a different `--output-path`.
+- The eval and final JSON summaries include a top-level `risk_variant` field.
+- `--final-only` refuses to replay tuned eval parameters if the eval JSON was produced with a different `risk_variant`.
+
+Variant behavior:
+
+- `real`: uses the loaded prediction score for commits present in the risk file and uses `0.0` for missing in-window predictions.
+- `shuffled`: first builds a dense in-window score list. Commits with explicit predictions keep their real scores for this list; missing in-window commits are deterministically filled by sampling from the observed real-score distribution. The dense list is then deterministically shuffled and assigned back to commits.
+- `random_uniform`: every in-window commit gets a deterministic pseudo-random score in `[0,1)`, keyed by seed, dataset, variant, commit index, and commit id.
+- `oracle`: scores are dynamic per bug/search. For the current bug, the true culprit commit has risk `1.0`, all other in-window commits have risk `0.0`, and out-of-window commits are `None`. The oracle implementation answers log-survival range queries directly, so exact `0.0`/`1.0` oracle scores do not create `log(1 - 1.0)` failures.
+- `rank_only`: first builds the same dense in-window score list as `shuffled`, then replaces calibrated values with tie-preserving midrank quantiles. If there are `n` in-window commits, a score value whose tie group spans sorted ranks `r_first..r_last` gets:
+
+$$
+p_i' = \frac{(r_{\text{first}} + r_{\text{last}})/2}{n + 1}
+$$
+
+This preserves weak ordering and ties but removes probability calibration. The transformed scores are strictly inside `(0,1)`.
 
 ### “Available regressor” selection
 Mozilla bugs can reference other bugs in `regressed_by`. For this simulation:
@@ -190,25 +227,31 @@ The simulator uses this file to:
 - Convert `bug_creation_time` into a known-bad index (`bad_index`) by selecting the latest commit with timestamp `≤ bug_creation_time`
 
 ### Risk prediction file format
-`simulate.py` expects a JSON file with either `results` or `samples` containing rows like:
+`simulate.py` expects a JSON file with either `samples` or `results`.
+
+For `samples`, rows must contain:
 
 ```json
 {"commit_id": "<node>", "prediction": 0|1, "confidence": 0.0-1.0}
 ```
 
-`confidence` is the probability of the predicted class. The file may include `label_order` (default: `["NEGATIVE", "POSITIVE"]`) so the simulator can convert each row into `P(POSITIVE)` for risk-aware strategies.
+Here `confidence` is the probability of the predicted class. The simulator assumes class `1` is positive and class `0` is negative, then converts each row into `P(POSITIVE)` for risk-aware strategies.
 
-Concretely (for the default `label_order`):
+Concretely:
 
 $$
 p_i = P(\text{POSITIVE}) =
 \begin{cases}
-\text{confidence} & \text{prediction}=\text{POSITIVE} \\\\
-1-\text{confidence} & \text{prediction}=\text{NEGATIVE}
+\text{confidence} & \text{prediction}=1 \\\\
+1-\text{confidence} & \text{prediction}=0
 \end{cases}
 $$
 
-With the default `label_order=["NEGATIVE","POSITIVE"]`, this corresponds to `prediction=1 → POSITIVE` and `prediction=0 → NEGATIVE`.
+For files with `results`, `confidence` is treated as `P(POSITIVE)` directly.
+
+```json
+{"commit_id": "<node>", "confidence": 0.0-1.0}
+```
 
 ## Strategies
 
@@ -474,10 +517,26 @@ This tends to treat “many small risks” differently than “one big risk” w
 ## Running
 
 ### Full eval + final replay
-This tunes each combo on the eval predictions, writes `--output-eval`, then replays the tuned params on the final predictions:
+This tunes each combo on the eval predictions, writes `simulation_optuna_eval.json` under `--output-path`, then replays the tuned params on the final predictions and writes `simulation_optuna_final_test.json` under the same directory:
 
 ```bash
 python analysis/git_bisect/simulate.py --mopt-trials 200
+```
+
+This uses `--risk-real` by default. To run an ablation, pass exactly one risk variant flag:
+
+```bash
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-rank-only
+```
+
+Examples:
+
+```bash
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-real
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-shuffled --risk-seed 1729
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-random-uniform --risk-seed 1729
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-oracle
+python analysis/git_bisect/simulate.py --mopt-trials 200 --risk-rank-only --risk-seed 1729
 ```
 
 ### Optuna optimization details
@@ -531,6 +590,14 @@ Load tuned params from the eval output JSON and run only the final predictions:
 ```bash
 python analysis/git_bisect/simulate.py --final-only
 ```
+
+Use the same risk variant that produced the eval JSON:
+
+```bash
+python analysis/git_bisect/simulate.py --final-only --risk-rank-only
+```
+
+If the eval JSON has a different `risk_variant`, the script raises an error instead of replaying mismatched tuned parameters.
 
 ### Dry run
 For fast iteration, simulate only the first 1000 bug rows:
@@ -611,6 +678,7 @@ Eval output structure (high level):
 {
   "dataset": "eval",
   "dry_run": false,
+  "risk_variant": "real",
   "best_combo_by_total_tests": "...",
   "best_combo_by_mean_tests_per_search": "...",
   "best_combo_by_max_tests_per_search": "...",
@@ -645,6 +713,7 @@ Final output structure (high level):
 {
   "dataset": "final_test",
   "dry_run": false,
+  "risk_variant": "real",
   "best_combo_by_total_tests": "...",
   "best_combo_by_mean_tests_per_search": "...",
   "best_combo_by_max_tests_per_search": "...",

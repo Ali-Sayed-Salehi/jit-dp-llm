@@ -5,9 +5,28 @@ bug in Mozilla’s `autoland` Mercurial repository.
 
 This directory contains:
 - Raw Bugzilla bug metadata (`all_bugs.jsonl`)
-- Raw Mercurial commit metadata (`all_commits.jsonl`)
-- A joined bug+diff dataset (`mozilla_jit_2022.jsonl`)
-- An LLM-ready structured-diff dataset (`jit_llm_struc_2022.jsonl`)
+- Raw Mercurial commit metadata with release markers (`all_commits.jsonl`)
+- The checked-in joined bug+diff snapshot (`mozilla_jit_2022.jsonl`)
+- The checked-in LLM-ready structured-diff snapshot (`jit_llm_struc_2022.jsonl`)
+
+Current checked-in file sizes:
+
+| File | Rows |
+|---|---:|
+| `all_bugs.jsonl` | 705,750 |
+| `all_commits.jsonl` | 822,595 |
+| `mozilla_jit_2022.jsonl` | 78,338 |
+| `jit_llm_struc_2022.jsonl` | 78,338 |
+
+The git-bisect simulator can consume this snapshot via:
+
+```bash
+python analysis/git_bisect/simulate.py \
+  --bugs-path datasets/mozilla_jit/mozilla_jit_2022.jsonl \
+  --commits-path datasets/mozilla_jit/all_commits.jsonl
+```
+
+`analysis/git_bisect/simulate.py` still defaults to `datasets/mozilla_jit/mozilla_jit.jsonl`, which is the regeneration output name. In this checkout, use `--bugs-path datasets/mozilla_jit/mozilla_jit_2022.jsonl` unless you regenerate or symlink the unsuffixed file.
 
 For script-level documentation of the extraction pipeline, see:
 - `data_extraction/bugzilla/README.md`
@@ -35,14 +54,22 @@ For script-level documentation of the extraction pipeline, see:
 
 ### `all_commits.jsonl` (JSONL)
 
-**What it is:** Mercurial `autoland` commit metadata exported from `hg log -Tjson -r all()`.
+**What it is:** Mercurial `autoland` commit metadata exported from `hg log -Tjson -r all()`, with release-train markers added.
 
-**Produced by:** `data_extraction/mercurial/fetch_all_commit.py` (writes to `datasets/mozilla_perf/all_commits.jsonl`;
-you can copy/symlink it here for `link_bug_diffs.py`)
+**Produced by:** `data_extraction/mercurial/fetch_all_commit.py`, then annotated by `data_extraction/mercurial/mark_release_commits.py`.
 
-**Used by:** `data_extraction/mercurial/link_bug_diffs.py`
+**Used by:**
+- `data_extraction/mercurial/link_bug_diffs.py`
+- `analysis/git_bisect/simulate.py`
 
-**Per-line object fields (4):** `node` (str), `desc` (str), `date` (`[epoch_seconds, tz_offset_seconds]`), `parents` (list[str])
+**Per-line object fields (5):**
+- `node` (str): Mercurial changeset hash
+- `desc` (str): commit description
+- `date` (`[epoch_seconds, tz_offset_seconds]`): Mercurial commit timestamp
+- `parents` (list[str]): parent changeset hashes
+- `release` (bool): `true` for commits marked as release-train checkpoints
+
+Current snapshot release markers: 94 commits have `release: true`.
 
 ### `mozilla_jit_2022.jsonl` (JSONL)
 
@@ -52,7 +79,9 @@ contiguous block of `Bug <id>` commits.
 **Produced by:** `data_extraction/mercurial/link_bug_diffs.py` (writes `datasets/mozilla_jit/mozilla_jit.jsonl`;
 this file is a year-specific snapshot with the same schema)
 
-**Used by:** `data_extraction/data_preparation.py` (mode `mozilla_jit_struc`, expects `mozilla_jit.jsonl`)
+**Used by:**
+- `data_extraction/data_preparation.py` (mode `mozilla_jit_struc`, expects `mozilla_jit.jsonl` unless you copy/symlink this snapshot)
+- `analysis/git_bisect/simulate.py` via `--bugs-path datasets/mozilla_jit/mozilla_jit_2022.jsonl`
 
 **Per-line object fields (10):**
 - `bug_id` (str)
@@ -71,7 +100,7 @@ this file is a year-specific snapshot with the same schema)
 **What it is:** LLM-ready classification dataset derived from the joined dataset.
 
 **Produced by:** `data_extraction/data_preparation.py` (mode `mozilla_jit_struc`;
-current script writes `jit_llm_struc_2025.jsonl`, this is an earlier snapshot)
+current script writes `jit_llm_struc_2025.jsonl` by default; this is the checked-in 2022 snapshot)
 
 **Per-line object fields (3):**
 - `commit_id` (str): same as `revision`
@@ -83,6 +112,16 @@ current script writes `jit_llm_struc_2025.jsonl`, this is an earlier snapshot)
 ## Typical regeneration order
 
 1. `python data_extraction/bugzilla/get_all_bugs.py`
-2. `python data_extraction/mercurial/fetch_all_commit.py` (copy/symlink output into `datasets/mozilla_jit/all_commits.jsonl`)
-3. `python data_extraction/mercurial/link_bug_diffs.py` (writes `datasets/mozilla_jit/mozilla_jit.jsonl`)
-4. `python data_extraction/data_preparation.py --mode mozilla_jit_struc` (writes `jit_llm_struc_2025.jsonl` by default)
+2. `python data_extraction/mercurial/fetch_all_commit.py` (copy/symlink or configure output as `datasets/mozilla_jit/all_commits.jsonl`)
+3. `python data_extraction/mercurial/mark_release_commits.py` (adds the `release` boolean used by release-lookback simulation)
+4. `python data_extraction/mercurial/link_bug_diffs.py` (writes `datasets/mozilla_jit/mozilla_jit.jsonl`)
+5. `python data_extraction/data_preparation.py --mode mozilla_jit_struc` (writes `jit_llm_struc_2025.jsonl` by default)
+
+## Related risk predictions
+
+Risk prediction JSONs used by the git-bisect simulator are stored under `analysis/git_bisect/`, not in this dataset directory:
+
+- `analysis/git_bisect/risk_predictions_eval.json`
+- `analysis/git_bisect/risk_predictions_final_test.json`
+
+Those files define the eval/final commit windows for simulation. The simulator can also transform those loaded scores into ablation variants such as shuffled, random-uniform, oracle, and rank-only scores; see `analysis/git_bisect/README.md`.

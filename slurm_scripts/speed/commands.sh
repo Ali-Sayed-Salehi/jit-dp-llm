@@ -113,12 +113,15 @@ echo "Running script ..."
 
 
 # To optimize weighted localization cost instead, replace the active objective line with: --objective weighted_cost
+# Risk variant flags are mutually exclusive. Use exactly one of:
+# --risk-real, --risk-shuffled, --risk-random-uniform, --risk-oracle, --risk-rank-only
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/simulate.py \
 # --bugs-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/mozilla_jit_2022.jsonl \
 # --commits-path /speed-scratch/a_s87063/repos/jit-dp-llm/datasets/mozilla_jit/all_commits.jsonl \
 # --risk-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_eval.json \
 # --risk-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/risk_predictions_final_test.json \
+# --risk-real \
 # --output-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t \
 # --penalize-window-start-lookback \
 # --window-start-lookback-penalty-tests 4 \
