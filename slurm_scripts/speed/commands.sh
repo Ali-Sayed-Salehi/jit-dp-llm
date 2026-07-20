@@ -125,6 +125,7 @@ echo "Running script ..."
 # --output-path /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/git_bisect/results/50t \
 # --penalize-window-start-lookback \
 # --window-start-lookback-penalty-tests 4 \
+# --artifact-cost-multiplier 0.5 \
 # --mopt-trials 50 \
 # --optuna-seed 42 \
 # --lookback NBLB,RLB,NLB,FSLB,FSLB-AD,FSLB-AI,RATLB,RATLB-AD,RATLB-AI,RWLBS,RWLBS-AD,RWLBS-AI,RWLBLS,RWLBLS-AD,RWLBLS-AI,TWLB,TWLB-AD,TWLB-AI,FSLB-FF,FSLB-AD-FF,FSLB-AI-FF,RATLB-FF,RATLB-AD-FF,RATLB-AI-FF,RWLBS-FF,RWLBS-AD-FF,RWLBS-AI-FF,RWLBLS-FF,RWLBLS-AD-FF,RWLBLS-AI-FF,TWLB-FF,TWLB-AD-FF,TWLB-AI-FF \

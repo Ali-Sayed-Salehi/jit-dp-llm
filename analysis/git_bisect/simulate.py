@@ -118,7 +118,7 @@ PROBE_KIND_NIGHTLY_ARTIFACT = "nightly_artifact"
 PROBE_KIND_RELEASE_ARTIFACT = "release_artifact"
 
 WEIGHTED_COST_PROFILE_NAME = "default_v1"
-ARTIFACT_COST_MULTIPLIER = 0.5
+DEFAULT_ARTIFACT_COST_MULTIPLIER = 0.5
 WINDOW_START_FALLBACK_WEIGHTED_PENALTY = 15.0
 ARBITRARY_COMMIT_AGE_COST_BUCKETS: Tuple[Tuple[Optional[float], float], ...] = (
     (7.0, 1.0),
@@ -852,12 +852,12 @@ def _set_dynamic_risk_culprit(
         setter(int(culprit_index))
 
 
-def _weighted_cost_profile_metadata() -> Dict[str, Any]:
-    """Return the fixed weighted-cost profile used by simulation outputs."""
+def _weighted_cost_profile_metadata(*, artifact_cost_multiplier: float) -> Dict[str, Any]:
+    """Return the weighted-cost profile used by simulation outputs."""
     return {
         "name": WEIGHTED_COST_PROFILE_NAME,
         "age_reference": "max(0, bug_creation_time - probed_commit_time)",
-        "artifact_cost_multiplier": ARTIFACT_COST_MULTIPLIER,
+        "artifact_cost_multiplier": float(artifact_cost_multiplier),
         "artifact_cost_policy": (
             "nightly_artifact and release_artifact probes use the arbitrary-commit "
             "age-bucket cost multiplied by artifact_cost_multiplier"
@@ -915,6 +915,7 @@ def _weighted_probe_cost(
     probe: ProbeRecord,
     commit_times_utc: Sequence[datetime],
     bug_time_utc: datetime,
+    artifact_cost_multiplier: float,
 ) -> float:
     """Return weighted cost for one recorded probe."""
     age_days = _commit_age_days_at_bug(
@@ -924,7 +925,7 @@ def _weighted_probe_cost(
     )
     base_cost = _arbitrary_commit_probe_cost(age_days)
     if probe.kind in (PROBE_KIND_NIGHTLY_ARTIFACT, PROBE_KIND_RELEASE_ARTIFACT):
-        return float(base_cost) * float(ARTIFACT_COST_MULTIPLIER)
+        return float(base_cost) * float(artifact_cost_multiplier)
     if probe.kind == PROBE_KIND_ARBITRARY_COMMIT:
         return float(base_cost)
     raise ValueError(f"Unknown probe kind for weighted cost: {probe.kind!r}")
@@ -1080,10 +1081,13 @@ def simulate_strategy_combo(
     collect_tests_per_search: bool = False,
     enable_skips: bool = False,
     skip_seed: int = DEFAULT_SKIP_SEED,
+    artifact_cost_multiplier: float = DEFAULT_ARTIFACT_COST_MULTIPLIER,
 ) -> Dict[str, Any]:
     """Run simulation for a single (lookback, bisection) strategy pair."""
     if int(window_start_lookback_penalty_tests) < 0:
         raise ValueError("window_start_lookback_penalty_tests must be >= 0")
+    if not math.isfinite(float(artifact_cost_multiplier)) or float(artifact_cost_multiplier) < 0.0:
+        raise ValueError("artifact_cost_multiplier must be a finite value >= 0")
 
     def _fmt(idx: int) -> str:
         node = nodes_by_index[idx] if 0 <= idx < len(nodes_by_index) else None
@@ -1297,6 +1301,7 @@ def simulate_strategy_combo(
                 probe=probe,
                 commit_times_utc=commit_times_utc,
                 bug_time_utc=bug_time,
+                artifact_cost_multiplier=float(artifact_cost_multiplier),
             )
             for probe in lookback_probes
         )
@@ -1305,6 +1310,7 @@ def simulate_strategy_combo(
                 probe=probe,
                 commit_times_utc=commit_times_utc,
                 bug_time_utc=bug_time,
+                artifact_cost_multiplier=float(artifact_cost_multiplier),
             )
             for probe in bisection_probes
         ) + window_start_fallback_weighted_cost
@@ -1651,6 +1657,7 @@ def run_combo(
     collect_tests_per_search: bool = False,
     enable_skips: bool = False,
     skip_seed: int = DEFAULT_SKIP_SEED,
+    artifact_cost_multiplier: float = DEFAULT_ARTIFACT_COST_MULTIPLIER,
 ) -> Dict[str, Any]:
     """
     Build concrete strategy instances and run a single simulation combo.
@@ -1680,6 +1687,7 @@ def run_combo(
         collect_tests_per_search=bool(collect_tests_per_search),
         enable_skips=bool(enable_skips),
         skip_seed=int(skip_seed),
+        artifact_cost_multiplier=float(artifact_cost_multiplier),
     )
     processed = int((res.get("bugs") or {}).get("processed", 0))
     found = int(res.get("total_culprits_found", 0))
@@ -1727,6 +1735,7 @@ def optimize_combo_params(
     window_start_lookback_penalty_tests: int = 4,
     enable_skips: bool = False,
     skip_seed: int = DEFAULT_SKIP_SEED,
+    artifact_cost_multiplier: float = DEFAULT_ARTIFACT_COST_MULTIPLIER,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     Tune a (lookback, bisection) combo on the given prepared dataset via Optuna.
@@ -1759,6 +1768,7 @@ def optimize_combo_params(
             window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
             enable_skips=bool(enable_skips),
             skip_seed=int(skip_seed),
+            artifact_cost_multiplier=float(artifact_cost_multiplier),
         )
         optuna_meta = {
             "skipped": True,
@@ -1793,6 +1803,7 @@ def optimize_combo_params(
             window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
             enable_skips=bool(enable_skips),
             skip_seed=int(skip_seed),
+            artifact_cost_multiplier=float(artifact_cost_multiplier),
         )
 
         processed = int(res["bugs"]["processed"])
@@ -1924,6 +1935,7 @@ def optimize_combo_params(
         window_start_lookback_penalty_tests=int(window_start_lookback_penalty_tests),
         enable_skips=bool(enable_skips),
         skip_seed=int(skip_seed),
+        artifact_cost_multiplier=float(artifact_cost_multiplier),
     )
     if bool(multi_objective_opt):
         optuna_meta = {
@@ -2079,6 +2091,15 @@ def get_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--artifact-cost-multiplier",
+        type=float,
+        default=DEFAULT_ARTIFACT_COST_MULTIPLIER,
+        help=(
+            "Multiplier applied to age-bucket weighted costs for nightly and release "
+            f"artifact probes (default: {DEFAULT_ARTIFACT_COST_MULTIPLIER})."
+        ),
+    )
+    parser.add_argument(
         "--lookback",
         default="all",
         help=(
@@ -2121,6 +2142,8 @@ def get_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.risk_variant is None:
         args.risk_variant = RISK_VARIANT_REAL
+    if not math.isfinite(float(args.artifact_cost_multiplier)) or float(args.artifact_cost_multiplier) < 0.0:
+        parser.error("--artifact-cost-multiplier must be a finite value >= 0")
     return args
 
 
@@ -2376,6 +2399,7 @@ def main() -> int:
     logger.info("Using risk_final=%s", args.risk_final)
     logger.info("Using risk_variant=%s", args.risk_variant)
     logger.info("Using output_path=%s", args.output_path)
+    logger.info("Using artifact_cost_multiplier=%s", float(args.artifact_cost_multiplier))
     logger.info("Skip simulation enabled=%s seed=%d", bool(args.enable_skips), int(args.skip_seed))
 
     for p in (args.bugs_path, args.commits_path, args.risk_eval, args.risk_final):
@@ -3069,6 +3093,7 @@ def main() -> int:
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                     enable_skips=bool(args.enable_skips),
                     skip_seed=int(args.skip_seed),
+                    artifact_cost_multiplier=float(args.artifact_cost_multiplier),
                 )
                 tuned_params_by_combo[combo_key] = {
                     "lookback": lookback_params,
@@ -3158,7 +3183,9 @@ def main() -> int:
             "dry_run": bool(args.dry_run),
             "risk_variant": str(args.risk_variant),
             **eval_comparison,
-            "weighted_cost_profile": _weighted_cost_profile_metadata(),
+            "weighted_cost_profile": _weighted_cost_profile_metadata(
+                artifact_cost_multiplier=float(args.artifact_cost_multiplier)
+            ),
             "commit_window": {
                 "start_index": eval_inputs.window_start,
                 "end_index": eval_inputs.window_end,
@@ -3267,6 +3294,7 @@ def main() -> int:
                     window_start_lookback_penalty_tests=int(args.window_start_lookback_penalty_tests),
                     enable_skips=bool(args.enable_skips),
                     skip_seed=int(args.skip_seed),
+                    artifact_cost_multiplier=float(args.artifact_cost_multiplier),
                 )
             )
             final_results[-1].pop("bugs", None)
@@ -3315,7 +3343,9 @@ def main() -> int:
         "dry_run": bool(args.dry_run),
         "risk_variant": str(args.risk_variant),
         **final_comparison,
-        "weighted_cost_profile": _weighted_cost_profile_metadata(),
+        "weighted_cost_profile": _weighted_cost_profile_metadata(
+            artifact_cost_multiplier=float(args.artifact_cost_multiplier)
+        ),
         "commit_window": {
             "start_index": final_inputs.window_start,
             "end_index": final_inputs.window_end,
@@ -3377,6 +3407,7 @@ def main() -> int:
                 collect_tests_per_search=True,
                 enable_skips=bool(args.enable_skips),
                 skip_seed=int(args.skip_seed),
+                artifact_cost_multiplier=float(args.artifact_cost_multiplier),
             )
             samples = list(dist_res.get("tests_per_search_samples") or [])
             weighted_samples = list(dist_res.get("weighted_cost_per_search_samples") or [])
