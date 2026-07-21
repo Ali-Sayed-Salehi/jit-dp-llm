@@ -1449,8 +1449,9 @@ def _culprit_commit_to_bug_creation_delay_days_stats(
     """
     Return delay stats for regression bugs that can form a valid simulated search.
 
-    Delay is measured as bug_creation_time - culprit_commit_time in days. Negative
-    values are preserved so timestamp/data inconsistencies remain visible.
+    Delay is measured as bug_creation_time - culprit_commit_time in days.
+    Timestamp-inconsistent rows where the culprit commit time is after bug
+    creation are excluded so the summary covers observed non-negative delays.
     """
     delays_days: List[float] = []
 
@@ -1494,6 +1495,8 @@ def _culprit_commit_to_bug_creation_delay_days_stats(
             bug_time.astimezone(timezone.utc)
             - culprit_time.astimezone(timezone.utc)
         ).total_seconds() / 86400.0
+        if delay_days < 0.0:
+            continue
         delays_days.append(float(delay_days))
 
     return _min_mean_median_max(delays_days)
