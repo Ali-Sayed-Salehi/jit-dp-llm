@@ -1100,6 +1100,7 @@ def simulate_strategy_combo(
     total_lookback_weighted_cost = 0.0
     total_bisection_weighted_cost = 0.0
     total_culprits_found = 0
+    total_repo_start_fallbacks = 0
     total_skip_probes = 0
     total_lookback_skip_probes = 0
     total_bisection_skip_probes = 0
@@ -1280,7 +1281,8 @@ def simulate_strategy_combo(
         window_start_penalty: int | float = 0
         window_start_fallback_weighted_cost = 0.0
         window_start_fallback_skip_tests = 0
-        if bool(penalize_window_start_lookback) and good_index == int(window_start):
+        repo_start_fallback = good_index == int(window_start)
+        if bool(penalize_window_start_lookback) and repo_start_fallback:
             penalty_tests = int(window_start_lookback_penalty_tests)
             window_start_penalty, window_start_fallback_skip_tests = _window_start_fallback_penalty_draws(
                 enable_skips=bool(enable_skips),
@@ -1340,6 +1342,7 @@ def simulate_strategy_combo(
             weighted_cost_per_search_samples.append(float(weighted_cost_per_search))
 
         total_culprits_found += 1 if bisect_outcome.found_index is not None else 0
+        total_repo_start_fallbacks += 1 if repo_start_fallback else 0
         total_lookback_tests += lookback_tests
         total_bisection_tests += bisection_tests
         total_tests += lookback_tests + bisection_tests
@@ -1398,6 +1401,7 @@ def simulate_strategy_combo(
         "max_weighted_cost_per_search": max_weighted_cost_per_search_out,
         "candidate_commits_per_search": _min_mean_median_max(candidate_commits_per_search_samples),
         "total_culprits_found": total_culprits_found,
+        "total_repo_start_fallbacks": total_repo_start_fallbacks,
         "bugs": {"processed": processed, "skipped": skipped},
     }
     if tests_per_search_samples is not None:

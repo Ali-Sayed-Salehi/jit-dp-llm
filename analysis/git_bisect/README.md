@@ -737,6 +737,7 @@ Final output structure (high level):
       "mean_tests_per_search": 0.0,
       "max_tests_per_search": 0,
       "total_culprits_found": 0,
+      "total_repo_start_fallbacks": 0,
       "total_tests_saved_vs_baseline_pct": 0.0,
       "mean_tests_per_search_saved_vs_baseline_pct": 0.0,
       "max_tests_per_search_saved_vs_baseline_pct": 0.0,
@@ -753,6 +754,8 @@ Per-combo metrics fields:
 - `candidate_commits_per_search`: count plus min/mean/median/max candidate
   commits in the tightened bisection interval `(good, bad]`
 - `total_culprits_found`
+- `total_repo_start_fallbacks`: processed bugs where lookback used the simulation
+  window start as the known-good boundary
 
 In eval output, per-combo metrics are nested under `row["metrics"]` (because the row also includes Optuna metadata). In final output, per-combo metrics are top-level fields in each `results[]` row.
 
