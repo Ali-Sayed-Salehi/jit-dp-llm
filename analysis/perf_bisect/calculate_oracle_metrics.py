@@ -74,6 +74,16 @@ class Regression:
 
         return (self.good_value + self.bad_value) / 2.0
 
+    @property
+    def bad_is_above_baseline(self) -> bool:
+        """Return whether larger measurements point toward the bad endpoint."""
+
+        if self.bad_value == self.good_value:
+            raise ValueError(
+                f"regression_id={self.regression_id} has equal good and bad values"
+            )
+        return self.bad_value > self.good_value
+
 
 @dataclass
 class MeasurementValues:
@@ -266,7 +276,7 @@ class CandidatePath:
     culprit_index: int
 
     def is_expected_bad(self, revision: str) -> bool:
-        """Return whether a candidate revision should measure above baseline."""
+        """Return whether a candidate revision is on the known-bad side."""
 
         return self.revisions_from_good_to_bad.index(revision) >= self.culprit_index
 
@@ -681,6 +691,7 @@ def calculate_regression_metrics(
                 values.summary,
                 baseline=regression.baseline,
                 expected_bad=expected_bad,
+                bad_is_above_baseline=regression.bad_is_above_baseline,
             )
             summary_correct += correct_summary
             summary_total += total_summary
@@ -700,15 +711,16 @@ def score_values(
     *,
     baseline: float,
     expected_bad: bool,
+    bad_is_above_baseline: bool,
 ) -> tuple[int, int]:
-    """Return correct and total counts for values compared to the baseline."""
+    """Return correct and total counts using the regression's value direction."""
 
     correct = 0
     for value in values:
-        if expected_bad:
-            correct += value > baseline
-        else:
-            correct += value < baseline
+        observed_bad = (
+            value > baseline if bad_is_above_baseline else value < baseline
+        )
+        correct += observed_bad == expected_bad
     return correct, len(values)
 
 

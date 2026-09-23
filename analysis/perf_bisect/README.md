@@ -309,20 +309,19 @@ Undefined results affect elapsed-time, success-rate, and test-run metrics.
 
 ## Oracle Accuracy Dataset
 
-`calculate_oracle_metrics.py` writes one JSONL row per regression to
-`analysis/perf_bisect/per_regression_oracle_metrics.jsonl` by default. Each row
-contains:
+`calculate_oracle_metrics.py` writes one JSONL row per retained regression to
+`datasets/mozilla_perf_bisect_v2/reduced/per_regression_oracle_metrics_v2.jsonl`
+by default. Each row contains:
 
 - `regression_id`
 - `summary_oracle_accuracy`
-- `replicate_oracle_accuracy`
 
 For each regression, the script reconstructs the good-to-bad parent path from
-`all_commits.jsonl`, excludes the known-good endpoint, and includes the
-known-bad endpoint. It then scores every matching measurement for the failing
-signature from `per_revision_perf_data.jsonl`. Measurements before the culprit
-are correct when they are below the midpoint baseline; measurements at or after
-the culprit are correct when they are above the baseline.
+the revision data, excludes the known-good endpoint, and includes the known-bad
+endpoint. It then scores every matching measurement for the failing signature.
+The known good and bad endpoint values determine the comparison direction: a
+measurement is bad when it lies on the bad endpoint's side of the midpoint
+baseline. This supports both lower-is-better and higher-is-better signatures.
 
 The baseline is:
 
