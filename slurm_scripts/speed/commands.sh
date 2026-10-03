@@ -41,14 +41,33 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
+# # Reproduce the batching experiment reported in the paper. 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
 # --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_eval.json \
 # --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
-# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_opt_max_ttc/batch_eval_mopt.json \
-# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_opt_max_ttc/batch_test_mopt.json \
+# --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_paper_reproduction/batch_eval_mopt.json \
+# --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_paper_reproduction/batch_test_mopt.json \
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
+# --optuna-seed 42 \
 # --skip-exhaustive-testing \
+# --batching "TWSB,\
+# TWB,TWB-s,\
+# FSB,FSB-s,\
+# RASB,RASB-s,RASB-la,RASB-la-s,\
+# RAPB,RAPB-s,RAPB-la,RAPB-la-s,\
+# RATB,RATB-s" \
+# --bisection PAR \
+# --optimize-for-timeliness-metric max_ttc \
+# --baseline-opt-metric-multplier 2 \
+# --workers-android 60 \
+# --workers-windows 120 \
+# --workers-linux 100 \
+# --workers-mac 250 \
+# --unknown-platform-pool mac \
+# --log-level INFO
+
+# full strategies list:
 # --batching "TWSB,\
 # TWB,TWB-s,TWB-hats,\
 # FSB,FSB-s,FSB-hats,\
@@ -61,13 +80,7 @@ echo "Running script ..."
 # LARAB,LARAB-s,LARAB-hats,\
 # LARAB-la,LARAB-la-s,LARAB-la-hats,\
 # HATS,RAHATS,RAHATS-la,ARAHATS,ARAHATS-la" \
-# --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF \
-# --optimize-for-timeliness-metric max_ttc \
-# --baseline-opt-metric-multplier 2 \
-# --workers-android 60 \
-# --workers-windows 120 \
-# --workers-linux 100 \
-# --workers-mac 250
+# --bisection PAR,TOB,RWAB,RWAB-LS,TKRB,SWB,SWF 
 
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/model_machine_count.py \
