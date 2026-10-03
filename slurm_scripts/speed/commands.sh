@@ -41,12 +41,15 @@ echo "Running script ..."
 
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/simulate_perf_reg_predictor.py
 
-# # Reproduce the batching experiment reported in the paper. 
+# # Reproduce the batching experiment reported in the paper.
+# # Risk-score modes: learned (default/current model), shuffled, random, or oracle.
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/simulation.py \
 # --input-json-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_eval.json \
 # --input-json-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
 # --output-eval /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_paper_reproduction/batch_eval_mopt.json \
 # --output-final /speed-scratch/a_s87063/repos/jit-dp-llm/analysis/batch_testing/results/50t_paper_reproduction/batch_test_mopt.json \
+# --risk-learned \
+# --risk-seed 42 \
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --optuna-seed 42 \

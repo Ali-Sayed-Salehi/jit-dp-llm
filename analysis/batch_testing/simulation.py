@@ -23,6 +23,7 @@ import os
 import json
 import random
 import math
+import hashlib
 from datetime import datetime, timedelta, timezone
 import argparse
 import logging
@@ -120,6 +121,22 @@ LARAB_QUEUE_PRESSURE_MULTIPLIER = 1.0
 
 DEFAULT_CUTOFF = datetime.fromisoformat("2024-10-10T00:00:00+00:00")
 RANDOM_SEED = 42
+
+RISK_SCORE_MODE_LEARNED = "learned"
+RISK_SCORE_MODE_SHUFFLED = "shuffled"
+RISK_SCORE_MODE_RANDOM_UNIFORM = "random_uniform"
+RISK_SCORE_MODE_ORACLE = "oracle"
+RISK_SCORE_MODES = {
+    RISK_SCORE_MODE_LEARNED,
+    RISK_SCORE_MODE_SHUFFLED,
+    RISK_SCORE_MODE_RANDOM_UNIFORM,
+    RISK_SCORE_MODE_ORACLE,
+}
+STOCHASTIC_RISK_SCORE_MODES = {
+    RISK_SCORE_MODE_SHUFFLED,
+    RISK_SCORE_MODE_RANDOM_UNIFORM,
+}
+DEFAULT_RISK_SCORE_SEED = RANDOM_SEED
 
 DEFAULT_TEST_DURATION_MIN = 20.0
 # Constant build-time overhead applied once per suite run (batch tests + bisection steps).
@@ -444,6 +461,49 @@ def get_args():
         default=RANDOM_SEED,
         help="Random seed for Optuna samplers (for reproducible tuning runs).",
     )
+    risk_group = parser.add_mutually_exclusive_group()
+    risk_group.add_argument(
+        "--risk-learned",
+        dest="risk_score_mode",
+        action="store_const",
+        const=RISK_SCORE_MODE_LEARNED,
+        help="Use the learned model risk scores. This is the default.",
+    )
+    risk_group.add_argument(
+        "--risk-shuffled",
+        dest="risk_score_mode",
+        action="store_const",
+        const=RISK_SCORE_MODE_SHUFFLED,
+        help=(
+            "Deterministically shuffle the learned scores across commits while "
+            "preserving their exact distribution."
+        ),
+    )
+    risk_group.add_argument(
+        "--risk-random",
+        "--risk-random-uniform",
+        dest="risk_score_mode",
+        action="store_const",
+        const=RISK_SCORE_MODE_RANDOM_UNIFORM,
+        help="Use deterministic random Uniform(0,1) risk scores.",
+    )
+    risk_group.add_argument(
+        "--risk-oracle",
+        dest="risk_score_mode",
+        action="store_const",
+        const=RISK_SCORE_MODE_ORACLE,
+        help="Use oracle scores: 1 for true regressors and 0 for other commits.",
+    )
+    parser.set_defaults(risk_score_mode=RISK_SCORE_MODE_LEARNED)
+    parser.add_argument(
+        "--risk-seed",
+        type=int,
+        default=DEFAULT_RISK_SCORE_SEED,
+        help=(
+            "Seed for deterministic shuffled and random risk scores "
+            f"(default: {DEFAULT_RISK_SCORE_SEED})."
+        ),
+    )
     parser.add_argument(
         "--optimize-for-timeliness-metric",
         default=DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC,
@@ -683,16 +743,156 @@ def load_predictions_raw(path):
     return preds
 
 
+def _stable_hash_uint64(*parts) -> int:
+    """Return a process-independent 64-bit hash for deterministic ablations."""
+    digest = hashlib.sha256()
+    for part in parts:
+        raw = str(part).encode("utf-8")
+        digest.update(len(raw).to_bytes(8, byteorder="big", signed=False))
+        digest.update(raw)
+    return int.from_bytes(digest.digest()[:8], byteorder="big", signed=False)
+
+
+def _stable_unit_interval(*parts) -> float:
+    """Map stable hash inputs to a deterministic value in the interval [0, 1)."""
+    return float(_stable_hash_uint64(*parts)) / float(1 << 64)
+
+
+def normalize_risk_score_mode(raw_mode) -> str:
+    """Normalize and validate a risk-score mode name."""
+    mode = str(raw_mode or RISK_SCORE_MODE_LEARNED).strip().lower()
+    if mode not in RISK_SCORE_MODES:
+        raise ValueError(
+            f"Unknown risk score mode {raw_mode!r}; "
+            f"expected one of {sorted(RISK_SCORE_MODES)}."
+        )
+    return mode
+
+
+def apply_risk_score_mode(
+    commits,
+    risk_score_mode=RISK_SCORE_MODE_LEARNED,
+    risk_seed=DEFAULT_RISK_SCORE_SEED,
+    split_name="simulation",
+):
+    """
+    Return commit copies with the requested risk-score ablation applied.
+
+    Modes
+    -----
+    learned:
+        Preserve the model-derived scores currently stored in ``commit["risk"]``.
+    shuffled:
+        Deterministically permute those learned scores across the commit stream.
+        Labels, timestamps, and commit identities remain fixed, and the exact score
+        distribution is preserved.
+    random_uniform:
+        Assign each commit a deterministic pseudo-random Uniform(0,1) score.
+    oracle:
+        Assign risk 1.0 to true regressors and 0.0 to every other commit.
+
+    The split name is included in deterministic hashing so EVAL and FINAL receive
+    independent shuffled/random assignments even when they use the same seed.
+    """
+    mode = normalize_risk_score_mode(risk_score_mode)
+
+    seed = int(risk_seed)
+    split = str(split_name or "simulation")
+    transformed = [dict(commit) for commit in commits]
+
+    learned_scores = []
+    for idx, commit in enumerate(transformed):
+        try:
+            score = float(commit.get("risk", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Commit at index {idx} has a non-numeric risk score: "
+                f"{commit.get('risk')!r}."
+            ) from exc
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            raise ValueError(
+                f"Commit at index {idx} has risk {score!r}; expected a finite "
+                "value in [0, 1]."
+            )
+        learned_scores.append(score)
+
+    if mode == RISK_SCORE_MODE_LEARNED:
+        replacement_scores = learned_scores
+    elif mode == RISK_SCORE_MODE_ORACLE:
+        replacement_scores = [
+            1.0 if bool(commit.get("true_label")) else 0.0
+            for commit in transformed
+        ]
+    elif mode == RISK_SCORE_MODE_RANDOM_UNIFORM:
+        replacement_scores = [
+            _stable_unit_interval(
+                seed,
+                split,
+                mode,
+                idx,
+                commit.get("commit_id", ""),
+            )
+            for idx, commit in enumerate(transformed)
+        ]
+    elif mode == RISK_SCORE_MODE_SHUFFLED:
+        source_order = sorted(
+            range(len(transformed)),
+            key=lambda idx: (
+                _stable_hash_uint64(
+                    seed,
+                    split,
+                    mode,
+                    idx,
+                    transformed[idx].get("commit_id", ""),
+                ),
+                idx,
+            ),
+        )
+        replacement_scores = [learned_scores[idx] for idx in source_order]
+    else:  # Defensive guard if a mode is added without an implementation.
+        raise ValueError(f"Unhandled risk score mode {mode!r}.")
+
+    for commit, score in zip(transformed, replacement_scores):
+        commit["risk"] = float(score)
+
+    if replacement_scores:
+        logger.info(
+            "Applied risk score mode=%s seed=%d split=%s commits=%d "
+            "score_min=%.6f score_mean=%.6f score_max=%.6f",
+            mode,
+            seed,
+            split,
+            len(replacement_scores),
+            min(replacement_scores),
+            sum(replacement_scores) / len(replacement_scores),
+            max(replacement_scores),
+        )
+    else:
+        logger.info(
+            "Applied risk score mode=%s seed=%d split=%s to an empty commit stream",
+            mode,
+            seed,
+            split,
+        )
+
+    return transformed
+
+
 def build_commits_from_all_with_raw_preds(
-    all_commits_path, preds_raw, lower_cutoff, upper_cutoff=None
+    all_commits_path,
+    preds_raw,
+    lower_cutoff,
+    upper_cutoff=None,
+    risk_score_mode=RISK_SCORE_MODE_LEARNED,
+    risk_seed=DEFAULT_RISK_SCORE_SEED,
+    split_name="simulation",
 ):
     """
     Build the simulation commit stream from `all_commits.jsonl` using `preds_raw`.
 
     This avoids per-trial re-reading of the prediction JSON during Optuna runs.
 
-    Returns:
-      commits_sorted
+    Returns the time-sorted commit stream after applying ``risk_score_mode``.
     """
     logger.debug(
         "Building commits from %s with lower_cutoff=%s upper_cutoff=%s (preds_raw size=%d)",
@@ -741,7 +941,12 @@ def build_commits_from_all_with_raw_preds(
         "Finished building commit list: %d commits within window",
         len(commits),
     )
-    return commits
+    return apply_risk_score_mode(
+        commits,
+        risk_score_mode=risk_score_mode,
+        risk_seed=risk_seed,
+        split_name=split_name,
+    )
 
 
 def parse_hg_date(date_field):
@@ -1116,6 +1321,8 @@ def run_evaluation_mopt(
     base_commits_for_context=None,
     lower_cutoff=None,
     upper_cutoff=None,
+    risk_score_mode=RISK_SCORE_MODE_LEARNED,
+    risk_seed=DEFAULT_RISK_SCORE_SEED,
 ):
     """
     Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
@@ -1138,12 +1345,18 @@ def run_evaluation_mopt(
         ) from e
 
     optuna_seed = int(optuna_seed)
+    risk_score_mode = normalize_risk_score_mode(risk_score_mode)
+    risk_seed = int(risk_seed)
 
     logger.info(
-        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, base_trials_per_param=%d, optuna_seed=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
+        "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, "
+        "base_trials_per_param=%d, optuna_seed=%d, risk_score_mode=%s, "
+        "risk_seed=%d, timeliness_metric=%s, baseline_opt_metric_multplier=%.4f",
         INPUT_JSON_EVAL,
         n_trials,
         optuna_seed,
+        risk_score_mode,
+        risk_seed,
         optimize_for_timeliness_metric,
         float(baseline_opt_metric_multplier),
     )
@@ -1219,6 +1432,9 @@ def run_evaluation_mopt(
             preds_raw,
             lower_cutoff,
             upper_cutoff,
+            risk_score_mode=risk_score_mode,
+            risk_seed=risk_seed,
+            split_name="eval",
         )
     if run_exhaustive_testing_et and base_commits_for_context:
         et_results = run_exhaustive_testing(base_commits_for_context)
@@ -1303,6 +1519,8 @@ def run_evaluation_mopt(
         "mopt_optuna_seed": int(optuna_seed),
         "mopt_optimize_for_timeliness_metric": optimize_for_timeliness_metric,
         "mopt_baseline_opt_metric_multplier": float(baseline_opt_metric_multplier),
+        "risk_score_mode": risk_score_mode,
+        "risk_score_seed": risk_seed,
     }
     if baseline_selected:
         out_eval["Baseline (TWSB + PAR)"] = baseline
@@ -1958,6 +2176,39 @@ def run_evaluation_mopt(
     }
 
 
+def validate_eval_risk_score_config(eval_payload, risk_score_mode, risk_seed) -> None:
+    """Ensure FINAL replay uses parameters tuned under the same risk ablation."""
+    requested_mode = normalize_risk_score_mode(risk_score_mode)
+    requested_seed = int(risk_seed)
+    eval_output = (
+        eval_payload.get("eval_output", {})
+        if isinstance(eval_payload, dict)
+        else {}
+    )
+    if not isinstance(eval_output, dict):
+        raise ValueError("Evaluation payload does not contain a valid eval_output object.")
+
+    # Older result files predate risk ablations and therefore represent the
+    # learned-score default with the default seed.
+    eval_mode = normalize_risk_score_mode(
+        eval_output.get("risk_score_mode", RISK_SCORE_MODE_LEARNED)
+    )
+    eval_seed = int(eval_output.get("risk_score_seed", DEFAULT_RISK_SCORE_SEED))
+
+    if eval_mode != requested_mode:
+        raise ValueError(
+            "Loaded EVAL parameters were tuned with a different risk score mode: "
+            f"{eval_mode!r}; requested {requested_mode!r}. Rerun EVAL tuning with "
+            "the requested risk mode before using --final-only."
+        )
+    if requested_mode in STOCHASTIC_RISK_SCORE_MODES and eval_seed != requested_seed:
+        raise ValueError(
+            "Loaded EVAL parameters were tuned with a different risk seed: "
+            f"{eval_seed}; requested {requested_seed}. Rerun EVAL tuning with the "
+            "requested seed before using --final-only."
+        )
+
+
 # ------------------- FINAL REPLAY (unified) -------------------
 def run_final_test_unified(
     eval_payload,
@@ -1970,6 +2221,8 @@ def run_final_test_unified(
     base_commits_final=None,
     final_lower=None,
     final_upper=None,
+    risk_score_mode=RISK_SCORE_MODE_LEARNED,
+    risk_seed=DEFAULT_RISK_SCORE_SEED,
 ):
     """
     Replay selected configurations on the FINAL prediction set.
@@ -1984,10 +2237,17 @@ def run_final_test_unified(
       - Computes deltas vs the baseline from the EVAL payload.
       - Writes a unified JSON result file to `OUTPUT_PATH_FINAL`.
     """
+    risk_score_mode = normalize_risk_score_mode(risk_score_mode)
+    risk_seed = int(risk_seed)
+    validate_eval_risk_score_config(eval_payload, risk_score_mode, risk_seed)
+
     logger.info(
-        "Starting FINAL replay with INPUT_JSON_FINAL=%s, OUTPUT_PATH_FINAL=%s",
+        "Starting FINAL replay with INPUT_JSON_FINAL=%s, OUTPUT_PATH_FINAL=%s, "
+        "risk_score_mode=%s, risk_seed=%d",
         INPUT_JSON_FINAL,
         OUTPUT_PATH_FINAL,
+        risk_score_mode,
+        risk_seed,
     )
 
     # Allow main() to pass precomputed/cached inputs to avoid re-reading
@@ -2010,6 +2270,9 @@ def run_final_test_unified(
             preds_raw_final,
             final_lower,
             final_upper,
+            risk_score_mode=risk_score_mode,
+            risk_seed=risk_seed,
+            split_name="final",
         )
     if not base_commits_final:
         raise RuntimeError("No commits found in FINAL window; exiting final.")
@@ -2066,6 +2329,8 @@ def run_final_test_unified(
         },
         "worker_pools": _worker_pools_for_output(WORKER_POOLS),
         "num_test_workers": sum(int(v) for v in WORKER_POOLS.values()),
+        "risk_score_mode": risk_score_mode,
+        "risk_score_seed": risk_seed,
     }
     if baseline_selected:
         final_results["Baseline (TWSB + PAR)"] = baseline_final
@@ -2341,6 +2606,10 @@ def main():
 
     logger.info("Starting batch-testing simulation CLI")
 
+    risk_score_mode = normalize_risk_score_mode(
+        getattr(args, "risk_score_mode", RISK_SCORE_MODE_LEARNED)
+    )
+    risk_seed = int(getattr(args, "risk_seed", DEFAULT_RISK_SCORE_SEED))
     timeliness_metric_key = resolve_timeliness_metric_key(
         getattr(args, "optimize_for_timeliness_metric", DEFAULT_OPTIMIZE_FOR_TIMELINESS_METRIC)
     )
@@ -2357,7 +2626,7 @@ def main():
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
         "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
-        "log_level=%s, random_seed=%d",
+        "risk_score_mode=%s, risk_seed=%d, log_level=%s, random_seed=%d",
         args.mopt_trials,
         int(getattr(args, "optuna_seed", RANDOM_SEED)),
         args.final_only,
@@ -2374,6 +2643,8 @@ def main():
         str(getattr(args, "bisection", "all")),
         str(bool(getattr(args, "skip_exhaustive_testing", False))),
         str(bool(getattr(args, "dry_run", False))),
+        risk_score_mode,
+        risk_seed,
         log_level_name,
         RANDOM_SEED,
     )
@@ -2457,6 +2728,9 @@ def main():
         eval_preds_raw,
         eval_lower,
         eval_upper,
+        risk_score_mode=risk_score_mode,
+        risk_seed=risk_seed,
+        split_name="eval",
     )
     failing_revs_eval = {
         c["commit_id"] for c in eval_commits if c.get("true_label")
@@ -2474,6 +2748,9 @@ def main():
         final_preds_raw,
         final_lower,
         final_upper,
+        risk_score_mode=risk_score_mode,
+        risk_seed=risk_seed,
+        split_name="final",
     )
     failing_revs_final = {
         c["commit_id"] for c in final_commits if c.get("true_label")
@@ -2551,6 +2828,8 @@ def main():
             base_commits_final=final_commits,
             final_lower=final_lower,
             final_upper=final_upper,
+            risk_score_mode=risk_score_mode,
+            risk_seed=risk_seed,
         )
         return
 
@@ -2569,6 +2848,8 @@ def main():
         base_commits_for_context=eval_commits,
         lower_cutoff=eval_lower,
         upper_cutoff=eval_upper,
+        risk_score_mode=risk_score_mode,
+        risk_seed=risk_seed,
     )
 
     if eval_payload is None:
@@ -2597,6 +2878,8 @@ def main():
         base_commits_final=final_commits,
         final_lower=final_lower,
         final_upper=final_upper,
+        risk_score_mode=risk_score_mode,
+        risk_seed=risk_seed,
     )
 
 

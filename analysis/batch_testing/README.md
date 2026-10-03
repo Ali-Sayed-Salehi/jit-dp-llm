@@ -82,6 +82,12 @@ Useful flags (updated to match the current CLI):
   - `--final-only`: skip EVAL and run FINAL using the existing `--output-eval` file.
 - Strategy selection:
   - `--batching` / `--bisection`: filter to specific strategies (CSV list, or `all` / `none`).
+- Risk-score ablations (mutually exclusive; learned scores are the default):
+  - `--risk-learned`: use the model-produced scores without modification.
+  - `--risk-shuffled`: deterministically shuffle learned scores across commits while preserving their exact distribution.
+  - `--risk-random` (alias: `--risk-random-uniform`): replace scores with deterministic Uniform(0,1) values.
+  - `--risk-oracle`: use `1.0` for true regressors and `0.0` for all other commits.
+  - `--risk-seed`: control shuffled/random assignments (default: `42`). EVAL and FINAL use independent deterministic assignments.
 - Optuna:
   - `--mopt-trials`: base number of Optuna trials **per tunable parameter** (actual trials per combo are scaled by the number of tunable parameters for that combo).
   - `--optuna-seed`: seed for reproducible tuning runs.
@@ -99,6 +105,8 @@ Useful flags (updated to match the current CLI):
 
 Notes:
 
+- EVAL parameters must be tuned separately for each risk-score mode. When `--final-only` is used, the simulator rejects an EVAL result produced with a different mode (or a different seed for shuffled/random scores).
+- Both output JSON files record `risk_score_mode` and `risk_score_seed` so ablation artifacts remain self-describing.
 - The script performs a sanity check that failing signature-groups are covered by the perf-jobs dataset (`validate_failing_signatures_coverage`) and will raise if coverage is inconsistent.
 - The script restricts “full suite” batch runs to the union of signature-groups that appear at least once in the EVAL+FINAL cutoff windows (`configure_full_suite_signatures_union`). This avoids charging for signature-groups that cannot affect the simulated window.
 - The EVAL output JSON is annotated with a `splits` payload describing the EVAL/FINAL windows (cutoffs and sizes). This makes results self-describing for downstream aggregation.
@@ -113,6 +121,28 @@ python analysis/batch_testing/simulation.py \
   --bisection PAR \
   --mopt-trials 5 \
   --skip-exhaustive-testing
+```
+
+Example risk-score ablation runs (use distinct output paths for each mode):
+
+```bash
+# Shuffled learned scores
+python analysis/batch_testing/simulation.py \
+  --risk-shuffled --risk-seed 42 \
+  --output-eval analysis/batch_testing/results/shuffled/batch_eval_mopt.json \
+  --output-final analysis/batch_testing/results/shuffled/batch_test_mopt.json
+
+# Random Uniform(0,1) scores
+python analysis/batch_testing/simulation.py \
+  --risk-random --risk-seed 42 \
+  --output-eval analysis/batch_testing/results/random/batch_eval_mopt.json \
+  --output-final analysis/batch_testing/results/random/batch_test_mopt.json
+
+# Oracle 0/1 scores
+python analysis/batch_testing/simulation.py \
+  --risk-oracle \
+  --output-eval analysis/batch_testing/results/oracle/batch_eval_mopt.json \
+  --output-final analysis/batch_testing/results/oracle/batch_test_mopt.json
 ```
 
 ## Worker-Capacity Sweep (`model_machine_count.py`)
