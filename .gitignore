@@ -4,6 +4,8 @@ __pychache__/
 *.pyc
 *.pyo
 .DS_store
+venv_broken*
+broken_venv*
 
 # IDE files
 .vscode/
