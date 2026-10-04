@@ -39,6 +39,7 @@ LLMs/**/*
 **/git_bisect/results/
 **/perf_bisect/results/
 replication_packages/
+slurm_scripts/speed/batch.code-workspace
 
 # cache
 .cache

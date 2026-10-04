@@ -15,6 +15,7 @@ import logging
 import heapq
 
 import bisection_strats as bisection_mod
+from subset_diagnostics import active_recorder
 from bisection_strats import (
     TestExecutor,
     run_test_suite,
@@ -301,6 +302,9 @@ def _record_regressor_found_if_first(metrics: _StreamingMetrics, commit: dict, a
     metrics.found_regressors.add(cid)
     ttc_min = (at_time - commit["ts"]).total_seconds() / 60.0
     metrics.culprit_times.append(ttc_min)
+    recorder = active_recorder()
+    if recorder is not None:
+        recorder.record_found(cid, at_time)
 
 
 class _SigGroupBisectProcess:
@@ -332,6 +336,7 @@ class _SigGroupBisectProcess:
 
         self.n = len(batch)
         self.status = ["unknown"] * self.n
+        self._diagnostic_detection_id = None
 
         # Each interval test in this process runs only this signature-group.
         self.durations = get_signature_durations_for_ids([self.sig_group_id])
@@ -1308,6 +1313,10 @@ def _run_streaming_suite_and_bisect_per_sig_group(
     """
     if batch_end_idx < batch_start_idx:
         return
+    recorder = active_recorder()
+    batch_id = (recorder.record_batch(batch_start_idx, batch_end_idx,
+                                      suite_requested_start_time, suite_durations)
+                if recorder is not None else None)
     if not suite_durations:
         return
 
@@ -1459,11 +1468,19 @@ def _run_streaming_suite_and_bisect_per_sig_group(
             proc_cls = _resolve_sig_group_bisect_process_cls(bisect_fn)
 
             proc = proc_cls(batch_slice, defect_locals, gid, executor, metrics, push_event)
+            if recorder is not None:
+                proc._diagnostic_detection_id = recorder.record_detection(
+                    batch_id, gid, start_idx, batch_end_idx,
+                    {start_idx + i for i in defect_locals}, t,
+                )
+                recorder.current_detection_id = proc._diagnostic_detection_id
             proc.start(t)
             continue
 
         if kind == "bisect_interval_done":
             proc = payload["proc"]
+            if recorder is not None:
+                recorder.current_detection_id = proc._diagnostic_detection_id
             proc.on_interval_done(payload, t)
             continue
 
@@ -1573,6 +1590,7 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
         )
 
     executor = TestExecutor(num_workers)
+    recorder = active_recorder()
 
     # Precompute, for each commit, the set of perf signature-groups that actually ran.
     tested_sig_group_sets = []
@@ -1611,10 +1629,14 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
                 continue
 
         if not suite_sig_ids:
+            if recorder is not None:
+                recorder.record_batch(idx, idx, submit_time, [])
             continue
 
         suite_sig_ids_sorted = sorted(set(suite_sig_ids))
         durations = get_signature_durations_for_ids(suite_sig_ids_sorted)
+        batch_id = (recorder.record_batch(idx, idx, submit_time, durations)
+                    if recorder is not None else None)
         if not durations:
             continue
 
@@ -1697,11 +1719,19 @@ def simulate_twsb_with_bisect(commits, bisect_fn, _unused_param, num_workers):
 
                 batch_slice = commits[start_idx : idx + 1]
                 proc = proc_cls(batch_slice, defect_locals, gid, executor, metrics, push_event)
+                if recorder is not None:
+                    proc._diagnostic_detection_id = recorder.record_detection(
+                        batch_id, gid, start_idx, idx,
+                        {start_idx + i for i in defect_locals}, t,
+                    )
+                    recorder.current_detection_id = proc._diagnostic_detection_id
                 proc.start(t)
                 continue
 
             if kind == "bisect_interval_done":
                 proc = payload["proc"]
+                if recorder is not None:
+                    recorder.current_detection_id = proc._diagnostic_detection_id
                 proc.on_interval_done(payload, t)
                 continue
 

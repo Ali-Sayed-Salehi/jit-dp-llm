@@ -145,6 +145,77 @@ python analysis/batch_testing/simulation.py \
   --output-final analysis/batch_testing/results/oracle/batch_test_mopt.json
 ```
 
+## Subset Coverage and Diagnosis Diagnostics
+
+Use `--subset-diagnostics-dir DIR` to record additional observations during FINAL
+replay. Recording does not change batching, test selection, scheduling, tuning,
+or the normal result JSON. Use `--final-only` with an existing EVAL file to avoid
+another tuning run. Diagnostics support TWSB and the TWB, FSB, RASB, RASB-la,
+RAPB, RAPB-la, and RATB families, including their `-s` variants.
+
+From the repository root, replay the saved paper configurations with:
+
+```bash
+python analysis/batch_testing/simulation.py \
+  --input-json-eval analysis/batch_testing/final_test_results_perf_codebert_eval.json \
+  --input-json-final analysis/batch_testing/final_test_results_perf_codebert_final_test.json \
+  --output-eval analysis/batch_testing/results/50t_paper_reproduction/batch_eval_mopt.json \
+  --output-final analysis/batch_testing/results/subset_diagnostics/batch_test_mopt.json \
+  --subset-diagnostics-dir analysis/batch_testing/results/subset_diagnostics/diagnostics \
+  --final-only --skip-exhaustive-testing --risk-learned --risk-seed 42 \
+  --batching TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s \
+  --bisection PAR --build-time-minutes 98.7 \
+  --workers-android 60 --workers-windows 120 --workers-linux 100 --workers-mac 250 \
+  --unknown-platform-pool mac
+```
+
+The corresponding Slurm command is active in
+[`slurm_scripts/speed/commands.sh`](../../slurm_scripts/speed/commands.sh).
+The replay uses CodeBERT inputs, the saved EVAL parameters, the paper's worker
+counts, and its 98.7-minute build overhead. Outputs go to
+`analysis/batch_testing/results/subset_diagnostics/`; EVAL is not rerun.
+
+For other saved runs, use their prediction inputs, workers, build overhead, and
+risk mode. For a risk ablation, use the matching EVAL file and replace
+`--risk-learned` with the appropriate score-mode flag.
+
+The output contains the normal `batch_test_mopt.json` plus five files in
+`diagnostics/`:
+
+| File | Contents |
+| --- | --- |
+| `summary.csv` | Standard metrics, first-batch coverage counts, unknown/never-covered counts, and mean/maximum coverage waiting time. |
+| `batches.csv` | Every batch, including empty suites: commit indices, arrival span, flush time, risk sum, selected signature-group IDs, and suite size. |
+| `regressors.csv` | One row per labeled regression and configuration: first-batch overlap, missed batches, coverage waiting time, detection and identification times, and candidate interval sizes. |
+| `detections.csv` | Each failing signature-group's root detection and candidate interval, with root build, queue, and execution times. |
+| `manifest.json` | Execution settings, selected parameters, commit/batch fingerprints, and checks for matching parameters and boundaries in each full/subset pair. |
+
+`first_batch_covered` means that the first batch containing the regressor includes
+at least one of its failing signature-groups. `first_batch_failing_group_coverage`
+is the fraction of its failing groups included, which is distinct from the
+fraction of the entire suite selected. One failing group suffices for detection.
+`missed_batches_before_coverage` includes the first batch if it misses all failing
+groups. `coverage_wait_hr` runs from that first batch's flush to the first later
+flush that includes a failing group; it excludes job execution and queueing.
+
+For a regression with known coverage and a recorded culprit, TTC decomposes into
+`batch_wait_hr + coverage_wait_hr + covered_flush_to_detection_hr +
+detection_to_culprit_hr`. The third component includes build, queue, and execution
+time for the first observed failure. These are observations of the current run,
+not estimates of how fast a hypothetical full-suite run would have been.
+`first_detection_candidate_count` describes the first root failure's search
+interval; `finding_candidate_count` describes the search that actually identified
+the culprit. They can differ when several signature-groups fail.
+
+Missing observations are blank, not zero. A never-covered regression retains its
+missed-batch count and `coverage_wait_lower_bound_hr` through the final batch
+flush. Missing failing-signature metadata is explicitly marked unknown, even
+when the simulator's existing fallback identifies a culprit. Coverage-wait means
+exclude unknown and never-covered cases, whose counts are reported separately.
+Consult `manifest.json` before treating a full/subset pair as a comparison with
+fixed parameters and batch boundaries; the recorder reports mismatches and does
+not retune or replace either configuration.
+
 ## Worker-Capacity Sweep (`model_machine_count.py`)
 
 `analysis/batch_testing/model_machine_count.py` answers a different question than `simulation.py`:

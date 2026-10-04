@@ -70,6 +70,28 @@ echo "Running script ..."
 # --unknown-platform-pool mac \
 # --log-level INFO
 
+# Replay the paper configurations with subset-coverage diagnostics; no EVAL tuning.
+# Outputs: results/subset_diagnostics/batch_test_mopt.json and diagnostics/*.csv.
+python "$REPO_ROOT/analysis/batch_testing/simulation.py" \
+--input-json-eval "$REPO_ROOT/analysis/batch_testing/final_test_results_perf_codebert_eval.json" \
+--input-json-final "$REPO_ROOT/analysis/batch_testing/final_test_results_perf_codebert_final_test.json" \
+--output-eval "$REPO_ROOT/analysis/batch_testing/results/50t_paper_reproduction/batch_eval_mopt.json" \
+--output-final "$REPO_ROOT/analysis/batch_testing/results/subset_diagnostics/batch_test_mopt.json" \
+--subset-diagnostics-dir "$REPO_ROOT/analysis/batch_testing/results/subset_diagnostics/diagnostics" \
+--final-only \
+--skip-exhaustive-testing \
+--risk-learned \
+--risk-seed 42 \
+--build-time-minutes 98.7 \
+--batching "TWSB,TWB,TWB-s,FSB,FSB-s,RASB,RASB-s,RASB-la,RASB-la-s,RAPB,RAPB-s,RAPB-la,RAPB-la-s,RATB,RATB-s" \
+--bisection PAR \
+--workers-android 60 \
+--workers-windows 120 \
+--workers-linux 100 \
+--workers-mac 250 \
+--unknown-platform-pool mac \
+--log-level INFO
+
 # full strategies list:
 # --batching "TWSB,\
 # TWB,TWB-s,TWB-hats,\

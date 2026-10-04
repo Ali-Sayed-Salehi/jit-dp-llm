@@ -29,6 +29,7 @@ import argparse
 import logging
 
 import bisection_strats as bisection_mod
+from subset_diagnostics import SubsetDiagnostics, SUPPORTED_BATCHING, collect, write_diagnostics
 
 from batch_strats import (
     simulate_twb_with_bisect,
@@ -575,6 +576,15 @@ def get_args():
         "--final-only",
         action="store_true",
         help="Skip running eval; load eval results from --output-eval and run only the FINAL replay.",
+    )
+    parser.add_argument(
+        "--subset-diagnostics-dir",
+        default=None,
+        help=(
+            "Write separate FINAL batch-coverage and regression-diagnosis CSVs to this directory. "
+            "Supports TWSB and TWB/FSB/RASB/RASB-la/RAPB/RAPB-la/RATB with their -s variants. "
+            "Use --final-only to replay saved parameters without tuning."
+        ),
     )
     parser.add_argument(
         "--num-test-workers",
@@ -2223,6 +2233,7 @@ def run_final_test_unified(
     final_upper=None,
     risk_score_mode=RISK_SCORE_MODE_LEARNED,
     risk_seed=DEFAULT_RISK_SCORE_SEED,
+    subset_diagnostics_dir=None,
 ):
     """
     Replay selected configurations on the FINAL prediction set.
@@ -2288,14 +2299,52 @@ def run_final_test_unified(
         and (selected_bisection_set is None or "PAR" in selected_bisection_set)
     )
 
+    diagnostic_records = []
+    if subset_diagnostics_dir is not None:
+        unsupported = set()
+        for combo_name, entry in eval_payload["eval_output"].items():
+            if combo_name == "Baseline (TWSB + PAR)":
+                continue
+            if " + " not in combo_name or not isinstance(entry, dict):
+                continue
+            batching, bisection = combo_name.split(" + ", 1)
+            if selected_batching_set is not None and batching not in selected_batching_set:
+                continue
+            if selected_bisection_set is not None and bisection not in selected_bisection_set:
+                continue
+            if batching not in SUPPORTED_BATCHING:
+                unsupported.add(batching)
+        if unsupported:
+            raise ValueError(
+                "Subset diagnostics do not support these batching strategies: "
+                + ", ".join(sorted(unsupported))
+                + ". Select the standard paper strategies explicitly with --batching."
+            )
+
+    def replay(combo_name, batch_fn, bis_fn, param, parameters):
+        if subset_diagnostics_dir is None:
+            return batch_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
+        recorder = SubsetDiagnostics(
+            combo_name, base_commits_final,
+            bisection_mod.get_failing_signature_groups_for_revision,
+            [gid for gid, _ in get_batch_signature_durations()],
+            bisection_mod._build_time_minutes,
+        )
+        with collect(recorder):
+            result = batch_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
+        diagnostic_records.append(recorder.finish(
+            convert_result_minutes_to_hours(dict(result)), parameters,
+        ))
+        return result
+
     if run_exhaustive_testing_et:
         et_results_final = run_exhaustive_testing(base_commits_final)
     else:
         et_results_final = {}
     baseline_final = {}
     if baseline_selected:
-        baseline_final = simulate_twsb_with_bisect(
-            base_commits_final, "PAR", None, WORKER_POOLS
+        baseline_final = replay(
+            "Baseline (TWSB + PAR)", simulate_twsb_with_bisect, "PAR", None, {}
         )
         baseline_final = convert_result_minutes_to_hours(baseline_final)
 
@@ -2503,7 +2552,7 @@ def run_final_test_unified(
             else:
                 param = (base_param, float(hats_thr))
 
-        res_final = b_fn(base_commits_final, bis_fn, param, WORKER_POOLS)
+        res_final = replay(combo_name, b_fn, bis_fn, param, best_params)
         res_final = convert_result_minutes_to_hours(res_final)
 
         saved_pct = time_saved_pct(
@@ -2581,6 +2630,21 @@ def run_final_test_unified(
     with open(OUTPUT_PATH_FINAL, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=2)
     logger.info("Saved FINAL replay to %s", OUTPUT_PATH_FINAL)
+    if subset_diagnostics_dir is not None:
+        commit_fingerprint = [
+            [c["commit_id"], c["ts"].isoformat(), c["risk"], bool(c.get("true_label"))]
+            for c in base_commits_final
+        ]
+        write_diagnostics(subset_diagnostics_dir, diagnostic_records, {
+            "split": "final", "input_json_final": os.path.abspath(INPUT_JSON_FINAL),
+            "output_json_final": os.path.abspath(OUTPUT_PATH_FINAL),
+            "splits": final_results["splits"], "worker_pools": final_results["worker_pools"],
+            "build_time_minutes": bisection_mod._build_time_minutes,
+            "risk_score_mode": risk_score_mode, "risk_score_seed": risk_seed,
+            "commits_sha256": hashlib.sha256(json.dumps(commit_fingerprint).encode()).hexdigest(),
+            "full_suite_signature_group_ids": [gid for gid, _ in get_batch_signature_durations()],
+        })
+        logger.info("Saved subset diagnostics to %s", subset_diagnostics_dir)
     return final_results
 
 
@@ -2830,6 +2894,7 @@ def main():
             final_upper=final_upper,
             risk_score_mode=risk_score_mode,
             risk_seed=risk_seed,
+            subset_diagnostics_dir=args.subset_diagnostics_dir,
         )
         return
 
@@ -2880,6 +2945,7 @@ def main():
         final_upper=final_upper,
         risk_score_mode=risk_score_mode,
         risk_seed=risk_seed,
+        subset_diagnostics_dir=args.subset_diagnostics_dir,
     )
 
 
