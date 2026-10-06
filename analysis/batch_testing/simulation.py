@@ -2720,7 +2720,7 @@ def main():
         "workers(android/windows/linux/mac)=(%d/%d/%d/%d), "
         "unknown_platform_pool=%s, "
         "build_time_minutes=%s, "
-        "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, "
+        "batching=%s, bisection=%s, skip_exhaustive_testing=%s, dry_run=%s, plot_pareto_fronts=%s, "
         "risk_score_mode=%s, risk_seed=%d, log_level=%s, random_seed=%d",
         args.mopt_trials,
         int(getattr(args, "optuna_seed", RANDOM_SEED)),
@@ -2738,6 +2738,7 @@ def main():
         str(getattr(args, "bisection", "all")),
         str(bool(getattr(args, "skip_exhaustive_testing", False))),
         str(bool(getattr(args, "dry_run", False))),
+        str(bool(args.plot_pareto_fronts)),
         risk_score_mode,
         risk_seed,
         log_level_name,
