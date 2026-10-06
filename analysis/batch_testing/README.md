@@ -80,6 +80,7 @@ Useful flags (updated to match the current CLI):
 - Outputs:
   - `--output-eval` / `--output-final`: where to write the EVAL and FINAL JSON outputs.
   - `--final-only`: skip EVAL and run FINAL using the existing `--output-eval` file.
+  - `--plot-pareto-fronts`: optionally save EVAL Pareto plots and trial data, plus a FINAL comparison of selected configurations. Disabled by default.
 - Strategy selection:
   - `--batching` / `--bisection`: filter to specific strategies (CSV list, or `all` / `none`).
 - Risk-score ablations (mutually exclusive; learned scores are the default):
@@ -506,6 +507,52 @@ All bisection strategies share:
 ### SWF - Sequential Walk-Forward
 - **Mechanics**: for a failing interval `[lo..hi]`, test `[lo..lo]`, then `[lo..lo+1]`, … until a prefix fails; the first failing prefix end is the culprit.
 - **Intuition**: effective when culprits tend to be near the start of a batch; worst-case `O(n)` tests but can terminate quickly when the defect is early.
+
+## Optional Pareto Plots
+
+Add `--plot-pareto-fronts` to a normal `simulation.py` command to plot total
+tests (horizontal axis) against maximum TTC in hours (vertical axis).
+Both metrics are minimized. Plots are saved as PNG and PDF files beside the
+corresponding EVAL or FINAL results JSON; they work without a display server.
+Matplotlib is required only when this flag is enabled and is already listed
+in `requirements.txt`.
+
+EVAL plots show every feasible sampled configuration, the observed Pareto
+front, and the configuration selected for FINAL. There is one plot per
+selected batching–bisection combination and one combined comparison. TWSB
+and ET appear as fixed reference points when included in the run. Only finite
+results that identify all regressions are plotted. The front always uses tests
+and **maximum TTC**, even if tuning uses another latency objective. These are
+fronts among sampled configurations, not guarantees of a global optimum.
+
+For an EVAL output named `batch_eval_mopt.json`, additional files are:
+
+- `batch_eval_mopt_pareto_trials.json`: all completed trial results and their
+  parameters, including infeasible trials. Missing/non-finite values are null.
+- `batch_eval_mopt_pareto_points.csv`: plotted points, selected-configuration
+  indicators, and Pareto membership within each combination and overall.
+- `batch_eval_mopt_pareto_all.png` / `.pdf`: combined EVAL comparison.
+- `batch_eval_mopt_pareto_<combination>.png` / `.pdf`: individual EVAL plots.
+
+FINAL saves `<final-stem>_pareto_selected.png` / `.pdf` and
+`<final-stem>_pareto_points.csv`. It compares the selected configurations;
+there is no additional tuning or replay to produce a per-strategy FINAL curve.
+Axes automatically use a labeled logarithmic scale when positive values span
+at least a factor of 100, keeping extreme reference points visible.
+
+With `--final-only --plot-pareto-fronts`, matching saved EVAL trial data is
+reused. If it is absent or does not match the saved EVAL JSON, the simulator
+logs a warning and generates selected-configuration comparison plots instead
+of reconstructing tuning fronts. Existing results JSON schemas, sampling,
+parameter selection, and simulation counts are unchanged. Without the flag,
+no trial sidecar or plot files are produced, and matplotlib is not imported.
+
+Verify the plotting feature with:
+
+```bash
+cd analysis/batch_testing
+../../venv/bin/python -m unittest -v test_pareto_plots.py
+```
 
 ## Optuna Optimization
 

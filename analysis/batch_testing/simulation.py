@@ -573,6 +573,15 @@ def get_args():
         help="Where to write FINAL sim results",
     )
     parser.add_argument(
+        "--plot-pareto-fronts",
+        action="store_true",
+        help=(
+            "Save EVAL trial data and tests-versus-max-TTC Pareto plots beside "
+            "the results JSON files, plus a FINAL selected-configuration comparison. "
+            "Disabled by default; requires matplotlib."
+        ),
+    )
+    parser.add_argument(
         "--final-only",
         action="store_true",
         help="Skip running eval; load eval results from --output-eval and run only the FINAL replay.",
@@ -1333,6 +1342,7 @@ def run_evaluation_mopt(
     upper_cutoff=None,
     risk_score_mode=RISK_SCORE_MODE_LEARNED,
     risk_seed=DEFAULT_RISK_SCORE_SEED,
+    collect_pareto_trials=False,
 ):
     """
     Run the Optuna-based evaluation ("mopt") stage on the EVAL prediction set.
@@ -1357,6 +1367,7 @@ def run_evaluation_mopt(
     optuna_seed = int(optuna_seed)
     risk_score_mode = normalize_risk_score_mode(risk_score_mode)
     risk_seed = int(risk_seed)
+    pareto_trials = {} if collect_pareto_trials else None
 
     logger.info(
         "Starting Optuna evaluation (mopt) with INPUT_JSON_EVAL=%s, "
@@ -1596,6 +1607,8 @@ def run_evaluation_mopt(
                 int(combo_param_count),
                 int(combo_trials),
             )
+            if collect_pareto_trials:
+                pareto_trials[combo_key] = []
 
             def objective(trial):
                 if trial.number % 10 == 0:
@@ -1740,6 +1753,18 @@ def run_evaluation_mopt(
 
                 res = b_fn(base_commits_for_context, bis_fn, param, WORKER_POOLS)
                 res = convert_result_minutes_to_hours(res)
+                if collect_pareto_trials:
+                    pareto_trials[combo_key].append({
+                        "trial_number": trial.number,
+                        "params": dict(trial.params),
+                        "total_tests_run": res.get("total_tests_run"),
+                        "max_time_to_culprit_hr": res.get("max_time_to_culprit_hr"),
+                        "found_all_regressors": bool(res.get("found_all_regressors", False)),
+                        "num_regressors_total": res.get("num_regressors_total"),
+                        "num_regressors_found": res.get("num_regressors_found"),
+                        "optimization_metric": optimize_for_timeliness_metric,
+                        "optimization_metric_value": res.get(optimize_for_timeliness_metric),
+                    })
                 if not bool(res.get("found_all_regressors", False)):
                     logger.warning(
                         "Trial did not find all regressors: combo=%s, trial=%d, found=%s/%s, param=%r; returning inf",
@@ -2178,12 +2203,15 @@ def run_evaluation_mopt(
     out_eval["best_overall_improvement_over_baseline"] = overall_ranked
     out_eval["pareto-efficient_combos"] = pareto_ranked
 
-    return {
+    payload = {
         "eval_output": out_eval,
         "eval_lower_cutoff": lower_cutoff.isoformat(),
         "eval_upper_cutoff": upper_cutoff.isoformat() if upper_cutoff else None,
         "mode": "mopt",
     }
+    if collect_pareto_trials:
+        payload["pareto_trials"] = pareto_trials
+    return payload
 
 
 def validate_eval_risk_score_config(eval_payload, risk_score_mode, risk_seed) -> None:
@@ -2626,7 +2654,7 @@ def run_final_test_unified(
         final_results["pareto-efficient_combos"] = []
 
     # Save FINAL
-    os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL), exist_ok=True)
+    os.makedirs(os.path.dirname(OUTPUT_PATH_FINAL) or ".", exist_ok=True)
     with open(OUTPUT_PATH_FINAL, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=2)
     logger.info("Saved FINAL replay to %s", OUTPUT_PATH_FINAL)
@@ -2663,6 +2691,9 @@ def main():
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
+    if args.plot_pareto_fronts:
+        from pareto_plots import require_plotting_dependency
+        require_plotting_dependency()
     # Apply random seed override as early as possible for reproducibility
     global RANDOM_SEED
     RANDOM_SEED = int(RANDOM_SEED)
@@ -2881,7 +2912,7 @@ def main():
             "Reusing eval results from %s; running FINAL only...",
             OUTPUT_PATH_EVAL,
         )
-        run_final_test_unified(
+        final_results = run_final_test_unified(
             eval_payload,
             INPUT_JSON_FINAL,
             OUTPUT_PATH_FINAL,
@@ -2896,6 +2927,20 @@ def main():
             risk_seed=risk_seed,
             subset_diagnostics_dir=args.subset_diagnostics_dir,
         )
+        if args.plot_pareto_fronts:
+            from pareto_plots import load_trial_data, write_pareto_plots
+            plot_options = {
+                "selected_batching": selected_batching,
+                "selected_bisection": selected_bisection,
+                "include_et": run_et,
+            }
+            write_pareto_plots(
+                OUTPUT_PATH_EVAL, reused_eval_output, split="EVAL",
+                trials=load_trial_data(OUTPUT_PATH_EVAL), **plot_options,
+            )
+            write_pareto_plots(
+                OUTPUT_PATH_FINAL, final_results, split="FINAL", **plot_options,
+            )
         return
 
     # Normal flow: run Optuna evaluation (mopt), save eval output, then FINAL replay
@@ -2915,6 +2960,7 @@ def main():
         upper_cutoff=eval_upper,
         risk_score_mode=risk_score_mode,
         risk_seed=risk_seed,
+        collect_pareto_trials=args.plot_pareto_fronts,
     )
 
     if eval_payload is None:
@@ -2926,13 +2972,16 @@ def main():
         )
         eval_payload["eval_output"]["splits"] = split_metadata
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL), exist_ok=True)
+    os.makedirs(os.path.dirname(OUTPUT_PATH_EVAL) or ".", exist_ok=True)
     with open(OUTPUT_PATH_EVAL, "w", encoding="utf-8") as f:
         json.dump(eval_payload["eval_output"], f, indent=2)
     logger.info("Saved EVAL results to %s", OUTPUT_PATH_EVAL)
+    if args.plot_pareto_fronts:
+        from pareto_plots import save_trial_data
+        save_trial_data(OUTPUT_PATH_EVAL, eval_payload["pareto_trials"])
 
     # Unified FINAL replay
-    run_final_test_unified(
+    final_results = run_final_test_unified(
         eval_payload,
         INPUT_JSON_FINAL,
         OUTPUT_PATH_FINAL,
@@ -2947,6 +2996,20 @@ def main():
         risk_seed=risk_seed,
         subset_diagnostics_dir=args.subset_diagnostics_dir,
     )
+    if args.plot_pareto_fronts:
+        from pareto_plots import write_pareto_plots
+        plot_options = {
+            "selected_batching": selected_batching,
+            "selected_bisection": selected_bisection,
+            "include_et": run_et,
+        }
+        write_pareto_plots(
+            OUTPUT_PATH_EVAL, eval_payload["eval_output"], split="EVAL",
+            trials=eval_payload["pareto_trials"], **plot_options,
+        )
+        write_pareto_plots(
+            OUTPUT_PATH_FINAL, final_results, split="FINAL", **plot_options,
+        )
 
 
 if __name__ == "__main__":
