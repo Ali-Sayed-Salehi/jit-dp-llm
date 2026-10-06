@@ -524,6 +524,8 @@ and ET appear as fixed reference points when included in the run. Only finite
 results that identify all regressions are plotted. The front always uses tests
 and **maximum TTC**, even if tuning uses another latency objective. These are
 fronts among sampled configurations, not guarantees of a global optimum.
+Selected EVAL configurations use a distinct magenta star. Strategy titles and
+legends omit the bisection suffix when only one bisection method is plotted.
 
 For an EVAL output named `batch_eval_mopt.json`, additional files are:
 
@@ -537,6 +539,9 @@ For an EVAL output named `batch_eval_mopt.json`, additional files are:
 FINAL saves `<final-stem>_pareto_selected.png` / `.pdf` and
 `<final-stem>_pareto_points.csv`. It compares the selected configurations;
 there is no additional tuning or replay to produce a per-strategy FINAL curve.
+FINAL comparisons use different hollow markers for the strategies so
+overlapping points remain visible, and reference strategies are labeled as
+baselines. Test-count ticks use compact suffixes, such as `100k` and `1M`.
 Axes automatically use a labeled logarithmic scale when positive values span
 at least a factor of 100, keeping extreme reference points visible.
 

@@ -15,6 +15,7 @@ X_KEY = "total_tests_run"
 Y_KEY = "max_time_to_culprit_hr"
 BASELINE = "TWSB + PAR"
 ET = "Exhaustive Testing (ET)"
+SELECTED_COLOR = "#d000a6"
 
 
 def require_plotting_dependency():
@@ -194,12 +195,28 @@ def _write_points_csv(path, points):
             })
 
 
+def _format_test_count(value, _position=None):
+    """Keep test-count ticks compact on both linear and logarithmic axes."""
+    for scale, suffix in ((1_000_000, "M"), (1_000, "k")):
+        if abs(value) >= scale:
+            return f"{value / scale:g}{suffix}"
+    return f"{value:g}"
+
+
+def _strategy_label(name, names):
+    """Omit the bisection suffix only when the run shows one method."""
+    methods = {candidate.split(" + ", 1)[1] for candidate in names if " + " in candidate}
+    return name.split(" + ", 1)[0] if len(methods) == 1 else name
+
+
 def _render(points, destination, title, *, baseline=None, tuning_front=False, style_names=None):
     # Import only after all simulations complete; no display server is needed.
     from matplotlib import colormaps
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
     from matplotlib.lines import Line2D
+    from matplotlib.markers import MarkerStyle
+    from matplotlib.ticker import FuncFormatter, NullFormatter
 
     names = sorted({point["strategy"] for point in points})
     style_names = style_names or names
@@ -207,50 +224,72 @@ def _render(points, destination, title, *, baseline=None, tuning_front=False, st
     FigureCanvasAgg(fig)
     ax = fig.subplots()
     handles = []
-    markers = ("o", "s", "^", "D", "v", "P", "h", "<", ">", "p", "8", "d")
+    markers = ("o", "s", "^", "D", "v", "P", "h", "<", ">", "p", "8", "d",
+               "X", "H", "+", "x", "1", "2", "3", "4")
     for name in names:
         n = style_names.index(name)
         color = colormaps["tab20"]((2 * (n % 10) + (n % 20) // 10))
-        marker = markers[(n // 20) % len(markers)]
+        marker = markers[(n // 20 if tuning_front else n) % len(markers)]
         group = [point for point in points if point["strategy"] == name]
-        ax.scatter([p[X_KEY] for p in group], [p[Y_KEY] for p in group],
-                   color=color, marker=marker, s=24, alpha=0.35, zorder=2)
+        label = _strategy_label(name, style_names)
         if tuning_front:
+            ax.scatter([p[X_KEY] for p in group], [p[Y_KEY] for p in group],
+                       color=color, marker=marker, s=24, alpha=0.35, zorder=2)
             front = [group[i] for i in pareto_indices(group)]
             front = sorted({(p[X_KEY], p[Y_KEY]) for p in front})
             if front:
                 ax.plot([xy[0] for xy in front], [xy[1] for xy in front],
                         color=color, marker=marker, markersize=4, linewidth=1.2, zorder=3)
-        for point in group:
-            if point.get("selected"):
-                ax.scatter(point[X_KEY], point[Y_KEY], color=color,
-                           marker="X" if point["kind"] == "reference" else "*",
-                           s=100, edgecolors="black", linewidths=0.5, zorder=5)
-        handles.append(Line2D([0], [0], color=color, marker=marker, label=name))
+            for point in group:
+                if point.get("selected"):
+                    reference = point["kind"] == "reference"
+                    ax.scatter(point[X_KEY], point[Y_KEY],
+                               color=color if reference else SELECTED_COLOR,
+                               marker="X" if reference else "*",
+                               s=100, edgecolors="black", linewidths=0.5, zorder=5)
+            handles.append(Line2D([0], [0], color=color, marker=marker, label=label))
+        else:
+            # Hollow, varied shapes reveal coincident configurations without
+            # moving their coordinates or hiding earlier points under a fill.
+            colors = ({"facecolors": "none", "edgecolors": color}
+                      if MarkerStyle(marker).is_filled() else {"color": color})
+            ax.scatter([p[X_KEY] for p in group], [p[Y_KEY] for p in group],
+                       marker=marker, s=110, linewidths=1.7, zorder=5, **colors)
+            if any(p["kind"] == "reference" for p in group):
+                label += " (baseline)"
+            handles.append(Line2D([0], [0], color=color, marker=marker,
+                                  linestyle="none", markerfacecolor="none",
+                                  markersize=9, markeredgewidth=1.7, label=label))
 
     overall = sorted({(points[i][X_KEY], points[i][Y_KEY]) for i in pareto_indices(points)})
     if len(overall) >= 2:
         ax.plot([xy[0] for xy in overall], [xy[1] for xy in overall],
                 color="black", linestyle="--", linewidth=1.4, zorder=4)
-    ax.scatter([xy[0] for xy in overall], [xy[1] for xy in overall],
-               facecolors="none", edgecolors="black", s=75, linewidths=1.1, zorder=4)
-    handles.append(Line2D([0], [0], color="black", linestyle="--", marker="o", markerfacecolor="none",
-                          label="Sampled Pareto front" if tuning_front else "Pareto front of shown configurations"))
-    handles.append(Line2D([0], [0], color="black", marker="*", linestyle="none",
-                          markersize=10, label="Selected configuration"))
-    if any(p["kind"] == "reference" for p in points):
+    if tuning_front:
+        ax.scatter([xy[0] for xy in overall], [xy[1] for xy in overall],
+                   facecolors="none", edgecolors="black", s=75, linewidths=1.1, zorder=4)
+    if tuning_front or len(overall) >= 2:
+        handles.append(Line2D([0], [0], color="black", linestyle="--",
+                              marker="o" if tuning_front else None, markerfacecolor="none",
+                              label="Sampled Pareto front" if tuning_front else "Pareto front of shown configurations"))
+    if tuning_front and any(p.get("selected") and p["kind"] != "reference" for p in points):
+        handles.append(Line2D([0], [0], color=SELECTED_COLOR, marker="*", linestyle="none",
+                              markersize=10, label="Selected configuration"))
+    if tuning_front and any(p["kind"] == "reference" for p in points):
         handles.append(Line2D([0], [0], color="black", marker="X", linestyle="none",
-                              label="Fixed reference"))
+                              label="Baseline"))
     if baseline is not None:
         ax.scatter(baseline[X_KEY], baseline[Y_KEY], color="black", marker="X", s=80, zorder=5)
         handles.append(Line2D([0], [0], color="black", marker="X", linestyle="none",
-                              label="TWSB + PAR reference"))
+                              label=_strategy_label(baseline["strategy"], style_names) + " baseline"))
 
     shown = points + ([baseline] if baseline is not None else [])
     for axis, key in (("x", X_KEY), ("y", Y_KEY)):
         values = [float(p[key]) for p in shown]
         if min(values) > 0 and max(values) / min(values) >= 100:
             getattr(ax, f"set_{axis}scale")("log")
+    ax.xaxis.set_major_formatter(FuncFormatter(_format_test_count))
+    ax.xaxis.set_minor_formatter(NullFormatter())
     ax.set_xlabel("Total tests" + (" (log scale)" if ax.get_xscale() == "log" else ""))
     ax.set_ylabel("Maximum TTC (hours)" + (" (log scale)" if ax.get_yscale() == "log" else ""))
     ax.set_title(title)
@@ -287,7 +326,7 @@ def write_pareto_plots(results_path, results, *, split, trials=None,
             group = [point for point in points if point["strategy"] == name]
             slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
             destination = path.with_name(path.stem + "_pareto_" + slug)
-            _render(group, destination, f"EVAL: {name}", tuning_front=True,
+            _render(group, destination, f"EVAL: {_strategy_label(name, style_names)}", tuning_front=True,
                     baseline=baseline if name != BASELINE else None, style_names=style_names)
             written.append(destination)
     logger.info("Saved %s Pareto plots and point data beside %s", split, path)
