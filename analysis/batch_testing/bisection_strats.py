@@ -19,6 +19,7 @@ import json
 import logging
 import random
 import heapq
+from worker_diagnostics import active_job_recorder
 
 # ---------- Perf metadata loading ----------
 
@@ -1029,6 +1030,9 @@ class TestExecutor:
         self._worker_heaps = {}
         # Cumulative CPU time in minutes across all scheduled tests
         self.total_cpu_minutes = 0.0
+        self._job_recorder = active_job_recorder()
+        if self._job_recorder is not None:
+            self._job_recorder.attach(self.pool_sizes)
         logger.debug("Created TestExecutor with pools=%s", self.pool_sizes)
 
     def _ensure_initialized(self, pool: str, t0):
@@ -1076,6 +1080,8 @@ class TestExecutor:
         heapq.heappush(heap, (finish_time, idx))
         # Accumulate CPU time regardless of parallelism
         self.total_cpu_minutes += duration_float
+        if self._job_recorder is not None:
+            self._job_recorder.record_job(pool, requested_start_time, actual_start, finish_time)
         # logger.debug(
         #     "Scheduled test on worker %d: start=%s, duration=%.2f min, finish=%s",
         #     idx,

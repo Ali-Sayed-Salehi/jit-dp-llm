@@ -557,3 +557,67 @@ Important output fields (for analysis / paper writing):
 - **FINAL summary keys**: `best_by_total_tests`, `best_by_max_ttc`, `best_by_mean_feedback_time`, plus:
   - `best_overall_improvement_over_baseline`: a ranked list of combos (Pareto-efficient first, then the rest) using a combined “tests saved + timeliness saved” score.
   - `pareto-efficient_combos`: a ranked list of only Pareto-efficient combos (improve both tests and timeliness vs baseline).
+
+## Worker capacity and backlog sensitivity
+
+Run from the repository root using the existing Python environment:
+
+```bash
+venv/bin/python analysis/batch_testing/worker_capacity_sensitivity.py
+```
+
+This replays TWSB, RAPB-la, RASB-la, and FSB with PAR, plus exhaustive testing
+(ET), at 50%, 75%, 100%, 125%, and 150% of the saved worker pools. Batching
+parameters are frozen from `results/50t_paper_reproduction/batch_eval_mopt.json`;
+there is no additional tuning. Only worker capacity changes; the experiment
+uses the paper's simulation. Its 100% results must exactly reproduce the saved
+paper metrics. The learned predictions, seed, commit windows,
+signature-group durations, full-suite definition, and 98.7-minute build overhead
+match the paper reproduction. Worker counts use the existing per-pool scaling
+helper, including integer rounding. The actual counts are recorded in each run.
+
+Outputs are stored in `results/worker_capacity_backlog/`:
+
+- `summary.csv` and `results.json`: test counts, mean/max TTC, feedback times,
+  queue wait, backlog, utilization, and completion after the input window.
+- `per_pool.csv`: the same worker observations for each platform, including
+  busy and idle worker-hours over the shared input window.
+- `capacity_*/`: individual strategy JSON files and daily backlog/utilization
+  CSV files. Each day starts relative to the first FINAL commit; the final day
+  may be shorter than 24 hours.
+- `manifest.json`: fixed parameters, metric definitions, input/code hashes,
+  worker counts, and experiment provenance.
+- `original_100pct_reproduction.json`: verification that the original replay
+  reproduces the saved paper metrics with recording enabled and disabled.
+- `source_snapshot/`: the experiment code matching the manifest hashes.
+- `completion.json`: the number of completed runs and detection completeness.
+
+Queue wait starts when a test becomes ready **after its build** and ends when
+it starts on a test worker. It excludes batch accumulation and build time. The
+mean is weighted by individual test jobs, including diagnosis jobs. Backlog
+counts ready tests that have not started; it excludes running tests and builds.
+Maximum backlog is computed from exact queue intervals, not daily samples.
+The end-of-input backlog is measured at the last FINAL commit timestamp.
+Builds and dependent diagnosis jobs becoming ready later are reported
+separately as `not_ready_at_input_end`. All work then completes, so TTC includes
+completion after the input window; `drain_time_hr` measures the last job's
+finish relative to the last input timestamp.
+
+Utilization clips test execution to the common first-to-last FINAL commit
+window and divides by all configured worker-hours in that window. Idle workers
+and unused platform pools remain in the denominator. Aggregate utilization is
+weighted by worker capacity. This makes utilization comparable across policies
+even when ET takes much longer to drain. Busy and idle hours support subsequent
+cost calculations; this experiment does not introduce cloud tariffs or a
+separate build-worker cost model.
+
+For a shorter run, use `--skip-exhaustive-testing`. Saved tuning and prediction
+paths, capacity multipliers, and the output directory can be supplied as CLI
+arguments. Original-result verification is mandatory, even for a shorter run.
+
+Behavioral verification:
+
+```bash
+cd analysis/batch_testing
+../../venv/bin/python -m unittest -v test_worker_capacity.py
+```
