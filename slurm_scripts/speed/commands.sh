@@ -53,6 +53,7 @@ echo "Running script ..."
 # --build-time-minutes 98.7 \
 # --mopt-trials 50 \
 # --optuna-seed 42 \
+# --plot-pareto-fronts \
 # --skip-exhaustive-testing \
 # --batching "TWSB,\
 # TWB,TWB-s,\
