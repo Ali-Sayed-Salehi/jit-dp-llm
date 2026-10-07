@@ -520,7 +520,7 @@ in `requirements.txt`.
 EVAL plots show every feasible sampled configuration, the observed Pareto
 front, and the configuration selected for FINAL. There is one plot per
 selected batching–bisection combination and one combined comparison. TWSB
-and ET appear as fixed reference points when included in the run. Only finite
+and ET baselines are omitted from all plots and plotted-point CSVs. Only finite
 results that identify all regressions are plotted. The front always uses tests
 and **maximum TTC**, even if tuning uses another latency objective. These are
 fronts among sampled configurations, not guarantees of a global optimum.
@@ -540,10 +540,10 @@ FINAL saves `<final-stem>_pareto_selected.png` / `.pdf` and
 `<final-stem>_pareto_points.csv`. It compares the selected configurations;
 there is no additional tuning or replay to produce a per-strategy FINAL curve.
 FINAL comparisons use different hollow markers for the strategies so
-overlapping points remain visible, and reference strategies are labeled as
-baselines. Test-count ticks use compact suffixes, such as `100k` and `1M`.
+overlapping points remain visible. Test-count ticks use compact suffixes,
+such as `100k` and `1M`.
 Axes automatically use a labeled logarithmic scale when positive values span
-at least a factor of 100, keeping extreme reference points visible.
+at least a factor of 100.
 
 With `--final-only --plot-pareto-fronts`, matching saved EVAL trial data is
 reused. If it is absent or does not match the saved EVAL JSON, the simulator

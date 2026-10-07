@@ -209,7 +209,7 @@ def _strategy_label(name, names):
     return name.split(" + ", 1)[0] if len(methods) == 1 else name
 
 
-def _render(points, destination, title, *, baseline=None, tuning_front=False, style_names=None):
+def _render(points, destination, title, *, tuning_front=False, style_names=None):
     # Import only after all simulations complete; no display server is needed.
     from matplotlib import colormaps
     from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -242,10 +242,8 @@ def _render(points, destination, title, *, baseline=None, tuning_front=False, st
                         color=color, marker=marker, markersize=4, linewidth=1.2, zorder=3)
             for point in group:
                 if point.get("selected"):
-                    reference = point["kind"] == "reference"
                     ax.scatter(point[X_KEY], point[Y_KEY],
-                               color=color if reference else SELECTED_COLOR,
-                               marker="X" if reference else "*",
+                               color=SELECTED_COLOR, marker="*",
                                s=100, edgecolors="black", linewidths=0.5, zorder=5)
             handles.append(Line2D([0], [0], color=color, marker=marker, label=label))
         else:
@@ -255,8 +253,6 @@ def _render(points, destination, title, *, baseline=None, tuning_front=False, st
                       if MarkerStyle(marker).is_filled() else {"color": color})
             ax.scatter([p[X_KEY] for p in group], [p[Y_KEY] for p in group],
                        marker=marker, s=110, linewidths=1.7, zorder=5, **colors)
-            if any(p["kind"] == "reference" for p in group):
-                label += " (baseline)"
             handles.append(Line2D([0], [0], color=color, marker=marker,
                                   linestyle="none", markerfacecolor="none",
                                   markersize=9, markeredgewidth=1.7, label=label))
@@ -272,20 +268,11 @@ def _render(points, destination, title, *, baseline=None, tuning_front=False, st
         handles.append(Line2D([0], [0], color="black", linestyle="--",
                               marker="o" if tuning_front else None, markerfacecolor="none",
                               label="Sampled Pareto front" if tuning_front else "Pareto front of shown configurations"))
-    if tuning_front and any(p.get("selected") and p["kind"] != "reference" for p in points):
+    if tuning_front and any(p.get("selected") for p in points):
         handles.append(Line2D([0], [0], color=SELECTED_COLOR, marker="*", linestyle="none",
                               markersize=10, label="Selected configuration"))
-    if tuning_front and any(p["kind"] == "reference" for p in points):
-        handles.append(Line2D([0], [0], color="black", marker="X", linestyle="none",
-                              label="Baseline"))
-    if baseline is not None:
-        ax.scatter(baseline[X_KEY], baseline[Y_KEY], color="black", marker="X", s=80, zorder=5)
-        handles.append(Line2D([0], [0], color="black", marker="X", linestyle="none",
-                              label=_strategy_label(baseline["strategy"], style_names) + " baseline"))
-
-    shown = points + ([baseline] if baseline is not None else [])
     for axis, key in (("x", X_KEY), ("y", Y_KEY)):
-        values = [float(p[key]) for p in shown]
+        values = [float(p[key]) for p in points]
         if min(values) > 0 and max(values) / min(values) >= 100:
             getattr(ax, f"set_{axis}scale")("log")
     ax.xaxis.set_major_formatter(FuncFormatter(_format_test_count))
@@ -307,6 +294,9 @@ def write_pareto_plots(results_path, results, *, split, trials=None,
     path = Path(results_path)
     points = collect_points(results, trials, selected_batching=selected_batching,
                             selected_bisection=selected_bisection, include_et=include_et)
+    # Exclude both baselines from plots, axis ranges, and the plotted-point CSV.
+    points = [point for point in points
+              if point["strategy"] != ET and not point["strategy"].startswith("TWSB + ")]
     csv_path = path.with_name(path.stem + "_pareto_points.csv")
     _write_points_csv(csv_path, points)
     if not points:
@@ -321,13 +311,12 @@ def write_pareto_plots(results_path, results, *, split, trials=None,
     _render(points, destination, title, tuning_front=tuning_front, style_names=style_names)
     written = [destination]
     if tuning_front:
-        baseline = next((p for p in points if p["strategy"] == BASELINE and p["selected"]), None)
         for name in sorted({point["strategy"] for point in points}):
             group = [point for point in points if point["strategy"] == name]
             slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
             destination = path.with_name(path.stem + "_pareto_" + slug)
             _render(group, destination, f"EVAL: {_strategy_label(name, style_names)}", tuning_front=True,
-                    baseline=baseline if name != BASELINE else None, style_names=style_names)
+                    style_names=style_names)
             written.append(destination)
     logger.info("Saved %s Pareto plots and point data beside %s", split, path)
     return written
