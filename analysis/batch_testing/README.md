@@ -517,15 +517,16 @@ corresponding EVAL or FINAL results JSON; they work without a display server.
 Matplotlib is required only when this flag is enabled and is already listed
 in `requirements.txt`.
 
-EVAL plots show every feasible sampled configuration, the observed Pareto
-front, and the configuration selected for FINAL. There is one plot per
-selected batching–bisection combination and one combined comparison. TWSB
+EVAL plots show every feasible sampled configuration and the observed Pareto
+front. There is one plot per selected batching–bisection combination and one
+combined comparison. TWSB
 and ET baselines are omitted from all plots and plotted-point CSVs. Only finite
 results that identify all regressions are plotted. The front always uses tests
 and **maximum TTC**, even if tuning uses another latency objective. These are
 fronts among sampled configurations, not guarantees of a global optimum.
-Selected EVAL configurations use a distinct magenta star. Strategy titles and
-legends omit the bisection suffix when only one bisection method is plotted.
+Legends appear inside the upper-right corner; axis labels use 12-point text
+and legends use 10-point text. Strategy titles and legends omit the bisection
+suffix when only one bisection method is plotted.
 
 For an EVAL output named `batch_eval_mopt.json`, additional files are:
 

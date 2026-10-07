@@ -15,7 +15,6 @@ X_KEY = "total_tests_run"
 Y_KEY = "max_time_to_culprit_hr"
 BASELINE = "TWSB + PAR"
 ET = "Exhaustive Testing (ET)"
-SELECTED_COLOR = "#d000a6"
 
 
 def require_plotting_dependency():
@@ -240,11 +239,6 @@ def _render(points, destination, title, *, tuning_front=False, style_names=None)
             if front:
                 ax.plot([xy[0] for xy in front], [xy[1] for xy in front],
                         color=color, marker=marker, markersize=4, linewidth=1.2, zorder=3)
-            for point in group:
-                if point.get("selected"):
-                    ax.scatter(point[X_KEY], point[Y_KEY],
-                               color=SELECTED_COLOR, marker="*",
-                               s=100, edgecolors="black", linewidths=0.5, zorder=5)
             handles.append(Line2D([0], [0], color=color, marker=marker, label=label))
         else:
             # Hollow, varied shapes reveal coincident configurations without
@@ -268,21 +262,20 @@ def _render(points, destination, title, *, tuning_front=False, style_names=None)
         handles.append(Line2D([0], [0], color="black", linestyle="--",
                               marker="o" if tuning_front else None, markerfacecolor="none",
                               label="Sampled Pareto front" if tuning_front else "Pareto front of shown configurations"))
-    if tuning_front and any(p.get("selected") for p in points):
-        handles.append(Line2D([0], [0], color=SELECTED_COLOR, marker="*", linestyle="none",
-                              markersize=10, label="Selected configuration"))
     for axis, key in (("x", X_KEY), ("y", Y_KEY)):
         values = [float(p[key]) for p in points]
         if min(values) > 0 and max(values) / min(values) >= 100:
             getattr(ax, f"set_{axis}scale")("log")
     ax.xaxis.set_major_formatter(FuncFormatter(_format_test_count))
     ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel("Total tests" + (" (log scale)" if ax.get_xscale() == "log" else ""))
-    ax.set_ylabel("Maximum TTC (hours)" + (" (log scale)" if ax.get_yscale() == "log" else ""))
+    ax.set_xlabel("Total tests" + (" (log scale)" if ax.get_xscale() == "log" else ""),
+                  fontsize=12)
+    ax.set_ylabel("Maximum TTC (hours)" + (" (log scale)" if ax.get_yscale() == "log" else ""),
+                  fontsize=12)
     ax.set_title(title)
     ax.grid(True, linestyle=":", alpha=0.5)
-    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1),
-              fontsize=8, ncols=max(1, math.ceil(len(handles) / 20)))
+    ax.legend(handles=handles, loc="upper right", fontsize=10,
+              ncols=max(1, math.ceil(len(handles) / 20)))
     fig.savefig(str(destination) + ".png", dpi=200, bbox_inches="tight")
     fig.savefig(str(destination) + ".pdf", bbox_inches="tight")
     fig.clear()
@@ -306,7 +299,7 @@ def write_pareto_plots(results_path, results, *, split, trials=None,
     tuning_front = split == "EVAL" and trials is not None
     suffix = "_pareto_all" if tuning_front else "_pareto_selected"
     destination = path.with_name(path.stem + suffix)
-    title = f"{split}: sampled trade-offs" if tuning_front else f"{split}: selected configurations"
+    title = f"{split}: sampled trade-offs" if tuning_front else f"{split}: strategy comparison"
     style_names = sorted({point["strategy"] for point in points})
     _render(points, destination, title, tuning_front=tuning_front, style_names=style_names)
     written = [destination]
