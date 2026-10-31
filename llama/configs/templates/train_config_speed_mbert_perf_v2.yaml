@@ -19,19 +19,19 @@ threshold: null
 selection_metric: recall@top_5%
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null
-learning_rate: 2e-5        # the usual range for ModernBERT-large fine-tuning
+learning_rate: 3e-5        # the usual range for ModernBERT-large fine-tuning; 4x the updates of the first runs
 num_train_epochs: 3
 weight_decay: 0.01
 resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
 lora_dropout: 0
-gradient_accumulation_steps: 64      # about 90 optimizer steps per epoch on ~6,300 rows
+gradient_accumulation_steps: 16      # about 420 optimizer steps per epoch on ~6,700 oversampled rows
 train_batch_size: 1
 lr_warmup_ratio: 0.1
-eval_steps: 10
-logging_steps: 10
-save_steps: 10
+eval_steps: 50
+logging_steps: 25
+save_steps: 50
 eval_accumulation_steps: null
 pooling: null                        # bugbug loads the standard sequence classification head
 clm_for_seq_cls: false
