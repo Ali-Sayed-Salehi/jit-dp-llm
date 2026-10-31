@@ -40,7 +40,7 @@ def load_model(model_path: str, base_model_path: str | None, dtype: torch.dtype,
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    kwargs = {"torch_dtype": dtype}
+    kwargs = {"dtype": dtype}
     if quant:
         from transformers import BitsAndBytesConfig
 
@@ -50,7 +50,11 @@ def load_model(model_path: str, base_model_path: str | None, dtype: torch.dtype,
         kwargs["device_map"] = "auto"
     config = AutoConfig.from_pretrained(weights_path)
     config.num_labels = 2
-    model = AutoModelForSequenceClassification.from_pretrained(weights_path, config=config, **kwargs)
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(weights_path, config=config, **kwargs)
+    except TypeError:  # transformers before 4.56 only know torch_dtype
+        kwargs["torch_dtype"] = kwargs.pop("dtype")
+        model = AutoModelForSequenceClassification.from_pretrained(weights_path, config=config, **kwargs)
     if len(tokenizer) > model.get_input_embeddings().num_embeddings:
         model.resize_token_embeddings(len(tokenizer))
     if is_adapter:

@@ -25,13 +25,17 @@ source $REPO/slurm_scripts/speed/train_prepare.csh
 
 nvidia-smi
 free -h
-setenv DS_SKIP_CUDA_CHECK 1
 setenv PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
+# Each job gets its own datasets cache: concurrent jobs mapping the same
+# dataset otherwise race on one cache file and die with SIGBUS.
+if (! $?TMPDIR) setenv TMPDIR /tmp
+setenv HF_DATASETS_CACHE $TMPDIR/hf_datasets_cache_$SLURM_JOB_ID
 
+# One GPU, no DeepSpeed: the encoder and 1.5B-parameter candidates fit a 20 GB
+# slice with gradient checkpointing, and DeepSpeed's CPU offload needs nvcc to
+# build its ops, which the compute nodes do not expose. The Llama runs keep
+# using train.sh with the DeepSpeed accelerate config.
 echo "running the training script with $CONFIG"
-accelerate launch \
---config_file=$REPO/llama/configs/accelerate_config_deepspeed.yaml \
---num_machines=$SLURM_NNODES --machine_rank=$SLURM_NODEID $REPO/llama/train.py \
---config $CONFIG
+python $REPO/llama/train.py --config $CONFIG
 
 echo "training finished"

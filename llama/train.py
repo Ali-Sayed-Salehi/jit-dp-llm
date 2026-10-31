@@ -162,12 +162,14 @@ def main():
     if args.flash_attn_2 and not BERT:
         optional_kwargs["attn_implementation"] = "flash_attention_2"
 
-    model = ModelClass.from_pretrained(
-        MODEL_PATH,
-        trust_remote_code=True,
-        torch_dtype=model_dtype,
-        **optional_kwargs   
-    )
+    try:
+        model = ModelClass.from_pretrained(
+            MODEL_PATH, trust_remote_code=True, dtype=model_dtype, **optional_kwargs
+        )
+    except TypeError:  # transformers before 4.56 only know torch_dtype
+        model = ModelClass.from_pretrained(
+            MODEL_PATH, trust_remote_code=True, torch_dtype=model_dtype, **optional_kwargs
+        )
 
     if args.pooling and TASK == "seq_cls":
         model.config.pooling = args.pooling

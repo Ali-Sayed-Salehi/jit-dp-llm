@@ -478,7 +478,9 @@ def load_and_split_dataset(
             except ValueError:
                 rel_parent = Path("")
 
-            dest_dir = Path(slurm_tmpdir) / rel_parent
+            # Jobs sharing a node share the tmpdir: keep each job's copy apart.
+            job_dir = Path(f"job_{os.environ['SLURM_JOB_ID']}") if os.environ.get("SLURM_JOB_ID") else Path("")
+            dest_dir = Path(slurm_tmpdir) / job_dir / rel_parent
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest_file = dest_dir / src.name
 
