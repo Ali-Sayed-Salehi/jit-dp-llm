@@ -254,6 +254,8 @@ def parse_training_args():
         help="How to pool activations to feed the classifier head. choices= last, max, mean, none"
     )
     parser.add_argument("--dataset_cron_split", action="store_true", help="Splits training, eval, and final test splits chronologically.")
+    parser.add_argument("--train_fraction", type=float, default=0.65, help="Share of the dataset rows used for training (first rows when chronological). Default 0.65.")
+    parser.add_argument("--eval_fraction", type=float, default=0.10, help="Share of the dataset rows used for evaluation during training; the rest is the final test split, or none when the two add up to 1. Default 0.10.")
     parser.add_argument(
         "--balance_eval_dataset", 
         action="store_true", 
@@ -285,7 +287,7 @@ def parse_training_args():
         raise ValueError("Threshold must be between 0 and 1 if specified")
 
     VALID_SELECTION_METRICS = {
-        "recall@top_5%", "recall@top_10%", "recall@top_30%",
+        "recall@top_1%", "recall@top_2%", "recall@top_5%", "recall@top_10%", "recall@top_30%",
         "f1", "precision", "recall", "accuracy", "roc_auc", "pr_auc", None
     }
     if args.selection_metric not in VALID_SELECTION_METRICS:
@@ -402,6 +404,8 @@ def load_and_split_dataset(
     format_fn=None,
     cron_split=True,
     eval_ds_as_final_test=False,
+    train_fraction=0.65,
+    eval_fraction=0.10,
 ):
     """
     Load dataset and split into train/eval/final_test. 
@@ -409,11 +413,17 @@ def load_and_split_dataset(
 
     Args:
         cron_split (bool): 
-            True  -> keep input order and take contiguous 80/10/10 (chronological-style).
-            False -> shuffle the entire dataset first (seeded), then split 80/10/10.
+            True  -> keep input order and take contiguous splits (chronological-style).
+            False -> shuffle the entire dataset first (seeded), then split.
         eval_ds_as_final_test (bool):
             If True, also return the eval split as the final_test split (but final_test must keep commit_id).
+        train_fraction, eval_fraction (float):
+            Share of rows for the train and eval splits, in order; the rest is final_test.
+            When they add up to 1 there is no final_test and the eval split stands in for it,
+            for datasets whose real held-out test happens elsewhere (e.g. scoring a later period).
     """
+    if train_fraction <= 0 or eval_fraction <= 0 or train_fraction + eval_fraction > 1 + 1e-9:
+        raise ValueError(f"train_fraction ({train_fraction}) and eval_fraction ({eval_fraction}) must be positive and sum to at most 1")
     if dataset_path is None or str(dataset_path).strip().lower() == "imdb":
         print("🎬 Loading IMDb dataset from Hugging Face...")
 
@@ -467,10 +477,16 @@ def load_and_split_dataset(
         print("🔀 Using non-chronological split: shuffling full dataset before splitting.")
         dataset_for_split = final_dataset.shuffle(seed=seed)
 
-    # Split 65% train, 10% eval, rest final_test
+    # Split train / eval / rest (final_test), chronologically when cron_split
     n_total = len(dataset_for_split)
-    n_train = int(n_total * 0.65)
-    n_eval  = int(n_total * 0.1)
+    n_train = int(n_total * train_fraction)
+    n_eval  = int(n_total * eval_fraction)
+    if n_train + n_eval > n_total:
+        n_eval = n_total - n_train
+    if n_train + n_eval == n_total:
+        print("ℹ️ train and eval fractions use every row: the eval split also serves as final_test.")
+        eval_ds_as_final_test = True
+    print(f"📊 Split sizes: train {n_train}, eval {n_eval}, final_test {n_total - n_train - n_eval}")
 
     train_dataset = dataset_for_split.select(range(0, n_train))
     eval_dataset  = dataset_for_split.select(range(n_train, n_train + n_eval))

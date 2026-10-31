@@ -14,7 +14,7 @@ Research code for investigating how to use LLMs for just-in-time defect predicti
   - `analysis/batch_testing/`: simulator for **batch testing** + follow-up bisection policies on the Mozilla performance regression dataset. Entrypoint: `analysis/batch_testing/simulation.py`. Docs: `analysis/batch_testing/README.md`.
   - `analysis/git_bisect/`: simulator for **git-bisect-style** debugging on the Mozilla JIT bug dataset (lookback + bisection strategies). Entrypoint: `analysis/git_bisect/simulate.py`. Docs: `analysis/git_bisect/README.md`.
   - `analysis/jit_dp/`: small analysis helpers (e.g., threshold selection from model outputs, token-length plots).
-- `data_extraction/`: scripts to build datasets from upstream systems (Bugzilla, Treeherder, Mercurial, GitHub, etc.). Each subfolder has its own README.
+- `data_extraction/`: scripts to build datasets from upstream systems (Bugzilla, Treeherder, Mercurial, GitHub, etc.). Each subfolder has its own README. `data_extraction/bugbug/` builds the perf regression predictor's training set from bugbug's data pipeline and prepares commits for GPU scoring whose results feed back into that pipeline.
 - `datasets/`: extracted dataset artifacts used by training/inference/analysis (tracked via DVC as `datasets.dvc`). Start with `datasets/README.md`.
 - `llama/`: local model workflow (download weights, finetune, merge LoRA adapters, run inference, plot metrics).
 - `openai/`: API-based inference utilities (OpenAI / Gemini).

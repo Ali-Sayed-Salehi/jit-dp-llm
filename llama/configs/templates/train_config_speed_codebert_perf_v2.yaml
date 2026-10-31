@@ -1,0 +1,50 @@
+debug: false
+task_type: seq_cls    # seq_cls   # clm
+live_metrics: true
+# Built from bugbug's perf_regression_commits.json by
+# data_extraction/bugbug/build_training_set.py (Oct 2024 to Dec 2025).
+dataset_path: datasets/mozilla_perf_v2/perf_bugbug_struc.jsonl
+model_path: LLMs/snapshots/microsoft/codebert-base
+quant: false
+lora: false
+flash_attn_2: false
+mixed_precision: bf16
+truncation_len: null       # the model's own 512 tokens
+chunking_len: null           # only for clm
+class_imbalance_fix: oversampling     # oversampling
+threshold: null
+# The head of the ranking is what batching needs. recall@top_1% and
+# recall@top_2% are reported too, but rest on a dozen commits of the eval
+# split, too few to select on; judge them on the scored Jan-May 2026 stream.
+selection_metric: recall@top_5%
+slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
+continue_from_dir: null
+learning_rate: 1e-5
+num_train_epochs: 3
+weight_decay: 0.1
+resampling_ratio: 0.7
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0
+gradient_accumulation_steps: 64      # about 90 optimizer steps per epoch on ~6,300 rows
+train_batch_size: 1
+lr_warmup_ratio: 0.1
+eval_steps: 10
+logging_steps: 10
+save_steps: 10
+eval_accumulation_steps: null
+pooling: null                        # bugbug loads the standard sequence classification head
+clm_for_seq_cls: false
+dataset_cron_split: true
+# Chronological: train on the oldest 88% (to about mid-November 2025), select
+# checkpoints on the newest 12%. No final_test split: the held-out test is
+# scoring January to May 2026, see data_extraction/bugbug/README.md.
+train_fraction: 0.88
+eval_fraction: 0.12
+balance_eval_dataset: false
+new_tokens: [
+        "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
+        "<FILE>", "</FILE>",
+        "<ADDED>", "</ADDED>",
+        "<REMOVED>", "</REMOVED>",
+    ]

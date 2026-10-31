@@ -39,7 +39,7 @@ def main():
 
     FL_ALPHA = 2
     FL_GAMMA = 5
-    RECALL_AT_TOP_K_PERCENTAGES = [0.05, 0.1, 0.3]
+    RECALL_AT_TOP_K_PERCENTAGES = [0.01, 0.02, 0.05, 0.1, 0.3]
 
     TASK_TO_MODEL_CLASS = {
         "clm": AutoModelForCausalLM,
@@ -213,7 +213,9 @@ def main():
         slurm_tmpdir=slurm_tmpdir,
         debug=DEBUG,
         format_fn=format_func,
-        cron_split=args.dataset_cron_split
+        cron_split=args.dataset_cron_split,
+        train_fraction=args.train_fraction,
+        eval_fraction=args.eval_fraction,
     )
 
     dataset, class_weights, focal_loss_dict, original_class_distribution, class_distribution = apply_class_imbalance_strategy(

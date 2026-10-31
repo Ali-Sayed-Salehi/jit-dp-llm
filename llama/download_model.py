@@ -31,8 +31,8 @@ def main():
     p = argparse.ArgumentParser(
         description="Download (snapshot) and optionally instantiate a model + tokenizer."
     )
-    p.add_argument("--model_id", type=str, default="meta-llama/Llama-3.1-8B",
-                   help="Hugging Face model ID")
+    p.add_argument("--model_id", type=str, nargs="+", default=["meta-llama/Llama-3.1-8B"],
+                   help="One or more Hugging Face model IDs; each is saved under LLMs/snapshots/<id>")
     p.add_argument("--model_head", choices=["causal-lm", "sequence-classification"],
                    default="causal-lm", help="Model head to use if instantiating")
     p.add_argument("--save_path", type=str, default=None,
@@ -43,46 +43,48 @@ def main():
 
     # ----------------- Paths -----------------
     REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    default_save_path = os.path.join(REPO_PATH, "LLMs", "snapshots", args.model_id)
-    save_path = args.save_path or default_save_path
-    os.makedirs(save_path, exist_ok=True)
-
     print(f"✅ REPO_PATH: {REPO_PATH}")
-    print(f"✅ Model will be saved to: {save_path}")
+    if args.save_path and len(args.model_id) > 1:
+        raise SystemExit("--save_path only applies to a single --model_id")
 
     # ----------------- HF login -----------------
     login_to_huggingface(REPO_PATH)
     enable_hf_transfer_if_available()
 
-    # ----------------- Snapshot (always) -----------------
-    print(f"📦 Downloading snapshot of {args.model_id} to {save_path} ...")
-    snapshot_download(
-        repo_id=args.model_id,
-        local_dir=save_path,
-    )
-    print("✅ Snapshot complete.")
+    for model_id in args.model_id:
+        save_path = args.save_path or os.path.join(REPO_PATH, "LLMs", "snapshots", model_id)
+        os.makedirs(save_path, exist_ok=True)
+        print(f"✅ Model will be saved to: {save_path}")
 
-    if not args.instantiate:
-        print("🧊 Skipping model instantiation (default). Files are on disk.")
-        return
+        # ----------------- Snapshot (always) -----------------
+        print(f"📦 Downloading snapshot of {model_id} to {save_path} ...")
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=save_path,
+        )
+        print("✅ Snapshot complete.")
 
-    # ----------------- Optional: Instantiate model object -----------------
-    print(f"⚠️  Instantiating {args.model_head} model object. This may require significant memory.")
+        if not args.instantiate:
+            print("🧊 Skipping model instantiation (default). Files are on disk.")
+            continue
 
-    common_kwargs = dict(
-        trust_remote_code=True,
-        attn_implementation="sdpa",
-        device_map="auto",
-    )
+        # ----------------- Optional: Instantiate model object -----------------
+        print(f"⚠️  Instantiating {args.model_head} model object. This may require significant memory.")
 
-    if args.model_head == "causal-lm":
-        model = AutoModelForCausalLM.from_pretrained(args.model_id, **common_kwargs)
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_id, **common_kwargs)
+        common_kwargs = dict(
+            trust_remote_code=True,
+            attn_implementation="sdpa",
+            device_map="auto",
+        )
 
-    print("💾 Saving instantiated model to save_path...")
-    model.save_pretrained(save_path)
-    print(f"✅ Model saved to {save_path}")
+        if args.model_head == "causal-lm":
+            model = AutoModelForCausalLM.from_pretrained(model_id, **common_kwargs)
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(model_id, **common_kwargs)
+
+        print("💾 Saving instantiated model to save_path...")
+        model.save_pretrained(save_path)
+        print(f"✅ Model saved to {save_path}")
 
 
 if __name__ == "__main__":

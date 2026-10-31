@@ -20,5 +20,14 @@ echo "Running the download/transform script ..."
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id syzymon/long_llama_code_7b --model_head sequence-classification
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/attach_classification_head.py --base_lm_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/causal-lm/meta-llama/Llama-3.1-8B --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/sequence-classification/custom
 # python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/attach_classification_head.py --llama4 --base_lm_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/causal-lm/meta-llama/Llama-4-Scout-17B-16E --save_path /speed-scratch/a_s87063/repos/jit-dp-llm/LLMs/pretrained/sequence-classification/custom
-python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id deepseek-ai/DeepSeek-Coder-V2-Lite-Base
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id deepseek-ai/DeepSeek-Coder-V2-Lite-Base
+
+# Perf regression predictor candidates (see data_extraction/bugbug/README.md):
+# the CodeBERT control, ModernBERT-large (8k context, deployable on CPU) and
+# Qwen2.5-Coder-1.5B (code-pretrained decoder, 32k context, LoRA fine-tuning).
+# jhu-clsp/ettin-encoder-1b is the larger ModernBERT-architecture encoder,
+# optional if ModernBERT-large turns out capacity-limited.
+python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py \
+  --model_id microsoft/codebert-base answerdotai/ModernBERT-large Qwen/Qwen2.5-Coder-1.5B
+# python /speed-scratch/a_s87063/repos/jit-dp-llm/llama/download_model.py --model_id jhu-clsp/ettin-encoder-1b
 echo "download/transform finished"

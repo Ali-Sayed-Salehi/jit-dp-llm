@@ -44,3 +44,6 @@ replication_packages/
 .cache
 .nv
 .triton
+
+# bugbug registers its datasets on import and writes data/*.version in the working directory
+/data/
