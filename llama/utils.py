@@ -46,7 +46,6 @@ from transformers import (
 )
 
 import evaluate
-from attach_classification_head import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
 
 
@@ -1243,6 +1242,10 @@ def register_custom_llama4_if_needed(model_path: str):
     
     model_type = config_data.get("model_type", "")
     architectures = config_data.get("architectures", [])
+
+    # Imported here: the Llama 4 head pulls in transformers internals that
+    # every other model never needs, and that move between versions.
+    from attach_classification_head import CustomLlama4ForSequenceClassification, CustomLlama4TextConfig
 
     if model_type == CustomLlama4TextConfig.model_type:
         AutoConfig.register(CustomLlama4TextConfig.model_type, CustomLlama4TextConfig)

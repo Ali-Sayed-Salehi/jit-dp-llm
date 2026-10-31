@@ -14,10 +14,39 @@ from transformers import (
     AutoModelForCausalLM
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
-from transformers.modeling_utils import load_sharded_checkpoint
 
+import glob
+import json
 import math
 import random
+
+try:
+    from transformers.modeling_utils import load_sharded_checkpoint
+except ImportError:  # removed from newer transformers releases
+
+    def load_sharded_checkpoint(model, folder, strict=True):
+        """Load a (possibly sharded) safetensors or torch checkpoint from ``folder``."""
+        from safetensors.torch import load_file
+
+        index_files = glob.glob(os.path.join(folder, "*.index.json"))
+        if index_files:
+            with open(index_files[0], encoding="utf-8") as fh:
+                shards = sorted(set(json.load(fh)["weight_map"].values()))
+        else:
+            shards = sorted(
+                os.path.basename(path)
+                for path in glob.glob(os.path.join(folder, "*.safetensors")) + glob.glob(os.path.join(folder, "*.bin"))
+            )
+        if not shards:
+            raise FileNotFoundError(f"no checkpoint shards found in {folder}")
+        state_dict = {}
+        for shard in shards:
+            path = os.path.join(folder, shard)
+            if shard.endswith(".safetensors"):
+                state_dict.update(load_file(path))
+            else:
+                state_dict.update(torch.load(path, map_location="cpu", weights_only=True))
+        return model.load_state_dict(state_dict, strict=strict)
 
 
 # ---- Utils ----
