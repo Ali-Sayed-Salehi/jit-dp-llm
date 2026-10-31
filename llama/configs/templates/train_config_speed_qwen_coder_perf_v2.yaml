@@ -16,10 +16,11 @@ truncation_len: 16384
 chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
-# The head of the ranking is what batching needs. recall@top_1% and
-# recall@top_2% are reported too, but rest on a dozen commits of the eval
-# split, too few to select on; judge them on the scored Jan-May 2026 stream.
-selection_metric: recall@top_5%
+# Average precision weights the head of the ranking, which is what batching
+# needs, and varies smoothly; recall@top_k on 109 eval culprits moves in steps
+# of one commit and ties across checkpoints. The top-k recalls are reported;
+# judge them on the scored Jan-May 2026 stream.
+selection_metric: pr_auc
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null
 learning_rate: 2e-4
