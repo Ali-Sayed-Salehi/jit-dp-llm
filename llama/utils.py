@@ -1,3 +1,4 @@
+import inspect
 import os
 import json
 import argparse
@@ -46,6 +47,7 @@ from transformers import (
 )
 
 import evaluate
+import transformers
 
 
 
@@ -253,8 +255,8 @@ def parse_training_args():
         help="How to pool activations to feed the classifier head. choices= last, max, mean, none"
     )
     parser.add_argument("--dataset_cron_split", action="store_true", help="Splits training, eval, and final test splits chronologically.")
-    parser.add_argument("--train_fraction", type=float, default=0.65, help="Share of the dataset rows used for training (first rows when chronological). Default 0.65.")
-    parser.add_argument("--eval_fraction", type=float, default=0.10, help="Share of the dataset rows used for evaluation during training; the rest is the final test split, or none when the two add up to 1. Default 0.10.")
+    parser.add_argument("--train_fraction", type=float, help="Share of the dataset rows used for training (first rows when chronological). Default 0.65.")
+    parser.add_argument("--eval_fraction", type=float, help="Share of the dataset rows used for evaluation during training; the rest is the final test split, or none when the two add up to 1. Default 0.10.")
     parser.add_argument(
         "--balance_eval_dataset", 
         action="store_true", 
@@ -266,6 +268,11 @@ def parse_training_args():
     # Coalesce to [] so caller never has to check for None
     if args.new_tokens is None:
         args.new_tokens = []
+    # Defaults set here rather than on add_argument, which would override the config file.
+    if args.train_fraction is None:
+        args.train_fraction = 0.65
+    if args.eval_fraction is None:
+        args.eval_fraction = 0.10
 
     # --- Path normalization ---
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -305,6 +312,25 @@ def parse_training_args():
 
     return args
 
+
+
+def build_training_arguments(**kwargs):
+    """Build TrainingArguments across transformers versions.
+
+    transformers 5 dropped ``logging_dir`` (TensorBoard logs under
+    ``output_dir/runs``) and folded ``warmup_ratio`` into ``warmup_steps``,
+    which takes a ratio when below 1. Options this version does not know are
+    dropped with a note rather than failing the run.
+    """
+    accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
+    if "warmup_ratio" in kwargs and "warmup_ratio" not in accepted and "warmup_steps" in accepted:
+        kwargs["warmup_steps"] = kwargs.pop("warmup_ratio")
+    dropped = sorted(key for key in kwargs if key not in accepted)
+    for key in dropped:
+        kwargs.pop(key)
+    if dropped:
+        print(f"ℹ️ TrainingArguments of transformers {transformers.__version__} does not take {dropped}; dropped")
+    return TrainingArguments(**kwargs)
 
 
 def setup_training_directories(repo_root, slurm_tmpdir, continue_from_dir=None):
@@ -480,7 +506,8 @@ def load_and_split_dataset(
     n_total = len(dataset_for_split)
     n_train = int(n_total * train_fraction)
     n_eval  = int(n_total * eval_fraction)
-    if n_train + n_eval > n_total:
+    if train_fraction + eval_fraction >= 1 - 1e-9:
+        # No final_test wanted: rounding leftovers join the eval split.
         n_eval = n_total - n_train
     if n_train + n_eval == n_total:
         print("ℹ️ train and eval fractions use every row: the eval split also serves as final_test.")
@@ -489,18 +516,21 @@ def load_and_split_dataset(
 
     train_dataset = dataset_for_split.select(range(0, n_train))
     eval_dataset  = dataset_for_split.select(range(n_train, n_train + n_eval))
-    test_dataset  = dataset_for_split.select(range(n_train + n_eval, n_total))
+    # No rows left for final_test: the eval split stands in for it below.
+    test_dataset = dataset_for_split.select(range(n_train + n_eval, n_total)) if n_train + n_eval < n_total else None
 
     # Optional debug downsampling
     if debug:
         train_dataset = train_dataset.select(range(min(200, len(train_dataset))))
         eval_dataset  = eval_dataset.select(range(min(100, len(eval_dataset))))
-        test_dataset  = test_dataset.select(range(min(100, len(test_dataset))))
+        if test_dataset is not None:
+            test_dataset = test_dataset.select(range(min(100, len(test_dataset))))
 
     # Shuffle each split independently for training randomness
     train_dataset = train_dataset.shuffle(seed=seed)
     eval_dataset  = eval_dataset.shuffle(seed=seed + 1)
-    test_dataset  = test_dataset.shuffle(seed=seed + 2)
+    if test_dataset is not None:
+        test_dataset = test_dataset.shuffle(seed=seed + 2)
 
     if format_fn is None:
         raise RuntimeError(f"No format function is provided for formatting the dataset")
@@ -520,12 +550,13 @@ def load_and_split_dataset(
         remove_columns=eval_dataset.column_names,
     )
 
-    test_dataset = test_dataset.map(
-        format_fn,
-        remove_columns=["prompt", "response"],
-    )
+    if test_dataset is not None:
+        test_dataset = test_dataset.map(
+            format_fn,
+            remove_columns=["prompt", "response"],
+        )
 
-    if eval_ds_as_final_test:
+    if eval_ds_as_final_test or test_dataset is None:
         # use the eval version that KEPT commit_id
         final_test_dataset = eval_for_final
     else:

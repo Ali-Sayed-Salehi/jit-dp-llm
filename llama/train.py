@@ -99,7 +99,7 @@ def main():
         register_custom_llama4_if_needed(MODEL_PATH)
 
     # ------------------------- Training arguments -------------------------
-    training_args = TrainingArguments(
+    training_args = build_training_arguments(
         output_dir=output_dir,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.train_batch_size,

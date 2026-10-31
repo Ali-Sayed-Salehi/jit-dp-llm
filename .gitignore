@@ -47,3 +47,4 @@ replication_packages/
 
 # bugbug registers its datasets on import and writes data/*.version in the working directory
 /data/
+.venv-local/
