@@ -22,10 +22,16 @@ endif
 set MODEL = $argv[1]
 set INPUT = $argv[2]
 set OUTPUT = $argv[3]
+# tcsh substitutes the variables of a one-line if before testing its
+# condition, so a missing argument has to be guarded with then/endif.
 set BATCH = 8
-if ($#argv >= 4) set BATCH = $argv[4]
+if ($#argv >= 4) then
+    set BATCH = $argv[4]
+endif
 set BASE = ""
-if ($#argv >= 5) set BASE = "--base_model_path $argv[5]"
+if ($#argv >= 5) then
+    set BASE = "--base_model_path $argv[5]"
+endif
 
 echo "Preparing environment"
 source $REPO/slurm_scripts/speed/train_prepare.csh
