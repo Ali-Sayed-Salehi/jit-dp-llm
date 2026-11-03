@@ -1,0 +1,59 @@
+debug: false
+task_type: seq_cls    # seq_cls   # clm
+live_metrics: true
+# Built from bugbug's perf_regression_commits.json by
+# data_extraction/bugbug/build_training_set.py (Oct 2024 to Dec 2025).
+dataset_path: datasets/mozilla_perf_v2/perf_bugbug_struc.jsonl
+# 8B decoder in 4-bit with a LoRA adapter, the only way it fits a 20 GB MIG
+# slice with long diffs. 16k tokens matches the Qwen run and the 16384 scoring
+# set; the older runs used 22000 and can be matched by raising it.
+model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B
+quant: true
+lora: true
+flash_attn_2: false
+mixed_precision: bf16
+truncation_len: 16384
+chunking_len: null           # only for clm
+class_imbalance_fix: oversampling     # oversampling
+threshold: null
+# Average precision weights the head of the ranking, which is what batching
+# needs, and varies smoothly; recall@top_k on 109 eval culprits moves in steps
+# of one commit and ties across checkpoints. The top-k recalls are reported;
+# judge them on the scored Jan-May 2026 stream.
+selection_metric: pr_auc
+slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
+continue_from_dir: null
+# Half the rate of the first Qwen run, whose first epoch swung between
+# all-positive and all-negative at 2e-4; two epochs, since every decoder run so
+# far had found its best checkpoint within the first and only drifted after.
+learning_rate: 1e-4
+num_train_epochs: 2
+weight_decay: 0.01
+resampling_ratio: 0.7
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+gradient_accumulation_steps: 16      # about 420 optimizer steps per epoch on ~6,700 oversampled rows
+train_batch_size: 1
+lr_warmup_ratio: 0.1
+# An eval of the 666-row slice takes about a quarter hour at this size, so
+# every 40 steps keeps evaluation under a third of the run.
+eval_steps: 40
+logging_steps: 20
+save_steps: 40
+eval_accumulation_steps: null
+pooling: null                        # bugbug loads the standard sequence classification head
+clm_for_seq_cls: false
+dataset_cron_split: true
+# Chronological: train on the oldest 88% (to about mid-November 2025), select
+# checkpoints on the newest 12%. No final_test split: the held-out test is
+# scoring January to May 2026, see data_extraction/bugbug/README.md.
+train_fraction: 0.88
+eval_fraction: 0.12
+balance_eval_dataset: false
+new_tokens: [
+        "<COMMIT_MESSAGE>", "</COMMIT_MESSAGE>",
+        "<FILE>", "</FILE>",
+        "<ADDED>", "</ADDED>",
+        "<REMOVED>", "</REMOVED>",
+    ]

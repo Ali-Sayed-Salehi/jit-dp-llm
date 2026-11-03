@@ -23,19 +23,25 @@ threshold: null
 selection_metric: pr_auc
 slurm_tmpdir_env: TMPDIR   # SLURM_TMPDIR   # TMPDIR
 continue_from_dir: null
-learning_rate: 2e-4
-num_train_epochs: 3
-weight_decay: 0
+# The first run at 2e-4 with a 3% warmup swung between all-positive and
+# all-negative through its first epoch and found its best checkpoint there;
+# the later epochs only drifted. Half the rate, a longer warmup, a little
+# regularization and two epochs instead of three.
+learning_rate: 1e-4
+num_train_epochs: 2
+weight_decay: 0.01
 resampling_ratio: 0.7
 lora_r: 32
 lora_alpha: 64
-lora_dropout: 0
+lora_dropout: 0.05
 gradient_accumulation_steps: 16      # about 420 optimizer steps per epoch on ~6,700 oversampled rows
 train_batch_size: 1
-lr_warmup_ratio: 0.03
-eval_steps: 50
-logging_steps: 25
-save_steps: 50
+lr_warmup_ratio: 0.1
+# An eval of the 666-row slice takes eight minutes at 16k tokens; every 40
+# steps catches the early peak without spending half the run evaluating.
+eval_steps: 40
+logging_steps: 20
+save_steps: 40
 eval_accumulation_steps: null
 pooling: null                        # bugbug loads the standard sequence classification head
 clm_for_seq_cls: false
