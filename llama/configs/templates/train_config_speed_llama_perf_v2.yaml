@@ -5,14 +5,14 @@ live_metrics: true
 # data_extraction/bugbug/build_training_set.py (Oct 2024 to Dec 2025).
 dataset_path: datasets/mozilla_perf_v2/perf_bugbug_struc.jsonl
 # 8B decoder in 4-bit with a LoRA adapter, the only way it fits a 20 GB MIG
-# slice with long diffs. 22000 tokens as in the older Llama runs; score with
-# the 16384 scoring set or build a 22000 one for an exact match.
+# slice with long diffs. 16k tokens matches the Qwen run and the 16384 scoring
+# set; the older runs used 22000 and can be matched by raising it.
 model_path: LLMs/snapshots/meta-llama/Llama-3.1-8B
 quant: true
 lora: true
 flash_attn_2: false
 mixed_precision: bf16
-truncation_len: 22000
+truncation_len: 16384
 chunking_len: null           # only for clm
 class_imbalance_fix: oversampling     # oversampling
 threshold: null
