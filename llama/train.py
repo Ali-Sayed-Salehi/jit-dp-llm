@@ -84,6 +84,13 @@ def main():
     # ------------------------- Local model path -------------------------
     MODEL_PATH = args.model_path
     print(f"✅ Using provided MODEL_PATH: {MODEL_PATH}")
+    if os.sep in MODEL_PATH and not os.path.isfile(os.path.join(MODEL_PATH, "config.json")):
+        raise SystemExit(
+            f"{MODEL_PATH} is not a model directory (no config.json). Download it with "
+            "`python llama/download_model.py --model_id <namespace/name>` (gated models "
+            "need a Hugging Face token with access) or point model_path at the directory "
+            "that holds it."
+        )
 
     # ------------------------- HF login -------------------------
     # login_to_huggingface(REPO_PATH)
