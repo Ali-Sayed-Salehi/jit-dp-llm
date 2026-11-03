@@ -30,6 +30,26 @@ import torch
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 
 
+def adapter_embedding_rows(model_path: str) -> int | None:
+    """Rows of the input embedding saved with a LoRA adapter, if it saved one.
+
+    Training adds the structural tokens and resizes the embeddings to a
+    multiple of 8, and PEFT's trainable token rows save that resized layer, so
+    the base model has to be resized to the same shape before the adapter
+    loads.
+    """
+    path = os.path.join(model_path, "adapter_model.safetensors")
+    if not os.path.exists(path):
+        return None
+    from safetensors import safe_open
+
+    with safe_open(path, "pt") as weights:
+        for key in weights.keys():
+            if "embed_tokens" in key and key.endswith("weight") and "lora_" not in key:
+                return weights.get_slice(key).get_shape()[0]
+    return None
+
+
 def load_model(model_path: str, base_model_path: str | None, dtype: torch.dtype, quant: bool):
     is_adapter = os.path.exists(os.path.join(model_path, "adapter_config.json"))
     weights_path = base_model_path if is_adapter else model_path
@@ -55,8 +75,12 @@ def load_model(model_path: str, base_model_path: str | None, dtype: torch.dtype,
     except TypeError:  # transformers before 4.56 only know torch_dtype
         kwargs["torch_dtype"] = kwargs.pop("dtype")
         model = AutoModelForSequenceClassification.from_pretrained(weights_path, config=config, **kwargs)
-    if len(tokenizer) > model.get_input_embeddings().num_embeddings:
-        model.resize_token_embeddings(len(tokenizer))
+    rows = adapter_embedding_rows(model_path) if is_adapter else None
+    if rows is None and len(tokenizer) > model.get_input_embeddings().num_embeddings:
+        rows = len(tokenizer)
+    if rows is not None and rows != model.get_input_embeddings().num_embeddings:
+        model.resize_token_embeddings(rows, mean_resizing=False)
+        print(f"resized embeddings to {rows} rows to match the checkpoint")
     if is_adapter:
         from peft import PeftModel
 
